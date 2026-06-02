@@ -66,6 +66,8 @@ const indexHTML = `<!doctype html>
 <nav>
   <button data-tab="clients">Clients</button>
   <button data-tab="scopes">Scopes</button>
+  <button data-tab="users">Users</button>
+  <button data-tab="roles">Roles</button>
   <button data-tab="sessions">Sessions</button>
   <button data-tab="refresh-tokens">Refresh tokens</button>
   <button data-tab="keys">Signing keys</button>
@@ -257,6 +259,32 @@ const indexHTML = `<!doctype html>
       items.map(s => '<tr><td><code>' + esc(s.name) + '</code></td><td>' + esc(s.display_name) + '</td><td>' + (s.required ? 'yes' : 'no') + '</td></tr>').join('') +
       '</tbody></table>';
   }
+  function renderUsers(items) {
+    let h = '<div class="btn-row"><button id="btn-new-user">New user</button></div>';
+    h += '<table><thead><tr><th>id</th><th>username</th><th>email</th><th>2fa</th><th>lockout</th><th></th></tr></thead><tbody>';
+    h += items.map(u => '<tr>' +
+      '<td><code>' + esc(u.id) + '</code></td>' +
+      '<td>' + esc(u.username) + '</td>' +
+      '<td>' + esc(u.email) + (u.email_confirmed ? ' ✓' : '') + '</td>' +
+      '<td>' + (u.two_factor_enabled ? 'yes' : 'no') + '</td>' +
+      '<td>' + (u.lockout_enabled ? (u.lockout_end ? esc(u.lockout_end) : 'enabled') : 'no') + '</td>' +
+      '<td><button class="btn-edit-user" data-id="' + esc(u.id) + '">Edit</button> ' +
+      '<button class="btn-del-user btn-danger" data-id="' + esc(u.id) + '">Delete</button></td>' +
+      '</tr>').join('');
+    h += '</tbody></table>';
+    return h;
+  }
+  function renderRoles(items) {
+    let h = '<div class="btn-row"><button id="btn-new-role">New role</button></div>';
+    h += '<table><thead><tr><th>id</th><th>name</th><th></th></tr></thead><tbody>';
+    h += items.map(r => '<tr>' +
+      '<td><code>' + esc(r.id) + '</code></td>' +
+      '<td>' + esc(r.name) + '</td>' +
+      '<td><button class="btn-del-role btn-danger" data-id="' + esc(r.id) + '">Delete</button></td>' +
+      '</tr>').join('');
+    h += '</tbody></table>';
+    return h;
+  }
   function renderSessions(items) {
     return '<table><thead><tr><th>id</th><th>user_id</th><th>expires</th><th>revoked</th></tr></thead><tbody>' +
       items.map(s => '<tr><td><code>' + esc(s.id) + '</code></td><td>' + esc(s.user_id) + '</td><td>' + esc(s.expires_at) + '</td><td>' + (s.revoked_at ? 'yes' : 'no') + '</td></tr>').join('') +
@@ -285,6 +313,8 @@ const indexHTML = `<!doctype html>
       out.innerHTML = '<p class="muted">loading…</p>';
       try {
         if (tab === 'clients') { showClients(); return; }
+        if (tab === 'users') { showUsers(); return; }
+        if (tab === 'roles') { showRoles(); return; }
         const r = await call('GET', '/admin/api/' + tab);
         const items = r.items || [];
         if (tab === 'scopes') out.innerHTML = renderScopes(items);
@@ -297,6 +327,131 @@ const indexHTML = `<!doctype html>
       }
     });
   });
+
+  async function showUsers() {
+    const out = document.getElementById('content');
+    out.innerHTML = '<p class="muted">loading…</p>';
+    try {
+      const r = await call('GET', '/admin/api/users');
+      out.innerHTML = renderUsers(r.items || []);
+      document.getElementById('btn-new-user').addEventListener('click', () => showUserForm(null));
+      out.querySelectorAll('.btn-edit-user').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.getAttribute('data-id');
+          try {
+            const u = await call('GET', '/admin/api/users/' + encodeURIComponent(id));
+            showUserForm(u);
+          } catch (e) { out.innerHTML = '<p class="err">' + esc(e.message) + '</p>'; }
+        });
+      });
+      out.querySelectorAll('.btn-del-user').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.getAttribute('data-id');
+          if (!confirm('Delete user "' + id + '"?')) return;
+          try {
+            await call('DELETE', '/admin/api/users/' + encodeURIComponent(id));
+            showUsers();
+          } catch (e) { out.innerHTML = '<p class="err">' + esc(e.message) + '</p>'; }
+        });
+      });
+    } catch (e) {
+      out.innerHTML = '<p class="err">' + esc(e.message) + '</p>';
+    }
+  }
+
+  function showUserForm(u) {
+    const isEdit = !!u;
+    const out = document.getElementById('content');
+    out.innerHTML = '<h2>' + (isEdit ? 'Edit user' : 'New user') + '</h2>' +
+      '<form id="user-form"><div class="form-grid">' +
+      '<label>id</label><div><input id="f-id" value="' + esc(u ? u.id : '') + '"' + (isEdit ? ' readonly' : '') + ' required></div>' +
+      '<label>username</label><div><input id="f-username" value="' + esc(u ? u.username : '') + '"></div>' +
+      '<label>email</label><div><input id="f-email" value="' + esc(u ? u.email : '') + '"></div>' +
+      '<label>email_confirmed</label><div><input id="f-email_confirmed" type="checkbox"' + (u && u.email_confirmed ? ' checked' : '') + '></div>' +
+      '<label>phone_number</label><div><input id="f-phone_number" value="' + esc(u ? u.phone_number : '') + '"></div>' +
+      '<label>phone_number_confirmed</label><div><input id="f-phone_number_confirmed" type="checkbox"' + (u && u.phone_number_confirmed ? ' checked' : '') + '></div>' +
+      '<label>two_factor_enabled</label><div><input id="f-two_factor_enabled" type="checkbox"' + (u && u.two_factor_enabled ? ' checked' : '') + '></div>' +
+      '<label>lockout_enabled</label><div><input id="f-lockout_enabled" type="checkbox"' + (u && u.lockout_enabled ? ' checked' : '') + '></div>' +
+      (isEdit ? '' : '<label>password</label><div><input id="f-password" type="password" required></div>') +
+      '</div><div class="btn-row"><button type="submit">' + (isEdit ? 'Update' : 'Create') + '</button> <button type="button" id="btn-cancel">Cancel</button></div>' +
+      '<div id="form-error"></div></form>';
+    document.getElementById('btn-cancel').addEventListener('click', () => showUsers());
+    document.getElementById('user-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errDiv = document.getElementById('form-error');
+      errDiv.textContent = '';
+      try {
+        if (isEdit) {
+          await call('PUT', '/admin/api/users/' + encodeURIComponent(u.id), {
+            username: document.getElementById('f-username').value,
+            email: document.getElementById('f-email').value,
+            email_confirmed: document.getElementById('f-email_confirmed').checked,
+            phone_number: document.getElementById('f-phone_number').value,
+            phone_number_confirmed: document.getElementById('f-phone_number_confirmed').checked,
+            two_factor_enabled: document.getElementById('f-two_factor_enabled').checked,
+            lockout_enabled: document.getElementById('f-lockout_enabled').checked
+          });
+        } else {
+          await call('POST', '/admin/api/users', {
+            id: document.getElementById('f-id').value,
+            username: document.getElementById('f-username').value,
+            email: document.getElementById('f-email').value,
+            password: document.getElementById('f-password').value
+          });
+        }
+        showUsers();
+      } catch (err) {
+        errDiv.innerHTML = '<p class="err">' + esc(err.message) + '</p>';
+      }
+    });
+  }
+
+  async function showRoles() {
+    const out = document.getElementById('content');
+    out.innerHTML = '<p class="muted">loading…</p>';
+    try {
+      const r = await call('GET', '/admin/api/roles');
+      out.innerHTML = renderRoles(r.items || []);
+      document.getElementById('btn-new-role').addEventListener('click', () => showRoleForm());
+      out.querySelectorAll('.btn-del-role').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.getAttribute('data-id');
+          if (!confirm('Delete role "' + id + '"?')) return;
+          try {
+            await call('DELETE', '/admin/api/roles/' + encodeURIComponent(id));
+            showRoles();
+          } catch (e) { out.innerHTML = '<p class="err">' + esc(e.message) + '</p>'; }
+        });
+      });
+    } catch (e) {
+      out.innerHTML = '<p class="err">' + esc(e.message) + '</p>';
+    }
+  }
+
+  function showRoleForm() {
+    const out = document.getElementById('content');
+    out.innerHTML = '<h2>New role</h2>' +
+      '<form id="role-form"><div class="form-grid">' +
+      '<label>id</label><div><input id="f-role-id" required></div>' +
+      '<label>name</label><div><input id="f-role-name" required></div>' +
+      '</div><div class="btn-row"><button type="submit">Create</button> <button type="button" id="btn-cancel">Cancel</button></div>' +
+      '<div id="form-error"></div></form>';
+    document.getElementById('btn-cancel').addEventListener('click', () => showRoles());
+    document.getElementById('role-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errDiv = document.getElementById('form-error');
+      errDiv.textContent = '';
+      try {
+        await call('POST', '/admin/api/roles', {
+          id: document.getElementById('f-role-id').value,
+          name: document.getElementById('f-role-name').value
+        });
+        showRoles();
+      } catch (err) {
+        errDiv.innerHTML = '<p class="err">' + esc(err.message) + '</p>';
+      }
+    });
+  }
 })();
 </script>
 </body>

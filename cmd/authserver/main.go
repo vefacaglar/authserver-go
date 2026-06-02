@@ -56,14 +56,8 @@ type storeBundle struct {
 	Scopes        store.ScopeStore
 	AuditLogs     store.AuditLogStore
 	Users         store.UserStore
+	Roles         store.RoleStore
 	Tracker       store.LoginAttemptTracker
-}
-
-// userAdder is the seed-only extension of UserStore. The memory and
-// gormstore implementations both satisfy it; the interface lives here
-// so the rest of main doesn't have to import either concrete type.
-type userAdder interface {
-	Add(u domain.UserInfo, password string) error
 }
 
 func run(logger *slog.Logger) error {
@@ -225,6 +219,8 @@ func run(logger *slog.Logger) error {
 		RefreshTokens: bundle.RefreshTokens,
 		SigningKeys:   bundle.SigningKeys,
 		AuditLogs:     bundle.AuditLogs,
+		Users:         bundle.Users,
+		Roles:         bundle.Roles,
 		Clock:         clk,
 		Logger:        logger,
 	}).Mount(apiMux)
@@ -329,6 +325,7 @@ func buildStores(driver, dsn string, now func() time.Time, logger *slog.Logger) 
 			Scopes:        memory.NewScopeStore(),
 			AuditLogs:     memory.NewAuditLogStore(),
 			Users:         memory.NewUserStore(),
+			Roles:         memory.NewRoleStore(),
 			Tracker:       memory.NewLoginAttemptTracker(now),
 		}, nil, func() {}, nil
 	case "sqlite", "postgres":
@@ -351,11 +348,8 @@ func buildStores(driver, dsn string, now func() time.Time, logger *slog.Logger) 
 			Scopes:        gormstore.NewScopeStore(db),
 			AuditLogs:     gormstore.NewAuditLogStore(db),
 			Users:         gormstore.NewUserStore(db),
-			// The login-attempt tracker stays in-process. It's a
-			// sliding-window brute-force counter, not a durable
-			// record; sharing it across instances is not a
-			// requirement.
-			Tracker: memory.NewLoginAttemptTracker(now),
+			Roles:         gormstore.NewRoleStore(db),
+			Tracker:       memory.NewLoginAttemptTracker(now),
 		}
 		closer := func() {
 			sqlDB, err := db.DB()
@@ -387,10 +381,8 @@ func seedBundle(b *storeBundle) error {
 		}
 	}
 	public := &domain.Client{
-		ClientID:    "demo-public",
-		DisplayName: "Demo Public Client",
-		// localhost:8090 is the bundled browser demo client
-		// (examples/loginflow); demo.example stays for documentation.
+		ClientID:                "demo-public",
+		DisplayName:             "Demo Public Client",
 		RedirectURIs:            []string{"http://localhost:8090/callback", "https://demo.example/callback"},
 		PostLogoutRedirectURIs:  []string{"http://localhost:8090/", "https://demo.example/"},
 		AllowedScopes:           []string{"openid", "profile", "email", "offline_access"},
@@ -401,10 +393,6 @@ func seedBundle(b *storeBundle) error {
 	if err := b.Clients.Store(ctx, public); err != nil {
 		return err
 	}
-	// Confidential demo client. The server generates a fresh RSA
-	// keypair here; the public half is published inline as JWKS.
-	// The private key is NOT stored — operators wanting to use this
-	// client for real testing should override it via the admin API.
 	confidential, err := newSeededConfidentialClient()
 	if err != nil {
 		return err
@@ -412,19 +400,37 @@ func seedBundle(b *storeBundle) error {
 	if err := b.Clients.Store(ctx, confidential); err != nil {
 		return err
 	}
-	adder, ok := b.Users.(userAdder)
-	if !ok {
-		return errors.New("user store does not support Add (seed path)")
+
+	adminRole := &domain.Role{ID: "role-admin", Name: "admin"}
+	if err := b.Roles.CreateRole(ctx, adminRole); err != nil {
+		if !errors.Is(err, store.ErrDuplicate) {
+			return err
+		}
 	}
-	return adder.Add(domain.UserInfo{
-		UserID: "u-demo",
-		Claims: map[string]any{
-			"preferred_username": "demo",
-			"name":               "Demo User",
-			"email":              "demo@example.com",
-			"email_verified":     true,
-		},
-	}, "demo")
+
+	now := time.Now().UTC()
+	demoUser := &domain.User{
+		ID:             "u-demo",
+		Username:       "demo",
+		Email:          "demo@example.com",
+		EmailConfirmed: true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := b.Users.CreateUser(ctx, demoUser, "demo"); err != nil {
+		if !errors.Is(err, store.ErrDuplicate) {
+			return err
+		}
+	}
+	if err := b.Users.AddUserClaims(ctx, "u-demo", []domain.UserClaim{
+		{Type: "name", Value: "Demo User"},
+	}); err != nil {
+		return err
+	}
+	if err := b.Users.AddToRoles(ctx, "u-demo", []string{"admin"}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // newSeededConfidentialClient generates a fresh RSA-2048 keypair,

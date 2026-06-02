@@ -36,15 +36,20 @@ func newTestGrant(t *testing.T) (*AuthCodeGrant, *memory.AuthorizationCodeStore,
 	keys := token.NewKeyManager(memory.NewSigningKeyStore(), clk)
 	issuer := token.NewIssuer("https://auth.example.com", keys, clk)
 
-	_ = us.Add(domain.UserInfo{
-		UserID: "u-1",
-		Claims: map[string]any{
-			"preferred_username": "alice",
-			"name":               "Alice",
-			"email":              "alice@example.com",
-			"email_verified":     true,
-		},
+	now := clk.Now()
+	_ = us.CreateUser(context.Background(), &domain.User{
+		ID:        "u-1",
+		Username:  "alice",
+		Email:     "alice@example.com",
+		CreatedAt: now,
+		UpdatedAt: now,
 	}, "ignored")
+	_ = us.AddUserClaims(context.Background(), "u-1", []domain.UserClaim{
+		{Type: "preferred_username", Value: "alice"},
+		{Type: "name", Value: "Alice"},
+		{Type: "email", Value: "alice@example.com"},
+		{Type: "email_verified", Value: "true"},
+	})
 
 	testClient := &domain.Client{
 		ClientID:                "client-1",

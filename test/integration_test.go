@@ -79,12 +79,6 @@ type bundle struct {
 	Tracker       store.LoginAttemptTracker
 }
 
-// userAdder lets the seed step populate a user without caring which
-// concrete UserStore impl is in play.
-type userAdder interface {
-	Add(u domain.UserInfo, password string) error
-}
-
 // memoryBuilder returns a fully in-memory store bundle. The closer is
 // a no-op. This is the default for fast unit-style integration runs.
 func memoryBuilder() storeBuilder {
@@ -190,20 +184,23 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		AllowRefreshTokens:      true,
 		TokenEndpointAuthMethod: domain.TokenEndpointAuthMethodNone,
 	})
-	adder, ok := b.Users.(userAdder)
-	if !ok {
-		t.Fatalf("UserStore %T does not support Add (seed path)", b.Users)
-	}
-	if err := adder.Add(domain.UserInfo{
-		UserID: "u-demo",
-		Claims: map[string]any{
-			"preferred_username": testUser,
-			"name":               "Demo User",
-			"email":              "demo@example.com",
-			"email_verified":     true,
-		},
+	now := clk.Now()
+	if err := b.Users.CreateUser(context.Background(), &domain.User{
+		ID:        "u-demo",
+		Username:  testUser,
+		Email:     "demo@example.com",
+		CreatedAt: now,
+		UpdatedAt: now,
 	}, testPassword); err != nil {
 		t.Fatalf("seed user: %v", err)
+	}
+	if err := b.Users.AddUserClaims(context.Background(), "u-demo", []domain.UserClaim{
+		{Type: "preferred_username", Value: testUser},
+		{Type: "name", Value: "Demo User"},
+		{Type: "email", Value: "demo@example.com"},
+		{Type: "email_verified", Value: "true"},
+	}); err != nil {
+		t.Fatalf("seed user claims: %v", err)
 	}
 
 	km := token.NewKeyManager(b.SigningKeys, clk)
@@ -221,6 +218,7 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		[]byte("0123456789abcdef0123456789abcdef"),
 		[]byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"),
 		session.CookieConfig{Name: ".auth.session", Path: "/"},
+		clk,
 	)
 
 	loginTmpl := template.Must(template.New("login").Parse(oidc.LoginTemplate()))

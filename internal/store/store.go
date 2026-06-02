@@ -8,7 +8,6 @@ package store
 import "errors"
 
 var (
-	// ErrNotFound is returned by Find* methods when the requested entity does
-	// not exist. Implementations must wrap it via fmt.Errorf("...: %w", ErrNotFound).
-	ErrNotFound = errors.New("store: not found")
+	ErrNotFound  = errors.New("store: not found")
+	ErrDuplicate = errors.New("store: duplicate")
 )

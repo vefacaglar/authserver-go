@@ -472,14 +472,24 @@ func TestScope_RoundTrip(t *testing.T) {
 func TestUser_ValidateAndFind(t *testing.T) {
 	db := openTestDB(t)
 	s := NewUserStore(db)
-	if err := s.Add(domain.UserInfo{
-		UserID: "u-1",
-		Claims: map[string]any{"preferred_username": "alice", "email": "alice@example.com"},
-	}, "secret"); err != nil {
-		t.Fatalf("add: %v", err)
+	now := time.Now().UTC()
+	user := &domain.User{
+		ID:        "u-1",
+		Username:  "alice",
+		Email:     "alice@example.com",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.CreateUser(context.Background(), user, "secret"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := s.AddUserClaims(context.Background(), "u-1", []domain.UserClaim{
+		{Type: "preferred_username", Value: "alice"},
+		{Type: "email", Value: "alice@example.com"},
+	}); err != nil {
+		t.Fatalf("add claims: %v", err)
 	}
 
-	// Wrong password: nil, nil.
 	got, err := s.ValidateCredentials(context.Background(), "alice", "wrong")
 	if err != nil {
 		t.Fatalf("wrong: err = %v", err)
@@ -488,7 +498,6 @@ func TestUser_ValidateAndFind(t *testing.T) {
 		t.Errorf("wrong creds returned user: %+v", got)
 	}
 
-	// Right password.
 	got, err = s.ValidateCredentials(context.Background(), "alice", "secret")
 	if err != nil {
 		t.Fatalf("right: %v", err)
@@ -497,7 +506,6 @@ func TestUser_ValidateAndFind(t *testing.T) {
 		t.Errorf("right creds returned %+v", got)
 	}
 
-	// Unknown user: nil, nil.
 	got, err = s.ValidateCredentials(context.Background(), "ghost", "secret")
 	if err != nil {
 		t.Fatalf("ghost: err = %v", err)
@@ -506,7 +514,6 @@ func TestUser_ValidateAndFind(t *testing.T) {
 		t.Errorf("ghost returned user: %+v", got)
 	}
 
-	// FindByID.
 	found, err := s.FindByID(context.Background(), "u-1")
 	if err != nil {
 		t.Fatalf("find: %v", err)

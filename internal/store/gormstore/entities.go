@@ -19,6 +19,7 @@ package gormstore
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go-authserver/internal/domain"
@@ -400,40 +401,181 @@ func (e *scopeEntity) toDomain() (*domain.Scope, error) {
 	}, nil
 }
 
-// --- User (host directory) ---
+// --- User ---
 
-// userEntity is the GORM backing of the in-process user directory. The
-// user store is host-owned; this entity is here so the same SQLite
-// file can carry the demo user. Real deployments point UserStore at
-// LDAP/SSO/etc., not this table.
 type userEntity struct {
-	UserID       string `gorm:"primaryKey;size:128"`
-	Username     string `gorm:"uniqueIndex;size:128"`
-	PasswordHash string `gorm:"type:text"`
-	Claims       string `gorm:"type:text"` // JSON map[string]any
+	ID                   string `gorm:"primaryKey;size:128"`
+	Username             string `gorm:"uniqueIndex;size:256"`
+	NormalizedUsername   string `gorm:"uniqueIndex;size:256"`
+	Email                string `gorm:"index;size:256"`
+	NormalizedEmail      string `gorm:"index;size:256"`
+	EmailConfirmed       bool
+	PhoneNumber          string `gorm:"size:64"`
+	PhoneNumberConfirmed bool
+	PasswordHash         string `gorm:"type:text"`
+	SecurityStamp        string `gorm:"size:128"`
+	TwoFactorEnabled     bool
+	LockoutEnd           *time.Time
+	LockoutEnabled       bool
+	AccessFailedCount    int
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 func (userEntity) TableName() string { return "oauth_users" }
 
-func toUserEntity(u *domain.UserInfo, password string) (*userEntity, error) {
-	claims, err := encodeAnyMap(u.Claims)
-	if err != nil {
-		return nil, fmt.Errorf("user %q: claims: %w", u.UserID, err)
+func (e *userEntity) toDomain() *domain.User {
+	return &domain.User{
+		ID:                   e.ID,
+		Username:             e.Username,
+		Email:                e.Email,
+		EmailConfirmed:       e.EmailConfirmed,
+		PhoneNumber:          e.PhoneNumber,
+		PhoneNumberConfirmed: e.PhoneNumberConfirmed,
+		PasswordHash:         e.PasswordHash,
+		SecurityStamp:        e.SecurityStamp,
+		TwoFactorEnabled:     e.TwoFactorEnabled,
+		LockoutEnd:           e.LockoutEnd,
+		LockoutEnabled:       e.LockoutEnabled,
+		AccessFailedCount:    e.AccessFailedCount,
+		CreatedAt:            e.CreatedAt,
+		UpdatedAt:            e.UpdatedAt,
 	}
-	return &userEntity{
-		UserID:       u.UserID,
-		Username:     usernameFromClaims(u.Claims, u.UserID),
-		PasswordHash: password,
-		Claims:       claims,
-	}, nil
 }
 
-func (e *userEntity) toDomain() (*domain.UserInfo, error) {
-	claims, err := decodeAnyMap(e.Claims)
-	if err != nil {
-		return nil, fmt.Errorf("user %q: claims: %w", e.UserID, err)
+func toUserEntity(u *domain.User) *userEntity {
+	return &userEntity{
+		ID:                   u.ID,
+		Username:             u.Username,
+		NormalizedUsername:   strings.ToUpper(u.Username),
+		Email:                u.Email,
+		NormalizedEmail:      strings.ToUpper(u.Email),
+		EmailConfirmed:       u.EmailConfirmed,
+		PhoneNumber:          u.PhoneNumber,
+		PhoneNumberConfirmed: u.PhoneNumberConfirmed,
+		PasswordHash:         u.PasswordHash,
+		SecurityStamp:        u.SecurityStamp,
+		TwoFactorEnabled:     u.TwoFactorEnabled,
+		LockoutEnd:           u.LockoutEnd,
+		LockoutEnabled:       u.LockoutEnabled,
+		AccessFailedCount:    u.AccessFailedCount,
+		CreatedAt:            u.CreatedAt,
+		UpdatedAt:            u.UpdatedAt,
 	}
-	return &domain.UserInfo{UserID: e.UserID, Claims: claims}, nil
+}
+
+// --- UserClaim ---
+
+type userClaimEntity struct {
+	ID     int    `gorm:"primaryKey;autoIncrement"`
+	UserID string `gorm:"index;size:128;not null"`
+	Type   string `gorm:"size:256;not null"`
+	Value  string `gorm:"type:text"`
+}
+
+func (userClaimEntity) TableName() string { return "oauth_user_claims" }
+
+// --- Role ---
+
+type roleEntity struct {
+	ID             string `gorm:"primaryKey;size:128"`
+	Name           string `gorm:"uniqueIndex;size:256"`
+	NormalizedName string `gorm:"uniqueIndex;size:256"`
+}
+
+func (roleEntity) TableName() string { return "oauth_roles" }
+
+func (e *roleEntity) toDomain() *domain.Role {
+	return &domain.Role{
+		ID:   e.ID,
+		Name: e.Name,
+	}
+}
+
+func toRoleEntity(r *domain.Role) *roleEntity {
+	return &roleEntity{
+		ID:             r.ID,
+		Name:           r.Name,
+		NormalizedName: strings.ToUpper(r.Name),
+	}
+}
+
+// --- UserRole ---
+
+type userRoleEntity struct {
+	UserID string `gorm:"primaryKey;size:128"`
+	RoleID string `gorm:"primaryKey;size:128"`
+}
+
+func (userRoleEntity) TableName() string { return "oauth_user_roles" }
+
+// --- RoleClaim ---
+
+type roleClaimEntity struct {
+	ID     int    `gorm:"primaryKey;autoIncrement"`
+	RoleID string `gorm:"index;size:128;not null"`
+	Type   string `gorm:"size:256;not null"`
+	Value  string `gorm:"type:text"`
+}
+
+func (roleClaimEntity) TableName() string { return "oauth_role_claims" }
+
+// --- UserLogin ---
+
+type userLoginEntity struct {
+	LoginProvider string `gorm:"primaryKey;size:128"`
+	ProviderKey   string `gorm:"primaryKey;size:256"`
+	ProviderName  string `gorm:"size:256"`
+	UserID        string `gorm:"index;size:128;not null"`
+}
+
+func (userLoginEntity) TableName() string { return "oauth_user_logins" }
+
+func (e *userLoginEntity) toDomain() *domain.UserLogin {
+	return &domain.UserLogin{
+		LoginProvider: e.LoginProvider,
+		ProviderKey:   e.ProviderKey,
+		ProviderName:  e.ProviderName,
+		UserID:        e.UserID,
+	}
+}
+
+func toUserLoginEntity(l *domain.UserLogin) *userLoginEntity {
+	return &userLoginEntity{
+		LoginProvider: l.LoginProvider,
+		ProviderKey:   l.ProviderKey,
+		ProviderName:  l.ProviderName,
+		UserID:        l.UserID,
+	}
+}
+
+// --- UserToken ---
+
+type userTokenEntity struct {
+	UserID        string `gorm:"primaryKey;size:128"`
+	LoginProvider string `gorm:"primaryKey;size:128"`
+	Name          string `gorm:"primaryKey;size:256"`
+	Value         string `gorm:"type:text"`
+}
+
+func (userTokenEntity) TableName() string { return "oauth_user_tokens" }
+
+func (e *userTokenEntity) toDomain() *domain.UserToken {
+	return &domain.UserToken{
+		UserID:        e.UserID,
+		LoginProvider: e.LoginProvider,
+		Name:          e.Name,
+		Value:         e.Value,
+	}
+}
+
+func toUserTokenEntity(t *domain.UserToken) *userTokenEntity {
+	return &userTokenEntity{
+		UserID:        t.UserID,
+		LoginProvider: t.LoginProvider,
+		Name:          t.Name,
+		Value:         t.Value,
+	}
 }
 
 // --- AuditLog ---
@@ -500,6 +642,12 @@ func allEntities() []any {
 		&signingKeyEntity{},
 		&scopeEntity{},
 		&userEntity{},
+		&userClaimEntity{},
+		&roleEntity{},
+		&userRoleEntity{},
+		&roleClaimEntity{},
+		&userLoginEntity{},
+		&userTokenEntity{},
 		&auditLogEntity{},
 	}
 }

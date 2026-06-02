@@ -101,15 +101,20 @@ func buildTestServerForIssuer(t *testing.T, issuer string) *testServer {
 		TokenEndpointAuthMethod: domain.TokenEndpointAuthMethodNone,
 		Properties:              map[string]string{"_smoke_challenge": challenge},
 	})
-	_ = users.Add(domain.UserInfo{
-		UserID: "u-demo",
-		Claims: map[string]any{
-			"preferred_username": testUser,
-			"name":               "Demo User",
-			"email":              "demo@example.com",
-			"email_verified":     true,
-		},
+	now := clk.Now()
+	_ = users.CreateUser(context.Background(), &domain.User{
+		ID:        "u-demo",
+		Username:  testUser,
+		Email:     "demo@example.com",
+		CreatedAt: now,
+		UpdatedAt: now,
 	}, testPassword)
+	_ = users.AddUserClaims(context.Background(), "u-demo", []domain.UserClaim{
+		{Type: "preferred_username", Value: testUser},
+		{Type: "name", Value: "Demo User"},
+		{Type: "email", Value: "demo@example.com"},
+		{Type: "email_verified", Value: "true"},
+	})
 
 	km := token.NewKeyManager(keys, clk)
 	iss := token.NewIssuer(issuer, km, clk)
@@ -122,6 +127,7 @@ func buildTestServerForIssuer(t *testing.T, issuer string) *testServer {
 		[]byte("0123456789abcdef0123456789abcdef"),
 		[]byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"),
 		session.CookieConfig{Name: ".auth.session", Path: "/"},
+		clk,
 	)
 	loginTmpl := template.Must(template.New("login").Parse(oidc.LoginTemplate()))
 	loginHandler := &oidc.LoginHandler{

@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"context"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -21,13 +22,24 @@ func newTestLoginHandler(t *testing.T) (*LoginHandler, *memory.UserStore, *memor
 	t.Helper()
 	users := memory.NewUserStore()
 	sessions := memory.NewSessionStore()
-	_ = users.Add(domain.UserInfo{UserID: "u-1", Claims: map[string]any{"preferred_username": "alice"}}, "s3cr3t")
+	clk := clock.NewFakeClock(time.Unix(1700000000, 0))
+	now := clk.Now()
+	_ = users.CreateUser(context.Background(), &domain.User{
+		ID:        "u-1",
+		Username:  "alice",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}, "s3cr3t")
+	_ = users.AddUserClaims(context.Background(), "u-1", []domain.UserClaim{
+		{Type: "preferred_username", Value: "alice"},
+	})
 	cookies := session.NewCookieManager(
 		[]byte("0123456789abcdef0123456789abcdef"),
 		[]byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"),
 		session.CookieConfig{Name: ".auth.session", Path: "/"},
+		clk,
 	)
-	tracker := memory.NewLoginAttemptTracker(clock.NewFakeClock(time.Unix(1700000000, 0)).Now)
+	tracker := memory.NewLoginAttemptTracker(clk.Now)
 	tmpl := template.Must(template.New("login").Parse(loginHTML))
 	cfg := LoginConfig{
 		IssuerURL:       "https://auth.example.com",
@@ -35,7 +47,6 @@ func newTestLoginHandler(t *testing.T) (*LoginHandler, *memory.UserStore, *memor
 		AuthorizePath:   "/connect/authorize",
 		SessionLifetime: time.Hour,
 	}
-	clk := clock.NewFakeClock(time.Unix(1700000000, 0))
 	h := &LoginHandler{
 		Cfg:      cfg,
 		Users:    users,

@@ -25,6 +25,8 @@ type API struct {
 	RefreshTokens store.RefreshTokenStore
 	SigningKeys   store.SigningKeyStore
 	AuditLogs     store.AuditLogStore
+	Users         store.UserStore
+	Roles         store.RoleStore
 	Clock         clock.Clock
 	Logger        *slog.Logger
 }
@@ -47,6 +49,23 @@ func (a *API) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/refresh-tokens/{id}/revoke", a.revokeRefreshToken)
 	mux.HandleFunc("GET /api/keys", a.listSigningKeys)
 	mux.HandleFunc("GET /api/audit", a.listAuditLogs)
+	mux.HandleFunc("GET /api/users", a.listUsers)
+	mux.HandleFunc("POST /api/users", a.createUser)
+	mux.HandleFunc("GET /api/users/{id}", a.getUser)
+	mux.HandleFunc("PUT /api/users/{id}", a.updateUser)
+	mux.HandleFunc("DELETE /api/users/{id}", a.deleteUser)
+	mux.HandleFunc("GET /api/users/{id}/claims", a.getUserClaims)
+	mux.HandleFunc("PUT /api/users/{id}/claims", a.setUserClaims)
+	mux.HandleFunc("GET /api/users/{id}/roles", a.getUserRoles)
+	mux.HandleFunc("PUT /api/users/{id}/roles", a.setUserRoles)
+	mux.HandleFunc("GET /api/users/{id}/logins", a.getUserLogins)
+	mux.HandleFunc("DELETE /api/users/{id}/logins/{provider}/{key}", a.removeUserLogin)
+	mux.HandleFunc("POST /api/users/{id}/password", a.setUserPassword)
+	mux.HandleFunc("GET /api/roles", a.listRoles)
+	mux.HandleFunc("POST /api/roles", a.createRole)
+	mux.HandleFunc("DELETE /api/roles/{id}", a.deleteRole)
+	mux.HandleFunc("GET /api/roles/{id}/claims", a.getRoleClaims)
+	mux.HandleFunc("PUT /api/roles/{id}/claims", a.setRoleClaims)
 }
 
 // --- Clients ---
@@ -577,6 +596,401 @@ func validateJWKS(raw string) error {
 		return errors.New("jwks_json must contain at least one key")
 	}
 	return nil
+}
+
+// --- Users ---
+
+type userView struct {
+	ID                   string     `json:"id"`
+	Username             string     `json:"username"`
+	Email                string     `json:"email"`
+	EmailConfirmed       bool       `json:"email_confirmed"`
+	PhoneNumber          string     `json:"phone_number"`
+	PhoneNumberConfirmed bool       `json:"phone_number_confirmed"`
+	TwoFactorEnabled     bool       `json:"two_factor_enabled"`
+	LockoutEnd           *time.Time `json:"lockout_end,omitempty"`
+	LockoutEnabled       bool       `json:"lockout_enabled"`
+	AccessFailedCount    int        `json:"access_failed_count"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+}
+
+func toUserView(u *domain.User) userView {
+	return userView{
+		ID:                   u.ID,
+		Username:             u.Username,
+		Email:                u.Email,
+		EmailConfirmed:       u.EmailConfirmed,
+		PhoneNumber:          u.PhoneNumber,
+		PhoneNumberConfirmed: u.PhoneNumberConfirmed,
+		TwoFactorEnabled:     u.TwoFactorEnabled,
+		LockoutEnd:           u.LockoutEnd,
+		LockoutEnabled:       u.LockoutEnabled,
+		AccessFailedCount:    u.AccessFailedCount,
+		CreatedAt:            u.CreatedAt,
+		UpdatedAt:            u.UpdatedAt,
+	}
+}
+
+func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
+	res, err := a.Users.GetPagedUsers(r.Context(), parsePage(r))
+	if err != nil {
+		a.writeError(w, http.StatusInternalServerError, "list failed", err)
+		return
+	}
+	items := make([]userView, len(res.Items))
+	for i := range res.Items {
+		items[i] = toUserView(&res.Items[i])
+	}
+	a.writeJSON(w, http.StatusOK, map[string]any{"items": items, "total_count": res.TotalCount})
+}
+
+type createUserRequest struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
+	var body createUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.writeError(w, http.StatusBadRequest, "invalid json", err)
+		return
+	}
+	if body.ID == "" || body.Password == "" {
+		a.writeError(w, http.StatusBadRequest, "id and password are required", nil)
+		return
+	}
+	now := time.Now().UTC()
+	user := &domain.User{
+		ID:        body.ID,
+		Username:  body.Username,
+		Email:     body.Email,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := a.Users.CreateUser(r.Context(), user, body.Password); err != nil {
+		a.writeError(w, http.StatusBadRequest, "create failed", err)
+		return
+	}
+	a.writeJSON(w, http.StatusCreated, toUserView(user))
+}
+
+func (a *API) getUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	user, err := a.Users.FindUserByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, toUserView(user))
+}
+
+type updateUserRequest struct {
+	Username             string     `json:"username"`
+	Email                string     `json:"email"`
+	EmailConfirmed       bool       `json:"email_confirmed"`
+	PhoneNumber          string     `json:"phone_number"`
+	PhoneNumberConfirmed bool       `json:"phone_number_confirmed"`
+	TwoFactorEnabled     bool       `json:"two_factor_enabled"`
+	LockoutEnd           *time.Time `json:"lockout_end,omitempty"`
+	LockoutEnabled       bool       `json:"lockout_enabled"`
+	AccessFailedCount    int        `json:"access_failed_count"`
+}
+
+func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body updateUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.writeError(w, http.StatusBadRequest, "invalid json", err)
+		return
+	}
+	existing, err := a.Users.FindUserByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		return
+	}
+	existing.Username = body.Username
+	existing.Email = body.Email
+	existing.EmailConfirmed = body.EmailConfirmed
+	existing.PhoneNumber = body.PhoneNumber
+	existing.PhoneNumberConfirmed = body.PhoneNumberConfirmed
+	existing.TwoFactorEnabled = body.TwoFactorEnabled
+	existing.LockoutEnd = body.LockoutEnd
+	existing.LockoutEnabled = body.LockoutEnabled
+	existing.AccessFailedCount = body.AccessFailedCount
+	existing.UpdatedAt = time.Now().UTC()
+	if err := a.Users.UpdateUser(r.Context(), existing); err != nil {
+		a.writeError(w, http.StatusBadRequest, "update failed", err)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, toUserView(existing))
+}
+
+func (a *API) deleteUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := a.Users.DeleteUser(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "delete failed", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) getUserClaims(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	claims, err := a.Users.GetUserClaims(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, map[string]any{"claims": claims})
+}
+
+type setClaimsRequest struct {
+	Claims []domain.UserClaim `json:"claims"`
+}
+
+func (a *API) setUserClaims(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body setClaimsRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.writeError(w, http.StatusBadRequest, "invalid json", err)
+		return
+	}
+	if err := a.Users.ReplaceUserClaims(r.Context(), id, body.Claims); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "update failed", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) getUserRoles(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	roles, err := a.Users.GetUserRoles(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, map[string]any{"roles": roles})
+}
+
+type setRolesRequest struct {
+	Roles []string `json:"roles"`
+}
+
+func (a *API) setUserRoles(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body setRolesRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.writeError(w, http.StatusBadRequest, "invalid json", err)
+		return
+	}
+	existing, err := a.Users.GetUserRoles(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		return
+	}
+	toRemove := make([]string, 0)
+	for _, r := range existing {
+		if !containsString(body.Roles, r) {
+			toRemove = append(toRemove, r)
+		}
+	}
+	toAdd := make([]string, 0)
+	for _, r := range body.Roles {
+		if !containsString(existing, r) {
+			toAdd = append(toAdd, r)
+		}
+	}
+	if len(toRemove) > 0 {
+		if err := a.Users.RemoveFromRoles(r.Context(), id, toRemove); err != nil {
+			a.writeError(w, http.StatusInternalServerError, "remove roles failed", err)
+			return
+		}
+	}
+	if len(toAdd) > 0 {
+		if err := a.Users.AddToRoles(r.Context(), id, toAdd); err != nil {
+			a.writeError(w, http.StatusInternalServerError, "add roles failed", err)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) getUserLogins(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	logins, err := a.Users.GetUserLogins(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, map[string]any{"logins": logins})
+}
+
+func (a *API) removeUserLogin(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	provider := r.PathValue("provider")
+	key := r.PathValue("key")
+	if err := a.Users.RemoveLogin(r.Context(), id, provider, key); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "delete failed", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type setPasswordRequest struct {
+	Password string `json:"password"`
+}
+
+func (a *API) setUserPassword(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body setPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.writeError(w, http.StatusBadRequest, "invalid json", err)
+		return
+	}
+	if body.Password == "" {
+		a.writeError(w, http.StatusBadRequest, "password is required", nil)
+		return
+	}
+	if err := a.Users.SetPassword(r.Context(), id, body.Password); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "update failed", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Roles ---
+
+type roleView struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func (a *API) listRoles(w http.ResponseWriter, r *http.Request) {
+	roles, err := a.Roles.GetAllRoles(r.Context())
+	if err != nil {
+		a.writeError(w, http.StatusInternalServerError, "list failed", err)
+		return
+	}
+	items := make([]roleView, len(roles))
+	for i, r := range roles {
+		items[i] = roleView{ID: r.ID, Name: r.Name}
+	}
+	a.writeJSON(w, http.StatusOK, map[string]any{"items": items, "total_count": len(items)})
+}
+
+type createRoleRequest struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func (a *API) createRole(w http.ResponseWriter, r *http.Request) {
+	var body createRoleRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.writeError(w, http.StatusBadRequest, "invalid json", err)
+		return
+	}
+	if body.ID == "" || body.Name == "" {
+		a.writeError(w, http.StatusBadRequest, "id and name are required", nil)
+		return
+	}
+	role := &domain.Role{ID: body.ID, Name: body.Name}
+	if err := a.Roles.CreateRole(r.Context(), role); err != nil {
+		a.writeError(w, http.StatusBadRequest, "create failed", err)
+		return
+	}
+	a.writeJSON(w, http.StatusCreated, roleView{ID: role.ID, Name: role.Name})
+}
+
+func (a *API) deleteRole(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := a.Roles.DeleteRole(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "delete failed", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) getRoleClaims(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	claims, err := a.Roles.GetRoleClaims(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, map[string]any{"claims": claims})
+}
+
+type setRoleClaimsRequest struct {
+	Claims []domain.RoleClaim `json:"claims"`
+}
+
+func (a *API) setRoleClaims(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body setRoleClaimsRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.writeError(w, http.StatusBadRequest, "invalid json", err)
+		return
+	}
+	if err := a.Roles.ReplaceRoleClaims(r.Context(), id, body.Claims); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "update failed", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 var _ = context.Background
