@@ -30,10 +30,14 @@ export AUTH_REQUIRE_HTTPS="${AUTH_REQUIRE_HTTPS:-false}"
 export AUTH_ISSUER="${AUTH_ISSUER:-http://localhost:5175}"
 export AUTH_LISTEN_ADDR="${AUTH_LISTEN_ADDR:-:5175}"
 
-# Persist data across restarts in a local SQLite file (gitignored).
-# Set AUTH_DB_DSN=file::memory:?cache=shared for a throwaway in-memory DB.
-export AUTH_DB_DRIVER="${AUTH_DB_DRIVER:-sqlite}"
-export AUTH_DB_DSN="${AUTH_DB_DSN:-file:./dev.db}"
+# Zero-dependency dev: a throwaway in-memory store (allowed because
+# AUTH_REQUIRE_HTTPS=false here). For a persistent, production-like setup
+# point these at Postgres, e.g.:
+#   AUTH_DB_DRIVER=postgres \
+#   AUTH_DB_DSN=postgres://postgres:postgres@localhost:5432/authserver?sslmode=disable
+# then run `authserver migrate` once before starting.
+export AUTH_DB_DRIVER="${AUTH_DB_DRIVER:-memory}"
+export AUTH_DB_DSN="${AUTH_DB_DSN:-}"
 
 echo "==> go-authserver dev"
 echo "    issuer : $AUTH_ISSUER"

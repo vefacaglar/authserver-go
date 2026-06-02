@@ -52,8 +52,10 @@ func main() {
 		err = run(logger)
 	case "migrate":
 		err = runMigrate(logger)
+	case "rotate-keys":
+		err = runRotateKeys(logger)
 	default:
-		logger.Error("unknown command", "cmd", cmd, "want", "serve|migrate")
+		logger.Error("unknown command", "cmd", cmd, "want", "serve|migrate|rotate-keys")
 		os.Exit(2)
 	}
 	if err != nil {
@@ -77,7 +79,7 @@ func runMigrate(logger *slog.Logger) error {
 		drv = "memory"
 	}
 	if drv == "memory" {
-		return errors.New("migrate: driver is \"memory\"; nothing to migrate (use sqlite/postgres)")
+		return errors.New("migrate: driver is \"memory\"; nothing to migrate (set AUTH_DB_DRIVER=postgres)")
 	}
 
 	db, err := gormstore.Open(drv, cfg.DBDSN)
@@ -108,6 +110,45 @@ func runMigrate(logger *slog.Logger) error {
 		return err
 	}
 	logger.Info("seed + signing key ready", "driver", drv)
+	return nil
+}
+
+// runRotateKeys generates a fresh active signing key and retires the
+// current one (kept in the published JWKS so already-issued tokens stay
+// verifiable until they expire). One-shot operator command; run it on a
+// schedule for key rotation. Requires a persistent driver — rotating an
+// in-memory key ring is meaningless.
+func runRotateKeys(logger *slog.Logger) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	drv := cfg.DBDriver
+	if drv == "" {
+		drv = "memory"
+	}
+	if drv == "memory" {
+		return errors.New("rotate-keys: driver is \"memory\"; nothing persists (set AUTH_DB_DRIVER=postgres)")
+	}
+
+	db, err := gormstore.Open(drv, cfg.DBDSN)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if sqlDB, derr := db.DB(); derr == nil {
+			_ = sqlDB.Close()
+		}
+	}()
+
+	keyManager := token.NewKeyManager(gormstore.NewSigningKeyStore(db), clock.SystemClock{})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	k, err := keyManager.Rotate(ctx)
+	if err != nil {
+		return err
+	}
+	logger.Info("signing key rotated", "driver", drv, "new_kid", k.KeyID)
 	return nil
 }
 
@@ -427,7 +468,7 @@ func buildStores(driver, dsn string, now func() time.Time, logger *slog.Logger) 
 			Roles:         memory.NewRoleStore(),
 			Tracker:       memory.NewLoginAttemptTracker(now),
 		}, nil, func() {}, nil
-	case "sqlite", "postgres":
+	case "postgres":
 		db, err := gormstore.Open(drv, dsn)
 		if err != nil {
 			return nil, nil, nil, err
@@ -465,7 +506,9 @@ func newGormBundle(db *gorm.DB, now func() time.Time) *storeBundle {
 		AuditLogs:     gormstore.NewAuditLogStore(db),
 		Users:         gormstore.NewUserStore(db),
 		Roles:         gormstore.NewRoleStore(db),
-		Tracker:       memory.NewLoginAttemptTracker(now),
+		// Persistent, cross-instance lockout tracker so brute-force limits
+		// hold globally behind a load balancer.
+		Tracker: gormstore.NewLoginAttemptTracker(db, now),
 	}
 }
 

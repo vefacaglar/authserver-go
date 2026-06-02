@@ -652,8 +652,24 @@ func allEntities() []any {
 		&userLoginEntity{},
 		&userTokenEntity{},
 		&auditLogEntity{},
+		&loginAttemptEntity{},
 	}
 }
+
+// --- Login attempt (lockout) ---
+
+// loginAttemptEntity is the persistent fixed-window failure counter shared
+// across instances, so brute-force lockout is enforced globally behind a
+// load balancer rather than per-process. Principal is the lockout key
+// (username); a row exists only while a key has recent failures.
+type loginAttemptEntity struct {
+	Principal string `gorm:"column:principal;primaryKey;size:256"`
+	Failures  int
+	FirstAt   time.Time
+	LockedAt  *time.Time
+}
+
+func (loginAttemptEntity) TableName() string { return "login_attempts" }
 
 // Migrate runs AutoMigrate for every entity in this package. It is
 // idempotent: existing tables are not modified beyond additive

@@ -11,9 +11,10 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// Open creates a *gorm.DB for the given driver + DSN. Supported
-// drivers are "sqlite" and "postgres". An empty driver defaults to
-// "sqlite".
+// Open creates a *gorm.DB for the given driver + DSN. "postgres" is the
+// production runtime driver; "sqlite" remains supported for the test suite
+// only (the application wiring in cmd/authserver never selects it). An
+// empty driver defaults to "sqlite" to keep test callers terse.
 //
 // The returned *gorm.DB is safe to share across goroutines; GORM uses
 // the underlying *sql.DB pool. The caller is responsible for

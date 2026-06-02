@@ -14,7 +14,10 @@ for the full technical spec.
 
 ## Quick start
 
-Requires **Go 1.26+** (and a C compiler — the SQLite driver uses cgo).
+Requires **Go 1.26+**. The runtime persists to **PostgreSQL**; `make dev`
+uses a zero-dependency in-memory store so you can run it without a database.
+(The test suite uses SQLite via cgo, so running `make test` needs a C
+compiler.)
 
 The repository ships a `Makefile` that plays the role of `package.json`
 scripts. The one command you usually want:
@@ -25,9 +28,9 @@ make dev        # like `pnpm run dev` — run the server locally, Ctrl-C to stop
 
 `make dev` runs [`scripts/dev.sh`](scripts/dev.sh), which fills in safe
 local-dev defaults (HTTP issuer on `http://localhost:5175`, TLS off, a
-persistent SQLite file at `./dev.db`), generates the required secret keys
-on the fly, then runs the server in the foreground. It prints the issuer,
-the admin bearer token, and the discovery URL on boot.
+throwaway in-memory store), generates the required secret keys on the fly,
+then runs the server in the foreground. It prints the issuer, the admin
+bearer token, and the discovery URL on boot.
 
 Run `make` with no target to see every task:
 
@@ -41,8 +44,7 @@ Run `make` with no target to see every task:
 | `make test` | Run the full test suite |
 | `make smoke` | Run the real-OIDC-client smoke test (build-tagged) |
 | `make check` | `go vet` + `go test` + `go build` — run before committing |
-| `make db-reset` | Delete the local SQLite database (recreated on next run) |
-| `make clean` | Remove build artifacts + the dev database |
+| `make clean` | Remove build artifacts |
 
 ## Running and stopping
 
@@ -95,8 +97,10 @@ public demo client (`demo-public`), a confidential demo client
 | `AUTH_ISSUER` | _(required)_ | Absolute URL; must be `https` unless `AUTH_REQUIRE_HTTPS=false` |
 | `AUTH_LISTEN_ADDR` | `:5175` | Bind address |
 | `AUTH_REQUIRE_HTTPS` | `true` | `false` enables HTTP + drops the `__Host-` cookie prefix (dev only) |
-| `AUTH_DB_DRIVER` | `sqlite` | `sqlite` or `postgres` (`memory` also accepted for throwaway runs) |
-| `AUTH_DB_DSN` | `file::memory:?cache=shared` | SQLite file/DSN or Postgres DSN |
+| `AUTH_DB_DRIVER` | `postgres` | `postgres` (production) or `memory` (throwaway; rejected when `AUTH_REQUIRE_HTTPS=true`) |
+| `AUTH_DB_DSN` | `postgres://postgres:postgres@localhost:5432/authserver?sslmode=disable` | Postgres DSN; ignored by the `memory` driver |
+| `AUTH_AUTO_MIGRATE` | `true` | Run schema migration on startup. Set `false` in production and run `authserver migrate` at deploy time for fast cold starts |
+| `AUTH_SEED` | `true` | Seed demo client/user/scopes on startup. Set `false` in production |
 | `AUTH_COOKIE_HASH_KEY` | _(required)_ | base64, ≥32 bytes — session cookie HMAC |
 | `AUTH_COOKIE_BLOCK_KEY` | _(required)_ | base64, ≥32 bytes — session cookie encryption |
 | `AUTH_CSRF_KEY` | _(required)_ | base64, ≥32 bytes — CSRF token key |
@@ -113,21 +117,29 @@ public demo client (`demo-public`), a confidential demo client
 
 ## Database & migrations
 
-Persistence is **GORM**, with two supported drivers selected by
-`AUTH_DB_DRIVER`:
+Persistence is **GORM on PostgreSQL** (`AUTH_DB_DRIVER=postgres`). A
+`memory` driver exists for throwaway local runs, but it is **rejected in
+production** (`AUTH_REQUIRE_HTTPS=true`): an in-memory store keeps sessions,
+refresh tokens, and signing keys per-process, so behind a load balancer
+each instance would mint a different signing key and reject the others'
+tokens. SQLite is used by the test suite only — never as a runtime driver.
 
-- `sqlite` — default; great for dev/test. Use a **file DSN**
-  (`AUTH_DB_DSN=file:./dev.db`, what `make dev` does) to persist across
-  restarts, or `file::memory:?cache=shared` for a throwaway DB.
-- `postgres` — production; `AUTH_DB_DSN` is a standard Postgres DSN.
+### Commands
+
+The binary has three subcommands:
+
+| Command | What it does |
+| --- | --- |
+| `authserver serve` | Start the HTTP server (default when no subcommand given) |
+| `authserver migrate` | Apply the schema, seed demo fixtures, and pre-create the signing key — run once at deploy time |
+| `authserver rotate-keys` | Generate a fresh active signing key and retire the current one (kept in JWKS so old tokens stay verifiable) |
 
 ### How migrations work
 
 There is **no separate "generate migration" step**. The schema is derived
 directly from the GORM entity structs in
 [`internal/store/gormstore/entities.go`](internal/store/gormstore/entities.go),
-and `gormstore.Migrate` runs `AutoMigrate` for every entity **automatically
-on startup** (see [`cmd/authserver/main.go`](cmd/authserver/main.go)). It is
+and `gormstore.Migrate` runs `AutoMigrate` for every entity. It is
 idempotent and additive: it creates missing tables, columns, and indexes and
 leaves existing data alone.
 
@@ -136,10 +148,24 @@ So the workflow is:
 1. **Change the schema** → edit the entity struct (add a field, add a
    `gorm:"index"` tag, etc.) in `entities.go`. If it's a brand-new table,
    add the entity to the `allEntities()` slice in the same file.
-2. **Apply it** → just start the server (`make dev`). The new column/table/
-   index appears on boot. No codegen, no migration files to commit.
-3. **Reset locally** → `make db-reset` deletes `dev.db` and the next boot
-   recreates the full schema from scratch.
+2. **Apply it** → run `authserver migrate` (or start with
+   `AUTH_AUTO_MIGRATE=true`). The new column/table/index appears. No codegen,
+   no migration files to commit.
+
+### Production cold-start
+
+For serverless / autoscaled deployments, migrating on every boot is slow.
+Run the schema step once at deploy time and start the server with migration
+and seeding off:
+
+```sh
+authserver migrate                       # once, at deploy
+AUTH_AUTO_MIGRATE=false AUTH_SEED=false authserver serve
+```
+
+All instances must share the same `AUTH_COOKIE_HASH_KEY`,
+`AUTH_COOKIE_BLOCK_KEY`, and `AUTH_CSRF_KEY` so cookies and CSRF tokens
+validate across the fleet.
 
 > AutoMigrate intentionally does **not** drop columns or perform
 > destructive/altering changes. For a column rename or type change on a
@@ -226,7 +252,7 @@ Key responses always strip the private PEM; mutations require a CSRF token.
 | Language | Go 1.26+ (`log/slog` for logging) |
 | HTTP router | `net/http` + `github.com/go-chi/chi/v5` |
 | JOSE / JWT / JWKS | `github.com/lestrrat-go/jwx/v2` |
-| Persistence | GORM (Postgres in prod, SQLite for dev/test) |
+| Persistence | GORM on PostgreSQL (in-memory store for dev; SQLite for tests) |
 | Session cookie | `github.com/gorilla/securecookie` |
 | CSRF | `github.com/gorilla/csrf` |
 | Rate limiting | `golang.org/x/time/rate` |

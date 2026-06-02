@@ -46,7 +46,40 @@ func (m *KeyManager) EnsureActiveKey(ctx context.Context) (*domain.SigningKey, e
 	if !errors.Is(err, store.ErrNotFound) {
 		return nil, fmt.Errorf("keys: get active: %w", err)
 	}
+	return m.generateActive(ctx)
+}
 
+// Rotate generates a fresh active signing key and retires the current one.
+// The retired key stays in the store (and in the published JWKS) so tokens
+// signed with it remain verifiable until they expire; only new tokens use
+// the new key. Intended to be run periodically by an operator via the
+// `rotate-keys` command.
+//
+// The retire-then-create is two store writes rather than one transaction:
+// run it from a single operator process (not concurrently), so the brief
+// window is not a concern in practice. New signing happens with whichever
+// key GetActive returns.
+func (m *KeyManager) Rotate(ctx context.Context) (*domain.SigningKey, error) {
+	active, err := m.Keys.GetActive(ctx)
+	switch {
+	case err == nil:
+		now := m.Clock.Now().UTC()
+		active.IsActive = false
+		active.RetiredAt = &now
+		if err := m.Keys.Store(ctx, active); err != nil {
+			return nil, fmt.Errorf("keys: retire active: %w", err)
+		}
+	case errors.Is(err, store.ErrNotFound):
+		// Nothing to retire; this becomes the first key.
+	default:
+		return nil, fmt.Errorf("keys: get active: %w", err)
+	}
+	return m.generateActive(ctx)
+}
+
+// generateActive creates a fresh RSA keypair, stores it as the active key,
+// and returns it. Shared by EnsureActiveKey (bootstrap) and Rotate.
+func (m *KeyManager) generateActive(ctx context.Context) (*domain.SigningKey, error) {
 	priv, err := GenerateRSAKey(RSAKeyBits)
 	if err != nil {
 		return nil, fmt.Errorf("keys: generate: %w", err)

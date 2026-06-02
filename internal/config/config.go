@@ -67,8 +67,8 @@ func Load() (*Config, error) {
 		Issuer:                       getenv("AUTH_ISSUER", ""),
 		Listen:                       getenv("AUTH_LISTEN_ADDR", ":5175"),
 		RequireHTTPS:                 getbool("AUTH_REQUIRE_HTTPS", true),
-		DBDriver:                     getenv("AUTH_DB_DRIVER", "sqlite"),
-		DBDSN:                        getenv("AUTH_DB_DSN", "file::memory:?cache=shared"),
+		DBDriver:                     getenv("AUTH_DB_DRIVER", "postgres"),
+		DBDSN:                        getenv("AUTH_DB_DSN", "postgres://postgres:postgres@localhost:5432/authserver?sslmode=disable"),
 		AutoMigrate:                  getbool("AUTH_AUTO_MIGRATE", true),
 		Seed:                         getbool("AUTH_SEED", true),
 		CookieName:                   getenv("AUTH_COOKIE_NAME", ".auth.session"),
@@ -152,6 +152,14 @@ func (c *Config) validate() error {
 	}
 	if !c.AdminAllowAnonymous && strings.TrimSpace(c.AdminToken) == "" {
 		return errors.New("AUTH_ADMIN_TOKEN must be set unless AUTH_ADMIN_ALLOW_ANONYMOUS=true")
+	}
+	// In production (RequireHTTPS) the data store must be durable and
+	// shared. The "memory" driver keeps sessions, refresh tokens, and —
+	// critically — signing keys per-process, so each instance behind a
+	// load balancer would mint a different signing key and reject the
+	// others' tokens. Force a persistent backend.
+	if c.RequireHTTPS && (c.DBDriver == "" || c.DBDriver == "memory") {
+		return errors.New("AUTH_DB_DRIVER=memory is unsafe when AUTH_REQUIRE_HTTPS=true; use postgres")
 	}
 	return nil
 }

@@ -14,7 +14,7 @@ PKG       := ./cmd/authserver
 PORT      ?= 5175
 DEMO_PORT ?= 8090
 
-.PHONY: help dev run build start stop start-all stop-all logs test smoke vet check tidy clean db-reset
+.PHONY: help dev run build start stop start-all stop-all logs test smoke vet check tidy clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -79,9 +79,5 @@ check: vet test ## Run vet + tests (use before committing)
 tidy: ## Tidy go.mod / go.sum
 	go mod tidy
 
-db-reset: ## Delete the local dev SQLite database
-	rm -f dev.db dev.db-shm dev.db-wal
-	@echo "dev.db removed; it will be recreated + migrated on next 'make dev'"
-
-clean: ## Remove build artifacts and the dev database
-	rm -f $(BINARY) dev.db dev.db-shm dev.db-wal .authserver.pid
+clean: ## Remove build artifacts
+	rm -f $(BINARY) .authserver.pid
