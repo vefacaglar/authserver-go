@@ -16,13 +16,37 @@ cd "$(dirname "$0")/.."
 # --- load .env if present (values already exported win over defaults below) ---
 if [ -f .env ]; then set -a; . ./.env; set +a; fi
 
-# --- secrets: generate ephemeral 32-byte keys unless already set ---
+# --- secrets: generate 32-byte keys and PERSIST them to .env ---
+#
+# These must stay stable across restarts: the session cookie is encrypted
+# with the cookie keys, so regenerating them on every boot would make every
+# existing session undecryptable and bounce the user back to login. So if a
+# key is missing/empty we generate one and write it back to .env, where the
+# next run picks it up.
 gen_key() { head -c 32 /dev/urandom | base64; }
 
-export AUTH_COOKIE_HASH_KEY="${AUTH_COOKIE_HASH_KEY:-$(gen_key)}"
-export AUTH_COOKIE_BLOCK_KEY="${AUTH_COOKIE_BLOCK_KEY:-$(gen_key)}"
-export AUTH_CSRF_KEY="${AUTH_CSRF_KEY:-$(gen_key)}"
-export AUTH_ADMIN_TOKEN="${AUTH_ADMIN_TOKEN:-$(gen_key)}"
+ensure_secret() { # $1 = var name
+  local name="$1" cur val
+  eval "cur=\${$name:-}"
+  if [ -n "$cur" ]; then
+    export "$name=$cur"
+    return
+  fi
+  val="$(gen_key)"
+  export "$name=$val"
+  touch .env
+  if grep -qE "^${name}=" .env; then
+    sed -i.bak -E "s|^${name}=.*|${name}=${val}|" .env && rm -f .env.bak
+  else
+    printf '%s=%s\n' "$name" "$val" >> .env
+  fi
+  echo "==> generated $name and saved it to .env (stable across restarts)"
+}
+
+ensure_secret AUTH_COOKIE_HASH_KEY
+ensure_secret AUTH_COOKIE_BLOCK_KEY
+ensure_secret AUTH_CSRF_KEY
+ensure_secret AUTH_ADMIN_TOKEN
 
 # --- local-dev server config ---
 # HTTP (not HTTPS) so you can hit it from a browser/curl without certs.
