@@ -69,7 +69,9 @@ func run(logger *slog.Logger) error {
 		MaxAge:       8 * time.Hour,
 	})
 
-	loginTmpl := template.Must(template.New("login").Parse(loginHTML))
+	loginTmpl := template.Must(template.New("login").Parse(oidc.LoginTemplate()))
+	logoutTmpl := template.Must(template.New("logout").Parse(oidc.LogoutTemplate()))
+
 	loginHandler := &oidc.LoginHandler{
 		Cfg: oidc.LoginConfig{
 			IssuerURL:       cfg.Issuer,
@@ -117,6 +119,46 @@ func run(logger *slog.Logger) error {
 				RefreshTokenAbsoluteLifetime: cfg.RefreshTokenAbsoluteLifetime,
 			},
 		},
+		Refresh: &grants.RefreshGrant{
+			RefreshTokens: refreshTokens,
+			Sessions:      sessions,
+			Clients:       clients,
+			Users:         users,
+			AuditLogs:     auditLogs,
+			Issuer:        issuer,
+			Clock:         clk,
+			Logger:        logger,
+			Cfg: grants.RefreshConfig{
+				AccessTokenLifetime:          cfg.AccessTokenLifetime,
+				IDTokenLifetime:              cfg.IDTokenLifetime,
+				RefreshTokenLifetime:         cfg.RefreshTokenLifetime,
+				RefreshTokenAbsoluteLifetime: cfg.RefreshTokenAbsoluteLifetime,
+				DetectReuse:                  cfg.DetectRefreshTokenReuse,
+			},
+		},
+	}
+	userInfoHandler := oidc.NewUserInfoHandler(issuer, users, logger)
+	revokeHandler := &oidc.RevokeHandler{
+		RefreshTokens: refreshTokens,
+		Clients:       clients,
+		Now:           clk.Now,
+		Logger:        logger,
+	}
+	logoutHandler := &oidc.LogoutHandler{
+		Cfg: oidc.LogoutConfig{
+			IssuerURL:             cfg.Issuer,
+			AuthorizePath:         "/connect/authorize",
+			LogoutPath:            cfg.LogoutPath,
+			PostLogoutRedirectURI: cfg.PostLogoutRedirectURI,
+		},
+		Cookies:       cookieMgr,
+		Sessions:      sessions,
+		RefreshTokens: refreshTokens,
+		Clients:       clients,
+		Issuer:        issuer,
+		Clock:         clk,
+		Logger:        logger,
+		Confirm:       logoutTmpl,
 	}
 
 	// EnsureActiveKey so discovery/JWKS have a key to publish on first boot.
@@ -127,13 +169,15 @@ func run(logger *slog.Logger) error {
 	}
 	cancel()
 
-	_ = auditLogs
 	_ = store.ScopeStore(nil)
 
 	handlers := server.Handlers{
 		Login:     loginHandler,
+		Logout:    logoutHandler,
 		Authorize: authorizeHandler,
 		Token:     tokenHandler,
+		UserInfo:  userInfoHandler,
+		Revoke:    revokeHandler,
 		Discovery: oidc.NewDiscoveryHandler(cfg.Issuer, scopes),
 		JWKS:      oidc.NewJWKSHandler(issuer),
 		Health:    server.NewHealth(),
@@ -143,8 +187,11 @@ func run(logger *slog.Logger) error {
 			IssuerURL:     cfg.Issuer,
 			RequireHTTPS:  cfg.RequireHTTPS,
 			LoginPath:     cfg.LoginPath,
+			LogoutPath:    cfg.LogoutPath,
 			AuthorizePath: "/connect/authorize",
 			TokenPath:     "/connect/token",
+			UserInfoPath:  "/connect/userinfo",
+			RevokePath:    "/connect/revoke",
 			JWKSPath:      "/.well-known/jwks.json",
 			DiscoveryPath: "/.well-known/openid-configuration",
 			HealthPath:    "/healthz",
@@ -180,17 +227,6 @@ func run(logger *slog.Logger) error {
 	return srv.Shutdown(shutdownCtx)
 }
 
-const loginHTML = `<!doctype html>
-<html><body>
-<form method="post" action="/login">
-<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-<input type="hidden" name="returnUrl" value="{{.ReturnURL}}">
-<input name="username">
-<input name="password" type="password">
-<button type="submit">Sign in</button>
-</form>
-</body></html>`
-
 // seed writes the minimum sample data: the openid/profile/email/offline_access
 // scopes, a sample public client, and a sample user. It runs synchronously
 // at boot so the server is usable immediately without any admin UI.
@@ -210,6 +246,7 @@ func seed(scopes store.ScopeStore, clients store.ClientStore, users *memory.User
 		ClientID:                "demo-public",
 		DisplayName:             "Demo Public Client",
 		RedirectURIs:            []string{"https://demo.example/callback"},
+		PostLogoutRedirectURIs:  []string{"https://demo.example/"},
 		AllowedScopes:           []string{"openid", "profile", "email", "offline_access"},
 		RequirePKCE:             true,
 		AllowRefreshTokens:      true,

@@ -49,11 +49,13 @@ func testChallenge() string {
 // testServer is a fully-wired router against in-memory stores, ready to
 // serve httptest requests.
 type testServer struct {
-	srv     *httptest.Server
-	clk     *clock.FakeClock
-	clients *memory.ClientStore
-	issuer  *token.Issuer
-	client  *http.Client
+	srv           *httptest.Server
+	clk           *clock.FakeClock
+	clients       *memory.ClientStore
+	refreshTokens *memory.RefreshTokenStore
+	auditLogs     *memory.AuditLogStore
+	issuer        *token.Issuer
+	client        *http.Client
 }
 
 func newTestServer(t *testing.T) *testServer {
@@ -67,6 +69,7 @@ func newTestServer(t *testing.T) *testServer {
 	authCodes := memory.NewAuthorizationCodeStore()
 	refreshTokens := memory.NewRefreshTokenStore()
 	users := memory.NewUserStore()
+	auditLogs := memory.NewAuditLogStore()
 	keys := memory.NewSigningKeyStore()
 	tracker := memory.NewLoginAttemptTracker(clk.Now)
 
@@ -106,6 +109,8 @@ func newTestServer(t *testing.T) *testServer {
 	)
 
 	loginTmpl := template.Must(template.New("login").Parse(oidc.LoginTemplate()))
+	logoutTmpl := template.Must(template.New("logout").Parse(oidc.LogoutTemplate()))
+
 	loginHandler := &oidc.LoginHandler{
 		Cfg: oidc.LoginConfig{
 			IssuerURL:       testIssuer,
@@ -153,12 +158,53 @@ func newTestServer(t *testing.T) *testServer {
 				RefreshTokenAbsoluteLifetime: 24 * time.Hour,
 			},
 		},
+		Refresh: &grants.RefreshGrant{
+			RefreshTokens: refreshTokens,
+			Sessions:      sessions,
+			Clients:       clients,
+			Users:         users,
+			AuditLogs:     auditLogs,
+			Issuer:        issuer,
+			Clock:         clk,
+			Logger:        logger,
+			Cfg: grants.RefreshConfig{
+				AccessTokenLifetime:          time.Hour,
+				IDTokenLifetime:              time.Hour,
+				RefreshTokenLifetime:         24 * time.Hour,
+				RefreshTokenAbsoluteLifetime: 24 * time.Hour,
+				DetectReuse:                  true,
+			},
+		},
+	}
+	logoutHandler := &oidc.LogoutHandler{
+		Cfg: oidc.LogoutConfig{
+			IssuerURL:             testIssuer,
+			AuthorizePath:         "/connect/authorize",
+			LogoutPath:            "/logout",
+			PostLogoutRedirectURI: "/",
+		},
+		Cookies:       cookieMgr,
+		Sessions:      sessions,
+		RefreshTokens: refreshTokens,
+		Clients:       clients,
+		Issuer:        issuer,
+		Clock:         clk,
+		Logger:        logger,
+		Confirm:       logoutTmpl,
 	}
 
 	handlers := server.Handlers{
 		Login:     loginHandler,
+		Logout:    logoutHandler,
 		Authorize: authorizeHandler,
 		Token:     tokenHandler,
+		UserInfo:  oidc.NewUserInfoHandler(issuer, users, logger),
+		Revoke: &oidc.RevokeHandler{
+			RefreshTokens: refreshTokens,
+			Clients:       clients,
+			Now:           clk.Now,
+			Logger:        logger,
+		},
 		Discovery: oidc.NewDiscoveryHandler(testIssuer, scopes),
 		JWKS:      oidc.NewJWKSHandler(issuer),
 		Health:    server.NewHealth(),
@@ -168,8 +214,11 @@ func newTestServer(t *testing.T) *testServer {
 			IssuerURL:     testIssuer,
 			RequireHTTPS:  false,
 			LoginPath:     "/login",
+			LogoutPath:    "/logout",
 			AuthorizePath: "/connect/authorize",
 			TokenPath:     "/connect/token",
+			UserInfoPath:  "/connect/userinfo",
+			RevokePath:    "/connect/revoke",
 			JWKSPath:      "/.well-known/jwks.json",
 			DiscoveryPath: "/.well-known/openid-configuration",
 			HealthPath:    "/healthz",
@@ -189,7 +238,15 @@ func newTestServer(t *testing.T) *testServer {
 		},
 	}
 
-	return &testServer{srv: srv, clk: clk, clients: clients, issuer: issuer, client: client}
+	return &testServer{
+		srv:           srv,
+		clk:           clk,
+		clients:       clients,
+		refreshTokens: refreshTokens,
+		auditLogs:     auditLogs,
+		issuer:        issuer,
+		client:        client,
+	}
 }
 
 func (ts *testServer) URL(path string) string {
@@ -540,6 +597,509 @@ func TestE2E_DiscoveryDocument(t *testing.T) {
 		if !sliceContains(doc.CodeChallengeMethodsSupported, s) {
 			t.Errorf("code_challenge_methods_supported missing %q", s)
 		}
+	}
+}
+
+// --- M4: refresh, userinfo, revoke, logout, expired-code negative path ---
+
+// tokenResponse mirrors the JSON shape of the /connect/token response.
+type tokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	RefreshToken string `json:"refresh_token"`
+	IDToken      string `json:"id_token"`
+	Scope        string `json:"scope"`
+}
+
+// exchangeCodeForTokens runs the full happy path through the HTTP layer
+// and returns the parsed token response + the session cookie. Centralised
+// so the M4 tests can focus on what they exercise.
+func exchangeCodeForTokens(t *testing.T, ts *testServer) (tokenResponse, *http.Cookie) {
+	t.Helper()
+	authorizeURL := buildAuthorizeURL(testClientID, testRedirectURI, testState, testNonce, testChallenge())
+	sessionCookie := loginAs(t, ts, testUser, testPassword, authorizeURL)
+
+	resp, err := ts.do(t, http.MethodGet, authorizeURL, nil, []*http.Cookie{sessionCookie})
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("authorize status = %d, want 302", resp.StatusCode)
+	}
+	code := mustQuery(t, resp.Header.Get("Location"), "code")
+
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", testRedirectURI)
+	form.Set("client_id", testClientID)
+	form.Set("code_verifier", testVerifier)
+	resp, err = ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("token status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	var tr tokenResponse
+	if err := json.Unmarshal(body, &tr); err != nil {
+		t.Fatalf("decode token: %v; body=%s", err, body)
+	}
+	if tr.AccessToken == "" || tr.RefreshToken == "" || tr.IDToken == "" {
+		t.Fatalf("token response missing fields: %+v", tr)
+	}
+	return tr, sessionCookie
+}
+
+func TestE2E_RefreshGrant_Rotates(t *testing.T) {
+	ts := newTestServer(t)
+	first, _ := exchangeCodeForTokens(t, ts)
+
+	// Refresh once → new tokens.
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", first.RefreshToken)
+	form.Set("client_id", testClientID)
+	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("refresh status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(resp.Header.Get("Cache-Control"), "no-store") {
+		t.Errorf("refresh missing no-store")
+	}
+	var second tokenResponse
+	if err := json.Unmarshal(body, &second); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, body)
+	}
+	if second.AccessToken == "" || second.AccessToken == first.AccessToken {
+		t.Errorf("access token not rotated")
+	}
+	if second.RefreshToken == "" || second.RefreshToken == first.RefreshToken {
+		t.Errorf("refresh token not rotated")
+	}
+	if second.IDToken == "" {
+		t.Errorf("id_token missing on refresh")
+	}
+	// The rotated refresh token works; the old one is consumed.
+	form.Set("refresh_token", second.RefreshToken)
+	resp, _ = ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("rotated refresh status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestE2E_RefreshGrant_ReuseRevokesChain(t *testing.T) {
+	ts := newTestServer(t)
+	first, _ := exchangeCodeForTokens(t, ts)
+
+	// First refresh: ok.
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", first.RefreshToken)
+	form.Set("client_id", testClientID)
+	resp, _ := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first refresh status = %d, want 200", resp.StatusCode)
+	}
+
+	// Replay the ORIGINAL token: reuse detected.
+	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("reuse request: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("reuse status = %d, want 400; body=%s", resp.StatusCode, body)
+	}
+	var er struct {
+		Error            string `json:"error"`
+		ErrorDescription string `json:"error_description"`
+	}
+	_ = json.Unmarshal(body, &er)
+	if er.Error != "invalid_grant" {
+		t.Errorf("error = %q, want invalid_grant", er.Error)
+	}
+	if !strings.Contains(strings.ToLower(er.ErrorDescription), "reuse") {
+		t.Errorf("error_description = %q, want it to mention reuse", er.ErrorDescription)
+	}
+
+	// The chain is revoked: an audit log entry exists.
+	logs, _ := ts.auditLogs.GetPaged(context.Background(), domain.PagedRequest{Page: 1, PageSize: 10})
+	if logs.TotalCount < 1 {
+		t.Errorf("expected at least 1 audit log entry, got %d", logs.TotalCount)
+	} else if logs.Items[0].Action != grants.RefreshTokenReuseAudit {
+		t.Errorf("audit action = %q, want %q", logs.Items[0].Action, grants.RefreshTokenReuseAudit)
+	}
+}
+
+func TestE2E_UserInfo_BearerGET(t *testing.T) {
+	ts := newTestServer(t)
+	tr, _ := exchangeCodeForTokens(t, ts)
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL("/connect/userinfo"), nil)
+	req.Header.Set("Authorization", "Bearer "+tr.AccessToken)
+	resp, err := ts.client.Do(req)
+	if err != nil {
+		t.Fatalf("userinfo GET: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("userinfo status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(resp.Header.Get("Cache-Control"), "no-store") {
+		t.Errorf("userinfo missing no-store")
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(body, &claims); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if claims["sub"] != "u-demo" {
+		t.Errorf("sub = %v, want u-demo", claims["sub"])
+	}
+	// scope includes profile + email → those claims must be present.
+	if _, ok := claims["email"]; !ok {
+		t.Errorf("email claim missing")
+	}
+	if _, ok := claims["name"]; !ok {
+		t.Errorf("name claim missing")
+	}
+}
+
+func TestE2E_UserInfo_BearerPOST(t *testing.T) {
+	ts := newTestServer(t)
+	tr, _ := exchangeCodeForTokens(t, ts)
+
+	form := url.Values{}
+	form.Set("access_token", tr.AccessToken)
+	resp, err := ts.do(t, http.MethodPost, "/connect/userinfo", form, nil)
+	if err != nil {
+		t.Fatalf("userinfo POST: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"sub":"u-demo"`) {
+		t.Errorf("body missing sub: %s", body)
+	}
+}
+
+func TestE2E_UserInfo_MissingToken401(t *testing.T) {
+	ts := newTestServer(t)
+	resp, err := ts.do(t, http.MethodGet, "/connect/userinfo", nil, nil)
+	if err != nil {
+		t.Fatalf("userinfo: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+	if !strings.Contains(resp.Header.Get("WWW-Authenticate"), `Bearer`) {
+		t.Errorf("WWW-Authenticate = %q, want Bearer", resp.Header.Get("WWW-Authenticate"))
+	}
+}
+
+func TestE2E_UserInfo_InvalidToken401(t *testing.T) {
+	ts := newTestServer(t)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL("/connect/userinfo"), nil)
+	req.Header.Set("Authorization", "Bearer not-a-jwt")
+	resp, err := ts.client.Do(req)
+	if err != nil {
+		t.Fatalf("userinfo: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestE2E_Revoke_OwnRefreshToken(t *testing.T) {
+	ts := newTestServer(t)
+	tr, _ := exchangeCodeForTokens(t, ts)
+
+	form := url.Values{}
+	form.Set("token", tr.RefreshToken)
+	form.Set("client_id", testClientID)
+	resp, err := ts.do(t, http.MethodPost, "/connect/revoke", form, nil)
+	if err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	// Now refreshing with the revoked token must fail.
+	form2 := url.Values{}
+	form2.Set("grant_type", "refresh_token")
+	form2.Set("refresh_token", tr.RefreshToken)
+	form2.Set("client_id", testClientID)
+	resp, err = ts.do(t, http.MethodPost, "/connect/token", form2, nil)
+	if err != nil {
+		t.Fatalf("refresh after revoke: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("refresh after revoke status = %d, want 400; body=%s", resp.StatusCode, body)
+	}
+	var er struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(body, &er)
+	if er.Error != "invalid_grant" {
+		t.Errorf("error = %q, want invalid_grant", er.Error)
+	}
+}
+
+func TestE2E_Revoke_UnknownTokenStillReturns200(t *testing.T) {
+	ts := newTestServer(t)
+	form := url.Values{}
+	form.Set("token", "definitely-not-a-real-token")
+	form.Set("client_id", testClientID)
+	resp, err := ts.do(t, http.MethodPost, "/connect/revoke", form, nil)
+	if err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (spec: always 200)", resp.StatusCode)
+	}
+}
+
+func TestE2E_Revoke_UnknownClientReturns401(t *testing.T) {
+	ts := newTestServer(t)
+	form := url.Values{}
+	form.Set("token", "x")
+	form.Set("client_id", "no-such-client")
+	resp, err := ts.do(t, http.MethodPost, "/connect/revoke", form, nil)
+	if err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+	if !strings.Contains(resp.Header.Get("WWW-Authenticate"), `Basic`) {
+		t.Errorf("WWW-Authenticate = %q, want Basic", resp.Header.Get("WWW-Authenticate"))
+	}
+}
+
+func TestE2E_Logout_GetRedirectsToConfirm(t *testing.T) {
+	ts := newTestServer(t)
+	tr, _ := exchangeCodeForTokens(t, ts)
+	_ = tr
+
+	resp, err := ts.do(t, http.MethodGet, "/connect/logout", nil, nil)
+	if err != nil {
+		t.Fatalf("logout GET: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "/logout") {
+		t.Errorf("Location = %q, want /logout...", loc)
+	}
+}
+
+func TestE2E_Logout_ConfirmPage(t *testing.T) {
+	ts := newTestServer(t)
+	resp, err := ts.do(t, http.MethodGet, "/logout", nil, nil)
+	if err != nil {
+		t.Fatalf("GET /logout: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	csrfToken := extractInputValue(t, string(body), `name="csrf_token"`)
+	if csrfToken == "" {
+		t.Fatalf("csrf_token missing from confirm page: %s", body)
+	}
+	csrfCookie := findCookie(resp.Cookies(), "_logout_csrf")
+	if csrfCookie == nil {
+		t.Fatalf("logout CSRF cookie not set")
+	}
+}
+
+func TestE2E_Logout_PostRevokesAndClears(t *testing.T) {
+	ts := newTestServer(t)
+	tr, sessionCookie := exchangeCodeForTokens(t, ts)
+
+	// Load the confirm page to get a CSRF cookie + token.
+	resp, err := ts.do(t, http.MethodGet, "/logout", nil, []*http.Cookie{sessionCookie})
+	if err != nil {
+		t.Fatalf("GET /logout: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	csrfToken := extractInputValue(t, string(body), `name="csrf_token"`)
+	csrfCookie := findCookie(resp.Cookies(), "_logout_csrf")
+	if csrfCookie == nil {
+		t.Fatalf("logout CSRF cookie not set")
+	}
+
+	// POST /connect/logout with CSRF + confirm=yes.
+	form := url.Values{}
+	form.Set("csrf_token", csrfToken)
+	form.Set("post_logout_redirect_uri", "/")
+	form.Set("client_id", testClientID)
+	form.Set("confirm", "yes")
+	form.Set("state", "abc")
+	resp, err = ts.do(t, http.MethodPost, "/connect/logout", form, []*http.Cookie{sessionCookie, csrfCookie})
+	if err != nil {
+		t.Fatalf("POST logout: %v", err)
+	}
+	rb, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302; body=%s", resp.StatusCode, rb)
+	}
+	// State must be appended to the redirect.
+	loc := resp.Header.Get("Location")
+	if !strings.Contains(loc, "state=abc") {
+		t.Errorf("Location = %q, want it to carry state=abc", loc)
+	}
+	// Session cookie cleared.
+	var cleared bool
+	for _, c := range resp.Cookies() {
+		if c.Name == ".auth.session" && c.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Errorf("session cookie not cleared; cookies=%v", resp.Cookies())
+	}
+
+	// The refresh token from this session must now be revoked.
+	rt, _ := ts.refreshTokens.FindByHash(context.Background(), token.HashToken(tr.RefreshToken))
+	if rt == nil || rt.RevokedAt == nil {
+		t.Errorf("refresh token not revoked after logout; rt=%+v", rt)
+	}
+}
+
+func TestE2E_Logout_PostRejectsBadCSRF(t *testing.T) {
+	ts := newTestServer(t)
+	_, sessionCookie := exchangeCodeForTokens(t, ts)
+
+	// No CSRF cookie at all → POST is rejected.
+	form := url.Values{}
+	form.Set("csrf_token", "totally-bogus")
+	form.Set("confirm", "yes")
+	resp, err := ts.do(t, http.MethodPost, "/connect/logout", form, []*http.Cookie{sessionCookie})
+	if err != nil {
+		t.Fatalf("POST logout: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302 (back to /logout)", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "/logout?error=") {
+		t.Errorf("Location = %q, want /logout?error=...", loc)
+	}
+}
+
+func TestE2E_Logout_PostCancelDoesNotRevoke(t *testing.T) {
+	ts := newTestServer(t)
+	tr, sessionCookie := exchangeCodeForTokens(t, ts)
+
+	resp, err := ts.do(t, http.MethodGet, "/logout", nil, []*http.Cookie{sessionCookie})
+	if err != nil {
+		t.Fatalf("GET /logout: %v", err)
+	}
+	resp.Body.Close()
+	csrfCookie := findCookie(resp.Cookies(), "_logout_csrf")
+
+	form := url.Values{}
+	form.Set("csrf_token", csrfCookie.Value)
+	form.Set("confirm", "no")
+	resp, err = ts.do(t, http.MethodPost, "/connect/logout", form, []*http.Cookie{sessionCookie, csrfCookie})
+	if err != nil {
+		t.Fatalf("POST logout: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+
+	// Refresh token must still be valid (cancel did not revoke).
+	rtForm := url.Values{}
+	rtForm.Set("grant_type", "refresh_token")
+	rtForm.Set("refresh_token", tr.RefreshToken)
+	rtForm.Set("client_id", testClientID)
+	resp, err = ts.do(t, http.MethodPost, "/connect/token", rtForm, nil)
+	if err != nil {
+		t.Fatalf("refresh after cancel: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("refresh after cancel status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestE2E_ExpiredCode_Rejected: T4.5 negative-path coverage for the
+// expired-code case through the real HTTP layer. The unit test in
+// grants/authcode_test.go covers the same path against the grant
+// directly; this is the integration-level mirror.
+func TestE2E_ExpiredCode_Rejected(t *testing.T) {
+	ts := newTestServer(t)
+	authorizeURL := buildAuthorizeURL(testClientID, testRedirectURI, testState, testNonce, testChallenge())
+	sessionCookie := loginAs(t, ts, testUser, testPassword, authorizeURL)
+
+	resp, err := ts.do(t, http.MethodGet, authorizeURL, nil, []*http.Cookie{sessionCookie})
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	resp.Body.Close()
+	code := mustQuery(t, resp.Header.Get("Location"), "code")
+
+	// Advance the clock past the auth-code lifetime (1 minute in the
+	// test config). All subsequent tokens will be expired.
+	ts.clk.Advance(2 * time.Minute)
+
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", testRedirectURI)
+	form.Set("client_id", testClientID)
+	form.Set("code_verifier", testVerifier)
+	resp, err = ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", resp.StatusCode, body)
+	}
+	var er struct {
+		Error            string `json:"error"`
+		ErrorDescription string `json:"error_description"`
+	}
+	_ = json.Unmarshal(body, &er)
+	if er.Error != "invalid_grant" {
+		t.Errorf("error = %q, want invalid_grant", er.Error)
+	}
+	if !strings.Contains(strings.ToLower(er.ErrorDescription), "expir") {
+		t.Errorf("error_description = %q, want it to mention expiry", er.ErrorDescription)
 	}
 }
 

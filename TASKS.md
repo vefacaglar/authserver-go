@@ -29,11 +29,11 @@ until **Done when** holds. Full spec lives in `BUILD_PROMPT.md`; this file is th
 - [x] **T3.8 Router + first E2E** — `internal/server/{router,middleware}.go`, wire `cmd/authserver` with memory stores + seed; `test/integration_test.go` happy path (authorize→login→authorize→code→token→verify id_token vs JWKS). **Done when** E2E passes.
 
 ## M4 — Refresh + remaining endpoints
-- [ ] **T4.1 Refresh grant** — `grants/refresh.go`: rotation, sliding+absolute expiry, atomic consume, reuse → chain revoke + audit. **Done when** rotate works; reuse → `invalid_grant` + chain revoked.
-- [ ] **T4.2 UserInfo** — `internal/oidc/userinfo.go` GET+POST, bearer validation, scope-filtered claims. **Done when** returns scope-appropriate claims, 401s invalid token.
-- [ ] **T4.3 Revoke** — `internal/oidc/revoke.go` (RFC 7009): client-bound, chain revoke, always 200. **Done when** foreign client can't revoke; always 200.
-- [ ] **T4.4 Logout** — `internal/oidc/logout.go` GET+POST: id_token_hint validation, confirm-page redirect, CSRF on POST, post_logout_redirect_uri validation. **Done when** POST revokes session + clears cookie + redirects to registered URI.
-- [ ] **T4.5 Negative-path tests** — code reuse, expired code, wrong PKCE verifier, mismatched redirect_uri. **Done when** all four rejected.
+- [x] **T4.1 Refresh grant** — `grants/refresh.go`: rotation, sliding+absolute expiry, atomic consume, reuse → chain revoke + audit. **Done when** rotate works; reuse → `invalid_grant` + chain revoked.
+- [x] **T4.2 UserInfo** — `internal/oidc/userinfo.go` GET+POST, bearer validation, scope-filtered claims. **Done when** returns scope-appropriate claims, 401s invalid token.
+- [x] **T4.3 Revoke** — `internal/oidc/revoke.go` (RFC 7009): client-bound, chain revoke, always 200. **Done when** foreign client can't revoke; always 200.
+- [x] **T4.4 Logout** — `internal/oidc/logout.go` GET+POST: id_token_hint validation, confirm-page redirect, CSRF on POST, post_logout_redirect_uri validation. **Done when** POST revokes session + clears cookie + redirects to registered URI.
+- [x] **T4.5 Negative-path tests** — code reuse, expired code, wrong PKCE verifier, mismatched redirect_uri. **Done when** all four rejected.
 
 ## M5 — GORM persistence
 - [ ] **T5.1 Entities + AutoMigrate** — `internal/store/gormstore`: GORM entities (Properties/[]string → JSON or child tables), `Migrate`, DB open from config (postgres|sqlite). **Done when** AutoMigrate builds schema on SQLite.

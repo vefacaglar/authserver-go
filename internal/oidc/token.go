@@ -7,10 +7,11 @@ import (
 )
 
 // TokenHandler dispatches POST /connect/token by grant_type. Only the
-// grant handlers actually implemented are routed; everything else returns
-// unsupported_grant_type.
+// grant handlers actually implemented are routed; everything else
+// returns unsupported_grant_type.
 type TokenHandler struct {
 	AuthCode *grants.AuthCodeGrant
+	Refresh  *grants.RefreshGrant
 }
 
 func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -31,6 +32,12 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.AuthCode.Handle(r.Context(), w, r.PostForm)
+	case "refresh_token":
+		if h.Refresh == nil {
+			writeJSONError(w, http.StatusBadRequest, ErrUnsupportedGrantType, "refresh_token grant not enabled")
+			return
+		}
+		h.Refresh.Handle(r.Context(), w, r.PostForm)
 	default:
 		writeJSONError(w, http.StatusBadRequest, ErrUnsupportedGrantType, "unsupported grant_type")
 	}

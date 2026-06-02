@@ -23,8 +23,11 @@ type RouterConfig struct {
 	IssuerURL     string
 	RequireHTTPS  bool
 	LoginPath     string
+	LogoutPath    string
 	AuthorizePath string
 	TokenPath     string
+	UserInfoPath  string
+	RevokePath    string
 	JWKSPath      string
 	DiscoveryPath string
 	HealthPath    string
@@ -34,8 +37,11 @@ type RouterConfig struct {
 // the route is not exposed (e.g. during a partial integration test).
 type Handlers struct {
 	Login     http.Handler
+	Logout    http.Handler
 	Authorize http.Handler
 	Token     http.Handler
+	UserInfo  http.Handler
+	Revoke    http.Handler
 	Discovery http.Handler
 	JWKS      http.Handler
 	Health    http.Handler
@@ -52,11 +58,26 @@ func NewRouter(cfg RouterConfig, opts RouterOptions, h Handlers) http.Handler {
 	if h.Login != nil && cfg.LoginPath != "" {
 		r.Handle(cfg.LoginPath, h.Login)
 	}
+	if h.Logout != nil {
+		// Logout owns both /connect/logout and the confirm page at
+		// cfg.LogoutPath; the handler dispatches internally.
+		r.Handle("/connect/logout", h.Logout)
+		if cfg.LogoutPath != "" && cfg.LogoutPath != "/connect/logout" {
+			r.Handle(cfg.LogoutPath, h.Logout)
+		}
+	}
 	if h.Authorize != nil && cfg.AuthorizePath != "" {
 		r.Method(http.MethodGet, cfg.AuthorizePath, h.Authorize)
 	}
 	if h.Token != nil && cfg.TokenPath != "" {
 		r.Method(http.MethodPost, cfg.TokenPath, h.Token)
+	}
+	if h.UserInfo != nil && cfg.UserInfoPath != "" {
+		r.Method(http.MethodGet, cfg.UserInfoPath, h.UserInfo)
+		r.Method(http.MethodPost, cfg.UserInfoPath, h.UserInfo)
+	}
+	if h.Revoke != nil && cfg.RevokePath != "" {
+		r.Method(http.MethodPost, cfg.RevokePath, h.Revoke)
 	}
 	if h.Discovery != nil && cfg.DiscoveryPath != "" {
 		r.Method(http.MethodGet, cfg.DiscoveryPath, h.Discovery)
