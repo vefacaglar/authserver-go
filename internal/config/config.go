@@ -60,7 +60,7 @@ type Config struct {
 func Load() (*Config, error) {
 	c := &Config{
 		Issuer:                       getenv("AUTH_ISSUER", ""),
-		Listen:                       getenv("AUTH_LISTEN_ADDR", ":5175"),
+		Listen:                       expandPort(getenv("AUTH_LISTEN_ADDR", ":5175")),
 		RequireHTTPS:                 getbool("AUTH_REQUIRE_HTTPS", true),
 		DBDriver:                     getenv("AUTH_DB_DRIVER", "postgres"),
 		DBDSN:                        getenv("AUTH_DB_DSN", "postgres://postgres:postgres@localhost:5432/authserver?sslmode=disable"),
@@ -157,6 +157,20 @@ func (c *Config) EffectiveCookieName() string {
 		return "__Host-" + c.CookieName
 	}
 	return c.CookieName
+}
+
+// expandPort replaces $PORT and ${PORT} in s with the value of the PORT
+// environment variable. This allows configurations like AUTH_LISTEN_ADDR=0.0.0.0:$PORT
+// which is the convention on platforms such as Render that assign a dynamic port
+// via the PORT environment variable.
+func expandPort(s string) string {
+	port := os.Getenv("PORT")
+	if port == "" {
+		return s
+	}
+	s = strings.ReplaceAll(s, "${PORT}", port)
+	s = strings.ReplaceAll(s, "$PORT", port)
+	return s
 }
 
 func getenv(key, def string) string {
