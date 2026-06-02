@@ -13,10 +13,10 @@ until **Done when** holds. Full spec lives in `BUILD_PROMPT.md`; this file is th
 - [x] **T1.6 Atomic MarkConsumed** — per-entity mutex so only the first caller gets `true` (auth code + refresh token). **Done when** 50 goroutines on one id → exactly one `true`.
 
 ## M2 — Token core
-- [ ] **T2.1 Hasher** — `internal/token/hasher.go`: `HashToken` (base64url SHA-256), `NewOpaqueToken` (32 random bytes). **Done when** test asserts hash determinism + token uniqueness.
-- [ ] **T2.2 PKCE** — `internal/token/pkce.go`: `VerifyS256` constant-time. **Done when** passes known pair, rejects wrong verifier.
-- [ ] **T2.3 Keys** — `internal/token/keys.go`: RSA-2048 keygen, PEM import/export, public PEM → `jwk.Key`, `EnsureActiveKey(store)`. **Done when** test round-trips PEM and produces a JWK with `kid`.
-- [ ] **T2.4 Issuer** — `internal/token/issuer.go`: access + id JWT with full claim sets incl. `at_hash`, `nonce`, `auth_time`. **Done when** test verifies both against JWKS and `at_hash` matches.
+- [x] **T2.1 Hasher** — `internal/token/hasher.go`: `HashToken` (base64url SHA-256), `NewOpaqueToken` (32 random bytes). **Done when** test asserts hash determinism + token uniqueness.
+- [x] **T2.2 PKCE** — `internal/token/pkce.go`: `VerifyS256` constant-time. **Done when** passes known pair, rejects wrong verifier.
+- [x] **T2.3 Keys** — `internal/token/keys.go`: RSA-2048 keygen, PEM import/export, public PEM → `jwk.Key`, `EnsureActiveKey(store)`. **Done when** test round-trips PEM and produces a JWK with `kid`.
+- [x] **T2.4 Issuer** — `internal/token/issuer.go`: access + id JWT with full claim sets incl. `at_hash`, `nonce`, `auth_time`. **Done when** test verifies both against JWKS and `at_hash` matches.
 
 ## M3 — Core OIDC flow, in-memory (prove Auth Code + PKCE)
 - [ ] **T3.1 Config** — `internal/config`: struct + env load + fail-fast validation. **Done when** invalid config errors clearly; valid loads.
