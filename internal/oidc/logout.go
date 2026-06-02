@@ -96,6 +96,7 @@ func (h *LogoutHandler) handleEntry(w http.ResponseWriter, r *http.Request) {
 			}
 			if target != "" {
 				if ok, _ := h.validatePostLogoutURI(r.Context(), clientID, target); ok {
+					h.terminateSession(w, r)
 					http.Redirect(w, r, appendState(target, state), http.StatusFound)
 					return
 				}
@@ -169,6 +170,21 @@ func (h *LogoutHandler) handleConfirm(w http.ResponseWriter, r *http.Request) {
 	clientID := r.FormValue("client_id")
 
 	// Resolve + revoke the session if any.
+	h.terminateSession(w, r)
+
+	// Validate the post_logout_redirect_uri.
+	allowed := h.Cfg.PostLogoutRedirectURI
+	if target != "" {
+		if ok, _ := h.validatePostLogoutURI(r.Context(), clientID, target); ok {
+			allowed = target
+		} else if h.Logger != nil {
+			h.Logger.Warn("post_logout_redirect_uri not allowed", "client_id", clientID, "target", target)
+		}
+	}
+	http.Redirect(w, r, appendState(allowed, state), http.StatusFound)
+}
+
+func (h *LogoutHandler) terminateSession(w http.ResponseWriter, r *http.Request) {
 	sid, err := h.Cookies.FromRequest(r)
 	switch {
 	case err == nil:
@@ -189,17 +205,6 @@ func (h *LogoutHandler) handleConfirm(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.Cookies.ClearCookie(w)
-
-	// Validate the post_logout_redirect_uri.
-	allowed := h.Cfg.PostLogoutRedirectURI
-	if target != "" {
-		if ok, _ := h.validatePostLogoutURI(r.Context(), clientID, target); ok {
-			allowed = target
-		} else if h.Logger != nil {
-			h.Logger.Warn("post_logout_redirect_uri not allowed", "client_id", clientID, "target", target)
-		}
-	}
-	http.Redirect(w, r, appendState(allowed, state), http.StatusFound)
 }
 
 // validatePostLogoutURI returns true when target is acceptable for the

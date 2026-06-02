@@ -54,6 +54,7 @@ func main() {
 	http.HandleFunc("/login", login)
 	http.HandleFunc("/callback", callback)
 	http.HandleFunc("/logout", logout)
+	http.HandleFunc("/logout-callback", logoutCallback)
 	log.Printf("demo client on http://localhost%s  (issuer=%s)", addr, issuer)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
@@ -98,12 +99,17 @@ func logout(w http.ResponseWriter, r *http.Request) {
 	hint := r.URL.Query().Get("id_token_hint")
 	q := url.Values{}
 	q.Set("client_id", clientID)
-	// The seed sets http://localhost:8090/ for the demo-public client
-	q.Set("post_logout_redirect_uri", "http://localhost:8090/")
+	q.Set("post_logout_redirect_uri", "http://localhost:8090/logout-callback")
 	if hint != "" {
 		q.Set("id_token_hint", hint)
 	}
 	http.Redirect(w, r, issuer+"/connect/logout?"+q.Encode(), http.StatusFound)
+}
+
+func logoutCallback(w http.ResponseWriter, r *http.Request) {
+	render(w, `<h1>✅ Logged out</h1>
+		<p>You have been successfully logged out from the auth server.</p>
+		<p><a class="btn" href="/">Return to home</a></p>`)
 }
 
 // callback receives ?code&state, exchanges the code for tokens, calls

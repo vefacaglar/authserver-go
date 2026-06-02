@@ -399,7 +399,7 @@ func seedBundle(b *storeBundle) error {
 		ClientID:                "demo-public",
 		DisplayName:             "Demo Public Client",
 		RedirectURIs:            []string{"http://localhost:8090/callback", "https://demo.example/callback"},
-		PostLogoutRedirectURIs:  []string{"http://localhost:8090/", "https://demo.example/"},
+		PostLogoutRedirectURIs:  []string{"http://localhost:8090/", "http://localhost:8090/logout-callback", "https://demo.example/"},
 		AllowedScopes:           []string{"openid", "profile", "email", "offline_access"},
 		RequirePKCE:             true,
 		AllowRefreshTokens:      true,
