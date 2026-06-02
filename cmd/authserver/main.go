@@ -386,10 +386,12 @@ func seedBundle(b *storeBundle) error {
 		}
 	}
 	public := &domain.Client{
-		ClientID:                "demo-public",
-		DisplayName:             "Demo Public Client",
-		RedirectURIs:            []string{"https://demo.example/callback"},
-		PostLogoutRedirectURIs:  []string{"https://demo.example/"},
+		ClientID:    "demo-public",
+		DisplayName: "Demo Public Client",
+		// localhost:8090 is the bundled browser demo client
+		// (examples/loginflow); demo.example stays for documentation.
+		RedirectURIs:           []string{"http://localhost:8090/callback", "https://demo.example/callback"},
+		PostLogoutRedirectURIs: []string{"http://localhost:8090/", "https://demo.example/"},
 		AllowedScopes:           []string{"openid", "profile", "email", "offline_access"},
 		RequirePKCE:             true,
 		AllowRefreshTokens:      true,

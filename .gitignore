@@ -87,3 +87,7 @@ $RECYCLE.BIN/
 *.db-shm
 *.db-wal
 /dev.db*
+
+# Background-process pidfiles (make start / make start-all)
+/.authserver.pid
+/.democlient.pid

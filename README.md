@@ -36,7 +36,8 @@ Run `make` with no target to see every task:
 | `make dev` | Run with local-dev defaults in the foreground (Ctrl-C to stop) |
 | `make build` | Compile a binary to `./authserver` |
 | `make run` | Build, then run the binary in the foreground |
-| `make start` / `make stop` | Run in the **background** / stop it (uses `./.authserver.pid`) |
+| `make start` / `make stop` | Run in the **background** / stop it. `start` frees port `5175` first, so it always restarts cleanly (no "address already in use") |
+| `make start-all` / `make stop-all` | Background the auth server **and** the browser demo client ([examples/loginflow](examples/loginflow)), then open `http://localhost:8090` and log in as `demo`/`demo` |
 | `make test` | Run the full test suite |
 | `make smoke` | Run the real-OIDC-client smoke test (build-tagged) |
 | `make check` | `go vet` + `go test` + `go build` — run before committing |
