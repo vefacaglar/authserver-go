@@ -169,7 +169,7 @@ async function clientForm(c, isEdit) {
       <!-- Token Lifetimes Grid -->
       <div>
         <h4 class="text-xs font-semibold text-zinc-400 uppercase tracking-wider block mb-3">Lifetimes Configuration (Seconds)</h4>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <div class="space-y-1">
             <label for="f-access_lt" class="text-xs text-zinc-400">Access Token Lifetime</label>
             <input id="f-access_lt" type="number" min="0" value="${c.access_token_lifetime_seconds || ''}" class="w-full px-3 py-2 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:text-white" placeholder="0 = server default">
@@ -181,6 +181,13 @@ async function clientForm(c, isEdit) {
           <div class="space-y-1">
             <label for="f-refresh_abs_lt" class="text-xs text-zinc-400">Absolute Max Lifetime</label>
             <input id="f-refresh_abs_lt" type="number" min="0" value="${c.refresh_token_absolute_lifetime_seconds || ''}" class="w-full px-3 py-2 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:text-white">
+          </div>
+          <div class="space-y-1">
+            <label for="f-refresh_expiration" class="text-xs text-zinc-400">Refresh Expiration Type</label>
+            <select id="f-refresh_expiration" class="w-full px-3 py-2 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:text-white">
+              <option value="0" ${c.refresh_token_expiration === 0 ? 'selected' : ''}>Sliding</option>
+              <option value="1" ${c.refresh_token_expiration === 1 ? 'selected' : ''}>Absolute</option>
+            </select>
           </div>
         </div>
       </div>
@@ -245,6 +252,7 @@ function readClientForm() {
     access_token_lifetime_seconds: parseInt(document.getElementById('f-access_lt').value) || 0,
     refresh_token_lifetime_seconds: parseInt(document.getElementById('f-refresh_lt').value) || 0,
     refresh_token_absolute_lifetime_seconds: parseInt(document.getElementById('f-refresh_abs_lt').value) || 0,
+    refresh_token_expiration: parseInt(document.getElementById('f-refresh_expiration').value) || 0,
     properties: Object.keys(props).length ? props : undefined
   };
 }

@@ -51,6 +51,7 @@ type clientEntity struct {
 	AccessTokenLifetimeSeconds          int
 	RefreshTokenLifetimeSeconds         int
 	RefreshTokenAbsoluteLifetimeSeconds int
+	RefreshTokenExpiration              int
 	Properties                          string `gorm:"type:text"` // JSON map[string]string
 }
 
@@ -91,6 +92,7 @@ func toClientEntity(c *domain.Client) (*clientEntity, error) {
 		AccessTokenLifetimeSeconds:          c.AccessTokenLifetimeSeconds,
 		RefreshTokenLifetimeSeconds:         c.RefreshTokenLifetimeSeconds,
 		RefreshTokenAbsoluteLifetimeSeconds: c.RefreshTokenAbsoluteLifetimeSeconds,
+		RefreshTokenExpiration:              int(c.RefreshTokenExpiration),
 		Properties:                          props,
 	}, nil
 }
@@ -126,6 +128,7 @@ func (e *clientEntity) toDomain() (*domain.Client, error) {
 		AccessTokenLifetimeSeconds:          e.AccessTokenLifetimeSeconds,
 		RefreshTokenLifetimeSeconds:         e.RefreshTokenLifetimeSeconds,
 		RefreshTokenAbsoluteLifetimeSeconds: e.RefreshTokenAbsoluteLifetimeSeconds,
+		RefreshTokenExpiration:              domain.TokenExpiration(e.RefreshTokenExpiration),
 		Properties:                          props,
 	}, nil
 }

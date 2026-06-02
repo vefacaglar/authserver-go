@@ -87,6 +87,7 @@ type clientView struct {
 	AccessTokenLifetimeSeconds          int               `json:"access_token_lifetime_seconds"`
 	RefreshTokenLifetimeSeconds         int               `json:"refresh_token_lifetime_seconds"`
 	RefreshTokenAbsoluteLifetimeSeconds int               `json:"refresh_token_absolute_lifetime_seconds"`
+	RefreshTokenExpiration              int               `json:"refresh_token_expiration"`
 	Properties                          map[string]string `json:"properties,omitempty"`
 }
 
@@ -105,6 +106,7 @@ func toClientView(c *domain.Client) clientView {
 		AccessTokenLifetimeSeconds:          c.AccessTokenLifetimeSeconds,
 		RefreshTokenLifetimeSeconds:         c.RefreshTokenLifetimeSeconds,
 		RefreshTokenAbsoluteLifetimeSeconds: c.RefreshTokenAbsoluteLifetimeSeconds,
+		RefreshTokenExpiration:              int(c.RefreshTokenExpiration),
 		Properties:                          c.Properties,
 	}
 }
@@ -160,6 +162,7 @@ func (a *API) createClient(w http.ResponseWriter, r *http.Request) {
 		AccessTokenLifetimeSeconds:          body.AccessTokenLifetimeSeconds,
 		RefreshTokenLifetimeSeconds:         body.RefreshTokenLifetimeSeconds,
 		RefreshTokenAbsoluteLifetimeSeconds: body.RefreshTokenAbsoluteLifetimeSeconds,
+		RefreshTokenExpiration:              domain.TokenExpiration(body.RefreshTokenExpiration),
 		Properties:                          body.Properties,
 	}
 	if c.AllowRefreshTokens && !containsString(c.AllowedScopes, "offline_access") {
@@ -230,6 +233,7 @@ func (a *API) updateClient(w http.ResponseWriter, r *http.Request) {
 	existing.AccessTokenLifetimeSeconds = body.AccessTokenLifetimeSeconds
 	existing.RefreshTokenLifetimeSeconds = body.RefreshTokenLifetimeSeconds
 	existing.RefreshTokenAbsoluteLifetimeSeconds = body.RefreshTokenAbsoluteLifetimeSeconds
+	existing.RefreshTokenExpiration = domain.TokenExpiration(body.RefreshTokenExpiration)
 	existing.Properties = body.Properties
 	if existing.AllowRefreshTokens && !containsString(existing.AllowedScopes, "offline_access") {
 		existing.AllowedScopes = append(existing.AllowedScopes, "offline_access")

@@ -14,6 +14,13 @@ const (
 	DefaultRefreshTokenAbsoluteLifetimeSeconds = 2592000
 )
 
+type TokenExpiration int
+
+const (
+	TokenExpirationSliding TokenExpiration = 0
+	TokenExpirationAbsolute TokenExpiration = 1
+)
+
 type Client struct {
 	ClientID                            string
 	DisplayName                         string
@@ -28,6 +35,7 @@ type Client struct {
 	AccessTokenLifetimeSeconds          int
 	RefreshTokenLifetimeSeconds         int
 	RefreshTokenAbsoluteLifetimeSeconds int
+	RefreshTokenExpiration              TokenExpiration
 	Properties                          map[string]string
 }
 

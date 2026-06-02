@@ -133,7 +133,7 @@ func (g *AuthCodeGrant) Handle(ctx context.Context, w http.ResponseWriter, clien
 		ClientID:  client.ClientID,
 		Scope:     scope,
 		AuthTime:  &authTime,
-		ExpiresIn: g.Cfg.AccessTokenLifetime,
+		ExpiresIn: client.AccessTokenLifetime(),
 	})
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "server_error", "access token issuance failed")
@@ -164,7 +164,7 @@ func (g *AuthCodeGrant) Handle(ctx context.Context, w http.ResponseWriter, clien
 	resp := TokenResponse{
 		AccessToken: access,
 		TokenType:   "Bearer",
-		ExpiresIn:   int(g.Cfg.AccessTokenLifetime.Seconds()),
+		ExpiresIn:   int(client.AccessTokenLifetime().Seconds()),
 		IDToken:     id,
 		Scope:       scope,
 	}
@@ -180,6 +180,14 @@ func (g *AuthCodeGrant) Handle(ctx context.Context, w http.ResponseWriter, clien
 		}
 		now := g.Clock.Now().UTC()
 		sid := code.SessionID
+		
+		var expiresAt time.Time
+		if client.RefreshTokenExpiration == domain.TokenExpirationAbsolute {
+			expiresAt = now.Add(client.RefreshTokenAbsoluteLifetime())
+		} else {
+			expiresAt = now.Add(client.RefreshTokenLifetime())
+		}
+
 		rt := &domain.RefreshToken{
 			ID:                newID(),
 			TokenHash:         hash,
@@ -187,8 +195,8 @@ func (g *AuthCodeGrant) Handle(ctx context.Context, w http.ResponseWriter, clien
 			UserID:            info.UserID,
 			SessionID:         sid,
 			Scope:             scope,
-			ExpiresAt:         now.Add(g.Cfg.RefreshTokenLifetime),
-			AbsoluteExpiresAt: now.Add(g.Cfg.RefreshTokenAbsoluteLifetime),
+			ExpiresAt:         expiresAt,
+			AbsoluteExpiresAt: now.Add(client.RefreshTokenAbsoluteLifetime()),
 			CreatedAt:         now,
 		}
 		if err := g.RefreshTokens.Store(ctx, rt); err != nil {

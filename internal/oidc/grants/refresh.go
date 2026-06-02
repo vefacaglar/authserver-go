@@ -145,7 +145,7 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client
 		ClientID:  client.ClientID,
 		Scope:     scope,
 		AuthTime:  &authTime,
-		ExpiresIn: g.Cfg.AccessTokenLifetime,
+		ExpiresIn: client.AccessTokenLifetime(),
 	})
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "server_error", "access token issuance failed")
@@ -185,6 +185,17 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client
 			return
 		}
 		parent := existing.ID
+		
+		var expiresAt time.Time
+		if client.RefreshTokenExpiration == domain.TokenExpirationAbsolute {
+			expiresAt = existing.ExpiresAt // Carry forward existing expiry for absolute
+		} else {
+			expiresAt = now.Add(client.RefreshTokenLifetime())
+			if expiresAt.After(existing.AbsoluteExpiresAt) {
+				expiresAt = existing.AbsoluteExpiresAt
+			}
+		}
+
 		rt := &domain.RefreshToken{
 			ID:                newID(),
 			TokenHash:         newHash,
@@ -193,7 +204,7 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client
 			SessionID:         existing.SessionID,
 			ParentTokenID:     &parent,
 			Scope:             scope,
-			ExpiresAt:         now.Add(g.Cfg.RefreshTokenLifetime),
+			ExpiresAt:         expiresAt,
 			AbsoluteExpiresAt: existing.AbsoluteExpiresAt, // rotation never extends the hard ceiling
 			CreatedAt:         now,
 		}
@@ -207,7 +218,7 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client
 	resp := TokenResponse{
 		AccessToken:  access,
 		TokenType:    "Bearer",
-		ExpiresIn:    int(g.Cfg.AccessTokenLifetime.Seconds()),
+		ExpiresIn:    int(client.AccessTokenLifetime().Seconds()),
 		RefreshToken: newRefresh,
 		IDToken:      idToken,
 		Scope:        scope,
