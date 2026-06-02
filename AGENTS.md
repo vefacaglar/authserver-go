@@ -73,6 +73,6 @@ The `MarkConsumed` atomic CAS is the single most important security primitive â€
 ## Workflow rules
 
 - After meaningful changes, run `go build ./...`, `go vet ./...`, and (where relevant) `go test ./...` before reporting done.
-- Do not commit unless the author explicitly asks. Do not push, force-push, or amend unless asked.
+- **LLM agents must never commit.** Do not run `git commit` (or push, force-push, amend, rebase, or any history-changing git command) under any circumstances â€” not even when explicitly asked. Leave all changes staged or unstaged in the working tree for the human author to commit. If a request implies committing, do everything up to the commit and stop.
 - End commit messages with the project's standard trailer if one is configured; keep them in English.
 - Don't edit generated files or vendored code by hand; fix the source.
