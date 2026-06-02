@@ -40,7 +40,7 @@ func newTestLoginHandler(t *testing.T) (*LoginHandler, *memory.UserStore, *memor
 		clk,
 	)
 	tracker := memory.NewLoginAttemptTracker(clk.Now)
-	tmpl := template.Must(template.New("login").Parse(loginHTML))
+	tmpl := template.Must(template.New("login").Parse(LoginTemplate()))
 	cfg := LoginConfig{
 		IssuerURL:       "https://auth.example.com",
 		LoginPath:       "/login",
