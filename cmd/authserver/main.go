@@ -270,6 +270,7 @@ func run(logger *slog.Logger) error {
 		Clock:    clk,
 		Logger:   logger,
 		Template: loginTmpl,
+		ClientIP: server.ClientIP,
 	}
 	registerHandler := &oidc.RegisterHandler{
 		Cfg: oidc.RegisterConfig{

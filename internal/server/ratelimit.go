@@ -67,7 +67,7 @@ func (l *LoginRateLimiter) allow(ip string) bool {
 // Retry-After header.
 func (l *LoginRateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := clientIP(r)
+		ip := ClientIP(r)
 		if !l.allow(ip) {
 			w.Header().Set("Retry-After", "60")
 			w.Header().Set("Content-Type", "application/json;charset=UTF-8")
@@ -79,10 +79,14 @@ func (l *LoginRateLimiter) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// clientIP extracts the request's source IP, honouring the
+// ClientIP extracts the request's source IP, honouring the
 // X-Forwarded-For header set by the chi RealIP middleware. The
 // RemoteAddr is the fallback for direct connections.
-func clientIP(r *http.Request) string {
+//
+// Exported so handlers outside the server package (e.g. the login
+// handler building the per-(username, IP) lockout key) can share the
+// same view of "who is this request from" as the rate limiter.
+func ClientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		// Use the first (left-most) value, which is the original
 		// client. Subsequent values are intermediate proxies.

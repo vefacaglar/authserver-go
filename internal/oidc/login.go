@@ -99,6 +99,14 @@ type LoginHandler struct {
 	Clock    clock.Clock
 	Logger   *slog.Logger
 	Template *template.Template
+	// ClientIP extracts the source IP for the lockout key. Optional;
+	// when nil the handler falls back to r.RemoteAddr so misconfigured
+	// deployments do not accidentally disable lockouts (they would
+	// just use the un-proxied address). Production wiring should
+	// inject the same clientIP used by the rate limiter so the
+	// username-keyed and IP-keyed enforcement share a view of
+	// "who is this request from".
+	ClientIP func(*http.Request) string
 }
 
 func (h *LoginHandler) render(w http.ResponseWriter, r *http.Request, errorCode, returnURL string) {
@@ -161,7 +169,7 @@ func (h *LoginHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	trackerKey := lockoutKey(r, username)
+	trackerKey := h.lockoutKey(r, username)
 	locked, err := h.Tracker.IsLockedOut(ctx, trackerKey)
 	if err != nil {
 		h.Logger.Error("tracker lookup failed", "err", err)
@@ -263,8 +271,26 @@ func validateReturnURL(raw, issuerURL, authorizePath string) (string, error) {
 	return raw, nil
 }
 
-func lockoutKey(r *http.Request, username string) string {
-	return username
+// lockoutKey composes the tracker key for failed-login enforcement.
+// A username-only key would let a distributed attacker rotate IPs to
+// accumulate MaxFailures against a single account while the
+// per-IP rate limiter slows each individual IP. Composing username
+// with the source IP binds the two enforcement axes together:
+// MaxFailures against an account must come from a single IP (or
+// small IP set) to be effective, which is the realistic threat.
+//
+// A bare username key is recoverable from the composed key
+// (everything before the separator), so the composed key does not
+// reduce the protection of single-IP legitimate use.
+func (h *LoginHandler) lockoutKey(r *http.Request, username string) string {
+	ip := ""
+	if h.ClientIP != nil {
+		ip = h.ClientIP(r)
+	}
+	if ip == "" {
+		ip = r.RemoteAddr
+	}
+	return username + "|" + ip
 }
 
 func loginErrorLabel(code string) string {

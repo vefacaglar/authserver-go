@@ -116,8 +116,8 @@ func TestClientIP_RespectsXForwardedFor(t *testing.T) {
 				r.Header.Set("X-Forwarded-For", tc.xff)
 			}
 			r.RemoteAddr = tc.remote
-			if got := clientIP(r); got != tc.want {
-				t.Errorf("clientIP() = %q, want %q", got, tc.want)
+			if got := ClientIP(r); got != tc.want {
+				t.Errorf("ClientIP() = %q, want %q", got, tc.want)
 			}
 		})
 	}

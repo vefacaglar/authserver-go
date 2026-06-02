@@ -239,6 +239,7 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		Clock:    clk,
 		Logger:   logger,
 		Template: loginTmpl,
+		ClientIP: server.ClientIP,
 	}
 	authorizeHandler := &oidc.AuthorizeHandler{
 		Cfg: oidc.AuthorizeConfig{
