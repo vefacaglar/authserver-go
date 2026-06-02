@@ -8,9 +8,9 @@ until **Done when** holds. Full spec lives in `BUILD_PROMPT.md`; this file is th
 - [x] **T1.1 Init module** — `go.mod` (`module go-authserver`, go 1.26), `cmd/authserver/main.go` trivial main, `.gitignore`. **Done when** build succeeds and the binary runs.
 - [x] **T1.2 Clock** — `internal/clock`: `Clock` interface (`Now()`), `SystemClock`, `FakeClock`. **Done when** a test advances the fake clock.
 - [x] **T1.3 Domain models** — `internal/domain`: Client, AuthorizationCode, RefreshToken, Session, SigningKey, Scope, AuditLog, UserInfo, PagedRequest, PagedResult[T], auth-method enum (`google/uuid`). **Done when** it builds.
-- [ ] **T1.4 Store interfaces** — `internal/store/store.go`: all interfaces incl. `LoginAttemptTracker`. **Done when** it builds.
-- [ ] **T1.5 Memory stores** — `internal/store/memory`: map+RWMutex impls for every store. **Done when** a test stores/retrieves a client and a scope.
-- [ ] **T1.6 Atomic MarkConsumed** — per-entity mutex so only the first caller gets `true` (auth code + refresh token). **Done when** 50 goroutines on one id → exactly one `true`.
+- [x] **T1.4 Store interfaces** — `internal/store/store.go`: all interfaces incl. `LoginAttemptTracker`. **Done when** it builds.
+- [x] **T1.5 Memory stores** — `internal/store/memory`: map+RWMutex impls for every store. **Done when** a test stores/retrieves a client and a scope.
+- [x] **T1.6 Atomic MarkConsumed** — per-entity mutex so only the first caller gets `true` (auth code + refresh token). **Done when** 50 goroutines on one id → exactly one `true`.
 
 ## M2 — Token core
 - [ ] **T2.1 Hasher** — `internal/token/hasher.go`: `HashToken` (base64url SHA-256), `NewOpaqueToken` (32 random bytes). **Done when** test asserts hash determinism + token uniqueness.
