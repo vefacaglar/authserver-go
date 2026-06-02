@@ -13,9 +13,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# --- load .env if present (values already exported win over defaults below) ---
-if [ -f .env ]; then set -a; . ./.env; set +a; fi
-
 # --- secrets ---
 #
 # Cookie + CSRF keys are NOT needed here: they live in the data-protection
@@ -45,9 +42,7 @@ ensure_secret() { # $1 = var name
 ensure_secret AUTH_ADMIN_TOKEN
 
 # --- local-dev server config ---
-# HTTP (not HTTPS) so you can hit it from a browser/curl without certs.
 export AUTH_REQUIRE_HTTPS="${AUTH_REQUIRE_HTTPS:-false}"
-export AUTH_ISSUER="${AUTH_ISSUER:-http://localhost:5175}"
 export AUTH_LISTEN_ADDR="${AUTH_LISTEN_ADDR:-:5175}"
 
 # The server runs on PostgreSQL only. Point AUTH_DB_DSN at your database

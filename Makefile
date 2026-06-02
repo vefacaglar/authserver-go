@@ -20,18 +20,18 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-dev: ## Run the server with local-dev defaults (Ctrl-C to stop)
-	@./scripts/dev.sh
+dev: ## Run the server with .env loaded (Ctrl-C to stop)
+	@set -a; . ./.env; set +a; ./scripts/dev.sh
 
 build: ## Compile the server binary to ./authserver
 	go build -o $(BINARY) $(PKG)
 
 run: build ## Build then run the compiled binary in the foreground
-	@AUTH_REQUIRE_HTTPS=$${AUTH_REQUIRE_HTTPS:-false} ./$(BINARY)
+	@set -a; . ./.env; set +a; AUTH_REQUIRE_HTTPS=$${AUTH_REQUIRE_HTTPS:-false} ./$(BINARY)
 
 start: ## Run in the background, freeing port $(PORT) first (logs: /tmp/authserver.log)
 	@$(MAKE) -s stop
-	@AUTH_REQUIRE_HTTPS=$${AUTH_REQUIRE_HTTPS:-false} ./scripts/dev.sh > /tmp/authserver.log 2>&1 & echo $$! > .authserver.pid
+	@set -a; . ./.env; set +a; AUTH_REQUIRE_HTTPS=$${AUTH_REQUIRE_HTTPS:-false} ./scripts/dev.sh > /tmp/authserver.log 2>&1 & echo $$! > .authserver.pid
 	@sleep 1
 	@echo "started in background (logs: /tmp/authserver.log); stop with 'make stop'"
 
@@ -41,11 +41,14 @@ stop: ## Stop the background server: pidfile + anything bound to port $(PORT)
 	if [ -n "$$pids" ]; then kill $$pids 2>/dev/null || true; echo "freed port $(PORT) (killed: $$pids)"; \
 	else echo "port $(PORT) already free"; fi
 
+demo: ## Run the browser demo client (loads .env)
+	@set -a; . ./.env; set +a; go run ./examples/loginflow
+
 start-all: ## Background auth server + browser demo client (open http://localhost:$(DEMO_PORT))
 	@$(MAKE) -s stop-all
-	@AUTH_REQUIRE_HTTPS=$${AUTH_REQUIRE_HTTPS:-false} ./scripts/dev.sh > /tmp/authserver.log 2>&1 & echo $$! > .authserver.pid
+	@set -a; . ./.env; set +a; ./scripts/dev.sh > /tmp/authserver.log 2>&1 & echo $$! > .authserver.pid
 	@sleep 2
-	@AUTH_ISSUER=http://localhost:$(PORT) DEMO_ADDR=:$(DEMO_PORT) DEMO_REDIRECT_URI=http://localhost:$(DEMO_PORT)/callback \
+	@set -a; . ./.env; set +a; DEMO_ADDR=:$(DEMO_PORT) DEMO_REDIRECT_URI=http://localhost:$(DEMO_PORT)/callback \
 		go run ./examples/loginflow > /tmp/democlient.log 2>&1 & echo $$! > .democlient.pid
 	@sleep 2
 	@echo "auth server : http://localhost:$(PORT)   (logs: /tmp/authserver.log)"
