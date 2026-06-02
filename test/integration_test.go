@@ -335,8 +335,16 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		Revoke: &oidc.RevokeHandler{
 			RefreshTokens: b.RefreshTokens,
 			Clients:       b.Clients,
-			Now:           clk.Now,
-			Logger:        logger,
+			ClientAuth: oidc.ClientAuthConfig{
+				IssuerURL:        testIssuer,
+				TokenEndpointURL: testIssuer + "/connect/token",
+				AssertionCache:   token.NewMemAssertionCache(clk.Now),
+				AssertionSkew:    time.Minute,
+				Clock:            clk,
+				Logger:           logger,
+			},
+			Now:    clk.Now,
+			Logger: logger,
 		},
 		Discovery: oidc.NewDiscoveryHandler(testIssuer, b.Scopes),
 		JWKS:      oidc.NewJWKSHandler(issuer),
@@ -1001,6 +1009,153 @@ func TestE2E_Revoke_UnknownClientReturns401(t *testing.T) {
 	}
 	if !strings.Contains(resp.Header.Get("WWW-Authenticate"), `Basic`) {
 		t.Errorf("WWW-Authenticate = %q, want Basic", resp.Header.Get("WWW-Authenticate"))
+	}
+}
+
+// §2.2 (plan-2.md) — RFC 7009 §2.1: confidential clients MUST
+// authenticate at the revoke endpoint. A revoke request that names a
+// confidential client but does not carry a valid client_assertion
+// must fail with 401 invalid_client, regardless of which token is
+// being revoked.
+func TestE2E_Revoke_ConfidentialClient_MissingAssertionReturns401(t *testing.T) {
+	ts := newTestServer(t)
+	_ = registerConfidentialClient(t, bundleFromTestServer(ts))
+
+	form := url.Values{}
+	form.Set("token", "any-token")
+	form.Set("client_id", testConfidentialID)
+	// No client_assertion — confidential client cannot authenticate.
+
+	resp, err := ts.do(t, http.MethodPost, "/connect/revoke", form, nil)
+	if err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(resp.Header.Get("WWW-Authenticate"), `Basic`) {
+		t.Errorf("WWW-Authenticate = %q, want Basic", resp.Header.Get("WWW-Authenticate"))
+	}
+}
+
+// §2.2 (plan-2.md) — RFC 7009 §2.1: a confidential client
+// authenticates with a valid private_key_jwt assertion, then asks to
+// revoke a token issued to a DIFFERENT client. The endpoint must
+// return 200 (the spec forbids leaking token existence) and must NOT
+// revoke the foreign token. The authenticated identity is the source
+// of truth, not the form's client_id field.
+func TestE2E_Revoke_ConfidentialClient_CannotRevokeForeignToken(t *testing.T) {
+	ts := newTestServer(t)
+	ctc := registerConfidentialClient(t, bundleFromTestServer(ts))
+	tr, _ := exchangeCodeForTokens(t, ts) // tr's refresh token is for demo-public
+
+	// Sanity: demo-public is not the confidential client.
+	if testClientID == testConfidentialID {
+		t.Fatal("test setup: confidential and public clients share an id")
+	}
+
+	// Confidential client authenticates correctly with a valid
+	// assertion, then asks to revoke demo-public's refresh token.
+	now := ts.clk.Now()
+	assertion := signClientAssertion(t, ctc.Priv, testConfidentialID,
+		testIssuer+"/connect/token", uuid.NewString(), now, now.Add(time.Minute))
+
+	form := url.Values{}
+	form.Set("token", tr.RefreshToken)
+	form.Set("client_id", testConfidentialID) // truthful about who is calling
+	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form.Set("client_assertion", assertion)
+
+	resp, err := ts.do(t, http.MethodPost, "/connect/revoke", form, nil)
+	if err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (spec: 200 even on foreign token to avoid existence leak)", resp.StatusCode)
+	}
+
+	// The foreign token must STILL be usable. A successful refresh
+	// is the strongest evidence it has not been revoked.
+	rtForm := url.Values{}
+	rtForm.Set("grant_type", "refresh_token")
+	rtForm.Set("refresh_token", tr.RefreshToken)
+	rtForm.Set("client_id", testClientID)
+	rtResp, err := ts.do(t, http.MethodPost, "/connect/token", rtForm, nil)
+	if err != nil {
+		t.Fatalf("refresh after foreign revoke: %v", err)
+	}
+	rtResp.Body.Close()
+	if rtResp.StatusCode != http.StatusOK {
+		t.Errorf("refresh status = %d, want 200 — foreign token must not be revoked by a different client", rtResp.StatusCode)
+	}
+}
+
+// §2.2 (plan-2.md) — public client (TokenEndpointAuthMethod == none)
+// authenticates by client_id alone, then revokes its own refresh
+// token. This is the path §2.1 → §2.2 chain relies on: a public
+// client that can already exchange code + PKCE can also revoke.
+func TestE2E_Revoke_PublicClient_RevokesOwnToken(t *testing.T) {
+	ts := newTestServer(t)
+	tr, _ := exchangeCodeForTokens(t, ts)
+
+	form := url.Values{}
+	form.Set("token", tr.RefreshToken)
+	form.Set("client_id", testClientID)
+	resp, err := ts.do(t, http.MethodPost, "/connect/revoke", form, nil)
+	if err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	// Token must now be revoked; refresh fails with invalid_grant.
+	rtForm := url.Values{}
+	rtForm.Set("grant_type", "refresh_token")
+	rtForm.Set("refresh_token", tr.RefreshToken)
+	rtForm.Set("client_id", testClientID)
+	rtResp, err := ts.do(t, http.MethodPost, "/connect/token", rtForm, nil)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	rtResp.Body.Close()
+	if rtResp.StatusCode != http.StatusBadRequest {
+		t.Errorf("refresh status = %d, want 400 — token should be revoked", rtResp.StatusCode)
+	}
+}
+
+// §2.2 (plan-2.md) — confidential client authenticates with a valid
+// private_key_jwt assertion and asks to revoke an unknown token. The
+// spec mandates 200 OK on unknown tokens to avoid leaking whether a
+// token exists. The test pins the happy-path wiring of
+// AuthenticateClient through the revoke handler: a correctly signed
+// assertion authenticates the client, the token lookup runs, finds
+// nothing, the handler returns 200.
+func TestE2E_Revoke_ConfidentialClient_AuthSuccessReturns200(t *testing.T) {
+	ts := newTestServer(t)
+	ctc := registerConfidentialClient(t, bundleFromTestServer(ts))
+
+	now := ts.clk.Now()
+	assertion := signClientAssertion(t, ctc.Priv, testConfidentialID,
+		testIssuer+"/connect/token", uuid.NewString(), now, now.Add(time.Minute))
+
+	form := url.Values{}
+	form.Set("token", "unknown-token")
+	form.Set("client_id", testConfidentialID)
+	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form.Set("client_assertion", assertion)
+
+	resp, err := ts.do(t, http.MethodPost, "/connect/revoke", form, nil)
+	if err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (spec: always 200 on unknown token to avoid existence leak)", resp.StatusCode)
 	}
 }
 
