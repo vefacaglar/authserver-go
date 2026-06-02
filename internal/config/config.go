@@ -60,7 +60,7 @@ type Config struct {
 func Load() (*Config, error) {
 	c := &Config{
 		Issuer:                       getenv("AUTH_ISSUER", ""),
-		Listen:                       expandPort(getenv("AUTH_LISTEN_ADDR", ":5175")),
+		Listen:                       resolveListen(),
 		RequireHTTPS:                 getbool("AUTH_REQUIRE_HTTPS", true),
 		DBDriver:                     getenv("AUTH_DB_DRIVER", "postgres"),
 		DBDSN:                        getenv("AUTH_DB_DSN", "postgres://postgres:postgres@localhost:5432/authserver?sslmode=disable"),
@@ -157,6 +157,21 @@ func (c *Config) EffectiveCookieName() string {
 		return "__Host-" + c.CookieName
 	}
 	return c.CookieName
+}
+
+// resolveListen determines the listen address. When AUTH_LISTEN_ADDR is set
+// it is used as-is (with $PORT expansion). When it is empty the address is
+// derived from the PORT environment variable (convention on Render, Heroku,
+// Fly.io): if PORT is set, listen on 0.0.0.0:PORT; otherwise fall back to
+// the default :5175 suitable for local development.
+func resolveListen() string {
+	if v, ok := os.LookupEnv("AUTH_LISTEN_ADDR"); ok && v != "" {
+		return expandPort(v)
+	}
+	if port := os.Getenv("PORT"); port != "" {
+		return "0.0.0.0:" + port
+	}
+	return ":5175"
 }
 
 // expandPort replaces $PORT and ${PORT} in s with the value of the PORT
