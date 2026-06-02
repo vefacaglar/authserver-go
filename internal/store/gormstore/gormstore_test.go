@@ -2,12 +2,14 @@ package gormstore
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"go-authserver/internal/domain"
+	"go-authserver/internal/store"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -520,6 +522,48 @@ func TestUser_ValidateAndFind(t *testing.T) {
 	}
 	if found.Claims["email"] != "alice@example.com" {
 		t.Errorf("claims lost: %+v", found.Claims)
+	}
+}
+
+func TestUser_CreateDuplicate(t *testing.T) {
+	db := openTestDB(t)
+	s := NewUserStore(db)
+	now := time.Now().UTC()
+	user := &domain.User{
+		ID:        "u-1",
+		Username:  "alice",
+		Email:     "alice@example.com",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.CreateUser(context.Background(), user, "secret"); err != nil {
+		t.Fatalf("first create failed: %v", err)
+	}
+	err := s.CreateUser(context.Background(), user, "secret")
+	if err == nil {
+		t.Fatal("expected error on duplicate user create, got nil")
+	}
+	if !errors.Is(err, store.ErrDuplicate) {
+		t.Errorf("expected store.ErrDuplicate, got: %v", err)
+	}
+}
+
+func TestRole_CreateDuplicate(t *testing.T) {
+	db := openTestDB(t)
+	s := NewRoleStore(db)
+	role := &domain.Role{
+		ID:   "role-1",
+		Name: "admin",
+	}
+	if err := s.CreateRole(context.Background(), role); err != nil {
+		t.Fatalf("first create failed: %v", err)
+	}
+	err := s.CreateRole(context.Background(), role)
+	if err == nil {
+		t.Fatal("expected error on duplicate role create, got nil")
+	}
+	if !errors.Is(err, store.ErrDuplicate) {
+		t.Errorf("expected store.ErrDuplicate, got: %v", err)
 	}
 }
 

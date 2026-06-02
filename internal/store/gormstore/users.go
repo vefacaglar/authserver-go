@@ -27,7 +27,16 @@ func (s *UserStore) CreateUser(ctx context.Context, user *domain.User, password 
 	}
 	user.PasswordHash = string(hash)
 	ent := toUserEntity(user)
-	return s.db.WithContext(ctx).Create(ent).Error
+	err = s.db.WithContext(ctx).Create(ent).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) ||
+			strings.Contains(err.Error(), "UNIQUE constraint failed") ||
+			strings.Contains(err.Error(), "duplicate key value violates unique constraint") {
+			return fmt.Errorf("user %q: %w", user.ID, store.ErrDuplicate)
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *UserStore) UpdateUser(ctx context.Context, user *domain.User) error {

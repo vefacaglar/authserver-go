@@ -21,7 +21,16 @@ func (s *RoleStore) CreateRole(ctx context.Context, role *domain.Role) error {
 		return errors.New("role: empty id")
 	}
 	ent := toRoleEntity(role)
-	return s.db.WithContext(ctx).Create(ent).Error
+	err := s.db.WithContext(ctx).Create(ent).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) ||
+			strings.Contains(err.Error(), "UNIQUE constraint failed") ||
+			strings.Contains(err.Error(), "duplicate key value violates unique constraint") {
+			return fmt.Errorf("role %q: %w", role.ID, store.ErrDuplicate)
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *RoleStore) DeleteRole(ctx context.Context, roleID string) error {
