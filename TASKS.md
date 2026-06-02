@@ -19,14 +19,14 @@ until **Done when** holds. Full spec lives in `BUILD_PROMPT.md`; this file is th
 - [x] **T2.4 Issuer** — `internal/token/issuer.go`: access + id JWT with full claim sets incl. `at_hash`, `nonce`, `auth_time`. **Done when** test verifies both against JWKS and `at_hash` matches.
 
 ## M3 — Core OIDC flow, in-memory (prove Auth Code + PKCE)
-- [ ] **T3.1 Config** — `internal/config`: struct + env load + fail-fast validation. **Done when** invalid config errors clearly; valid loads.
-- [ ] **T3.2 Errors + responses** — `internal/oidc/errors.go`: OAuth error JSON, `no-store` helper, redirect-error helper. **Done when** unit test on JSON shape.
-- [ ] **T3.3 Session cookie** — `internal/session/cookie.go`: securecookie encrypt/decrypt, `__Host-` prefix under HTTPS. **Done when** test round-trips and rejects a tampered cookie.
-- [ ] **T3.4 Discovery + JWKS** — `internal/oidc/discovery.go`, `jwks.go`. **Done when** httptest asserts discovery fields + active public key in JWKS.
-- [ ] **T3.5 Login GET/POST** — `internal/oidc/login.go`: CSRF, returnUrl open-redirect guard, lockout + rate-limit hooks, session on success. **Done when** GET renders CSRF form; valid POST sets cookie + 302s safely; no-CSRF rejected.
-- [ ] **T3.6 Authorize** — `internal/oidc/authorize.go`: redirect_uri-first validation, response_type/scope/PKCE, session + prompt/max_age, code minting. **Done when** no session → /login; bad redirect_uri → error w/o redirect; valid → code+state.
-- [ ] **T3.7 Token + authcode grant** — `internal/oidc/token.go` + `grants/authcode.go`, `MarkConsumed` **before** issuing. **Done when** httptest exchanges code → access+id(+refresh).
-- [ ] **T3.8 Router + first E2E** — `internal/server/{router,middleware}.go`, wire `cmd/authserver` with memory stores + seed; `test/integration_test.go` happy path (authorize→login→authorize→code→token→verify id_token vs JWKS). **Done when** E2E passes.
+- [x] **T3.1 Config** — `internal/config`: struct + env load + fail-fast validation. **Done when** invalid config errors clearly; valid loads.
+- [x] **T3.2 Errors + responses** — `internal/oidc/errors.go`: OAuth error JSON, `no-store` helper, redirect-error helper. **Done when** unit test on JSON shape.
+- [x] **T3.3 Session cookie** — `internal/session/cookie.go`: securecookie encrypt/decrypt, `__Host-` prefix under HTTPS. **Done when** test round-trips and rejects a tampered cookie.
+- [x] **T3.4 Discovery + JWKS** — `internal/oidc/discovery.go`, `jwks.go`. **Done when** httptest asserts discovery fields + active public key in JWKS.
+- [x] **T3.5 Login GET/POST** — `internal/oidc/login.go`: CSRF, returnUrl open-redirect guard, lockout + rate-limit hooks, session on success. **Done when** GET renders CSRF form; valid POST sets cookie + 302s safely; no-CSRF rejected.
+- [x] **T3.6 Authorize** — `internal/oidc/authorize.go`: redirect_uri-first validation, response_type/scope/PKCE, session + prompt/max_age, code minting. **Done when** no session → /login; bad redirect_uri → error w/o redirect; valid → code+state.
+- [x] **T3.7 Token + authcode grant** — `internal/oidc/token.go` + `grants/authcode.go`, `MarkConsumed` **before** issuing. **Done when** httptest exchanges code → access+id(+refresh).
+- [x] **T3.8 Router + first E2E** — `internal/server/{router,middleware}.go`, wire `cmd/authserver` with memory stores + seed; `test/integration_test.go` happy path (authorize→login→authorize→code→token→verify id_token vs JWKS). **Done when** E2E passes.
 
 ## M4 — Refresh + remaining endpoints
 - [ ] **T4.1 Refresh grant** — `grants/refresh.go`: rotation, sliding+absolute expiry, atomic consume, reuse → chain revoke + audit. **Done when** rotate works; reuse → `invalid_grant` + chain revoked.
