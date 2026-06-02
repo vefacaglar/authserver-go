@@ -542,3 +542,156 @@ func TestRefresh_AuthTime_UsesChainRoot(t *testing.T) {
 
 // keep the store import alive for the linter
 var _ = store.ErrNotFound
+
+// §1.1 (plan-2.md) — pin the ExpiresAt / AbsoluteExpiresAt semantics
+// for both Client.RefreshTokenExpiration modes so a future refactor
+// cannot silently change which lifetime the rotation branch uses.
+//
+// Setup is shared with newTestRefresh but the client's policy is
+// overridden per case. The mintRefresh helper seeds a root token with
+// ExpiresAt and AbsoluteExpiresAt both = now+24h, then we rotate once
+// and inspect the newly stored token's timestamps.
+func TestRefresh_RotationExpiry_SlidingExtendsAndClampsToAbsolute(t *testing.T) {
+	g, rt, _, client := newTestRefresh(t)
+	// Use a sliding lifetime that's longer than the absolute ceiling
+	// we'll mint, so the ceiling is the constraining factor. The
+	// rotation must clamp new ExpiresAt to the absolute ceiling.
+	client.RefreshTokenExpiration = domain.TokenExpirationSliding
+	client.RefreshTokenLifetimeSeconds = 7 * 24 * 3600        // 7d sliding
+	client.RefreshTokenAbsoluteLifetimeSeconds = 30 * 24 * 3600 // 30d ceiling (carried)
+	if err := g.Clients.Store(context.Background(), client); err != nil {
+		t.Fatalf("re-store client: %v", err)
+	}
+
+	raw := mintRefresh(t, rt, g.Clock, id1())
+	root, _ := rt.FindByHash(context.Background(), token.HashToken(raw))
+	rootAbsolute := root.AbsoluteExpiresAt
+
+	fc := g.Clock.(*clock.FakeClock)
+	fc.Advance(2 * time.Hour)
+
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", raw)
+	form.Set("client_id", "client-1")
+	rr := httptest.NewRecorder()
+	g.Handle(context.Background(), rr, client, form)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var resp TokenResponse
+	_ = json.NewDecoder(rr.Body).Decode(&resp)
+	newTok, err := rt.FindByHash(context.Background(), token.HashToken(resp.RefreshToken))
+	if err != nil {
+		t.Fatalf("find new: %v", err)
+	}
+
+	// Sliding: now+sliding=now+7d is well below the +24h ceiling? No —
+	// ceiling is 24h, so it clamps. We just want to assert the
+	// relationship: new ExpiresAt == ceiling, ceiling unchanged.
+	if !newTok.ExpiresAt.Equal(rootAbsolute) {
+		t.Errorf("sliding ExpiresAt = %s, want %s (clamped to ceiling)", newTok.ExpiresAt, rootAbsolute)
+	}
+	if !newTok.AbsoluteExpiresAt.Equal(rootAbsolute) {
+		t.Errorf("AbsoluteExpiresAt = %s, want %s (carried forward)", newTok.AbsoluteExpiresAt, rootAbsolute)
+	}
+}
+
+func TestRefresh_RotationExpiry_SlidingExtendsWithoutClamp(t *testing.T) {
+	g, rt, _, client := newTestRefresh(t)
+	// Sliding lifetime shorter than the rotation interval, and ceiling
+	// much further out, so now+sliding stays well under the ceiling.
+	// We can then assert the exact computed ExpiresAt = now+sliding.
+	client.RefreshTokenExpiration = domain.TokenExpirationSliding
+	client.RefreshTokenLifetimeSeconds = 30 * 60 // 30 min sliding
+	client.RefreshTokenAbsoluteLifetimeSeconds = 24 * 3600
+	if err := g.Clients.Store(context.Background(), client); err != nil {
+		t.Fatalf("re-store client: %v", err)
+	}
+
+	raw := mintRefresh(t, rt, g.Clock, id1())
+	root, _ := rt.FindByHash(context.Background(), token.HashToken(raw))
+	rootAbsolute := root.AbsoluteExpiresAt
+
+	fc := g.Clock.(*clock.FakeClock)
+	fc.Advance(10 * time.Minute)
+
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", raw)
+	form.Set("client_id", "client-1")
+	rr := httptest.NewRecorder()
+	g.Handle(context.Background(), rr, client, form)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var resp TokenResponse
+	_ = json.NewDecoder(rr.Body).Decode(&resp)
+	newTok, err := rt.FindByHash(context.Background(), token.HashToken(resp.RefreshToken))
+	if err != nil {
+		t.Fatalf("find new: %v", err)
+	}
+
+	// now = T0+10m, sliding = 30m → ExpiresAt = T0+40m. Ceiling is
+	// T0+24h, so the clamp does not fire.
+	wantExpires := fc.Now().UTC().Add(client.RefreshTokenLifetime())
+	if !newTok.ExpiresAt.Equal(wantExpires) {
+		t.Errorf("sliding ExpiresAt = %s, want %s (now + sliding lifetime)", newTok.ExpiresAt, wantExpires)
+	}
+	if !newTok.AbsoluteExpiresAt.Equal(rootAbsolute) {
+		t.Errorf("AbsoluteExpiresAt = %s, want %s (carried forward)", newTok.AbsoluteExpiresAt, rootAbsolute)
+	}
+}
+
+func TestRefresh_RotationExpiry_AbsoluteRecomputesFromNow(t *testing.T) {
+	g, rt, _, client := newTestRefresh(t)
+	// Switch to absolute mode with a 6h absolute lifetime. Ceiling is
+	// 24h so the recomputed ExpiresAt lands well below it.
+	client.RefreshTokenExpiration = domain.TokenExpirationAbsolute
+	client.RefreshTokenAbsoluteLifetimeSeconds = 6 * 3600
+	if err := g.Clients.Store(context.Background(), client); err != nil {
+		t.Fatalf("re-store client: %v", err)
+	}
+
+	raw := mintRefresh(t, rt, g.Clock, id1())
+	root, _ := rt.FindByHash(context.Background(), token.HashToken(raw))
+	rootAbsolute := root.AbsoluteExpiresAt
+
+	// Advance 3h. now = T0+3h. Reading B: ExpiresAt = now + 6h = T0+9h.
+	// Reading A (carry forward) would have left it at T0+24h.
+	fc := g.Clock.(*clock.FakeClock)
+	fc.Advance(3 * time.Hour)
+
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", raw)
+	form.Set("client_id", "client-1")
+	rr := httptest.NewRecorder()
+	g.Handle(context.Background(), rr, client, form)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var resp TokenResponse
+	_ = json.NewDecoder(rr.Body).Decode(&resp)
+	newTok, err := rt.FindByHash(context.Background(), token.HashToken(resp.RefreshToken))
+	if err != nil {
+		t.Fatalf("find new: %v", err)
+	}
+
+	wantExpires := fc.Now().UTC().Add(client.RefreshTokenAbsoluteLifetime())
+	if !newTok.ExpiresAt.Equal(wantExpires) {
+		t.Errorf("absolute ExpiresAt = %s, want %s (now + absolute lifetime)", newTok.ExpiresAt, wantExpires)
+	}
+	// And it must not equal the carried-forward root ExpiresAt —
+	// that's the bug Reading B fixes.
+	if newTok.ExpiresAt.Equal(root.ExpiresAt) {
+		t.Errorf("absolute ExpiresAt = %s (carried forward) — Reading B says it must recompute", newTok.ExpiresAt)
+	}
+	// Absolute ceiling is still the original issuance-time value.
+	if !newTok.AbsoluteExpiresAt.Equal(rootAbsolute) {
+		t.Errorf("AbsoluteExpiresAt = %s, want %s (carried forward unchanged)", newTok.AbsoluteExpiresAt, rootAbsolute)
+	}
+}

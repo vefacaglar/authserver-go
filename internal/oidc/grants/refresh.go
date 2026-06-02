@@ -197,8 +197,14 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client
 		
 		var expiresAt time.Time
 		if client.RefreshTokenExpiration == domain.TokenExpirationAbsolute {
-			expiresAt = existing.ExpiresAt // Carry forward existing expiry for absolute
+			// Absolute mode: every rotation mints a token with a fresh
+			// absolute lifetime starting from now. The lifetime comes
+			// from the client's RefreshTokenAbsoluteLifetime setting.
+			// AbsoluteExpiresAt below still clamps the hard ceiling.
+			expiresAt = now.Add(client.RefreshTokenAbsoluteLifetime())
 		} else {
+			// Sliding mode: rotation extends ExpiresAt by the sliding
+			// lifetime, but never past the absolute ceiling.
 			expiresAt = now.Add(client.RefreshTokenLifetime())
 			if expiresAt.After(existing.AbsoluteExpiresAt) {
 				expiresAt = existing.AbsoluteExpiresAt
