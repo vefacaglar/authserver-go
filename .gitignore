@@ -79,3 +79,11 @@ $RECYCLE.BIN/
 .directory
 # Bare compiled binary (go build output at repo root)
 /authserver
+
+# ==========================================
+# Local dev database (scripts/dev.sh / make dev)
+# ==========================================
+*.db
+*.db-shm
+*.db-wal
+/dev.db*
