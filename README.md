@@ -14,9 +14,10 @@ for the full technical spec.
 
 ## Quick start
 
-Requires **Go 1.26+**. The runtime persists to **PostgreSQL**; `make dev`
-uses a zero-dependency in-memory store so you can run it without a database.
-(The test suite uses SQLite via cgo, so running `make test` needs a C
+Requires **Go 1.26+** and a **PostgreSQL** database — the runtime persists
+to Postgres only. Point `AUTH_DB_DSN` at your database (a managed Postgres
+such as Neon works out of the box); the easiest way is a gitignored `.env`
+file. (The test suite uses SQLite via cgo, so running `make test` needs a C
 compiler.)
 
 The repository ships a `Makefile` that plays the role of `package.json`
@@ -27,10 +28,11 @@ make dev        # like `pnpm run dev` — run the server locally, Ctrl-C to stop
 ```
 
 `make dev` runs [`scripts/dev.sh`](scripts/dev.sh), which fills in safe
-local-dev defaults (HTTP issuer on `http://localhost:5175`, TLS off, a
-throwaway in-memory store), generates the required secret keys on the fly,
-then runs the server in the foreground. It prints the issuer, the admin
-bearer token, and the discovery URL on boot.
+local-dev defaults (HTTP issuer on `http://localhost:5175`, TLS off),
+generates the required secret keys on the fly, and runs the server in the
+foreground against the PostgreSQL given by `AUTH_DB_DSN` (loaded from `.env`
+if present). It prints the issuer, the admin bearer token, and the
+discovery URL on boot.
 
 Run `make` with no target to see every task:
 
@@ -97,8 +99,8 @@ public demo client (`demo-public`), a confidential demo client
 | `AUTH_ISSUER` | _(required)_ | Absolute URL; must be `https` unless `AUTH_REQUIRE_HTTPS=false` |
 | `AUTH_LISTEN_ADDR` | `:5175` | Bind address |
 | `AUTH_REQUIRE_HTTPS` | `true` | `false` enables HTTP + drops the `__Host-` cookie prefix (dev only) |
-| `AUTH_DB_DRIVER` | `postgres` | `postgres` (production) or `memory` (throwaway; rejected when `AUTH_REQUIRE_HTTPS=true`) |
-| `AUTH_DB_DSN` | `postgres://postgres:postgres@localhost:5432/authserver?sslmode=disable` | Postgres DSN; ignored by the `memory` driver |
+| `AUTH_DB_DRIVER` | `postgres` | Must be `postgres` — the only supported runtime driver |
+| `AUTH_DB_DSN` | _(required)_ | PostgreSQL DSN, e.g. `postgres://user:pass@host:5432/db?sslmode=require` |
 | `AUTH_AUTO_MIGRATE` | `true` | Run schema migration on startup. Set `false` in production and run `authserver migrate` at deploy time for fast cold starts |
 | `AUTH_SEED` | `true` | Seed demo client/user/scopes on startup. Set `false` in production |
 | `AUTH_COOKIE_HASH_KEY` | _(required)_ | base64, ≥32 bytes — session cookie HMAC |
@@ -117,12 +119,13 @@ public demo client (`demo-public`), a confidential demo client
 
 ## Database & migrations
 
-Persistence is **GORM on PostgreSQL** (`AUTH_DB_DRIVER=postgres`). A
-`memory` driver exists for throwaway local runs, but it is **rejected in
-production** (`AUTH_REQUIRE_HTTPS=true`): an in-memory store keeps sessions,
-refresh tokens, and signing keys per-process, so behind a load balancer
-each instance would mint a different signing key and reject the others'
-tokens. SQLite is used by the test suite only — never as a runtime driver.
+Persistence is **GORM on PostgreSQL** (`AUTH_DB_DRIVER=postgres`) — the only
+supported runtime driver. An in-memory store would keep sessions, refresh
+tokens, and signing keys per-process: they would vanish on restart and
+differ across instances behind a load balancer, so each would mint a
+different signing key and reject the others' tokens. The server therefore
+refuses to start on anything but Postgres. SQLite is used by the test suite
+only — never as a runtime driver.
 
 ### Commands
 
@@ -252,7 +255,7 @@ Key responses always strip the private PEM; mutations require a CSRF token.
 | Language | Go 1.26+ (`log/slog` for logging) |
 | HTTP router | `net/http` + `github.com/go-chi/chi/v5` |
 | JOSE / JWT / JWKS | `github.com/lestrrat-go/jwx/v2` |
-| Persistence | GORM on PostgreSQL (in-memory store for dev; SQLite for tests) |
+| Persistence | GORM on PostgreSQL (SQLite for tests only) |
 | Session cookie | `github.com/gorilla/securecookie` |
 | CSRF | `github.com/gorilla/csrf` |
 | Rate limiting | `golang.org/x/time/rate` |
@@ -266,7 +269,7 @@ internal/clock/        Clock interface + SystemClock / FakeClock
 internal/config/       env-driven config + validation
 internal/domain/       plain model structs
 internal/store/        store interfaces (ports)
-  memory/              in-memory implementations
+  memory/              in-memory implementations (tests only)
   gormstore/           GORM implementations (M5)
 internal/token/        hashing, PKCE, RSA keys, JWT issuance
 internal/session/      encrypted SSO cookie

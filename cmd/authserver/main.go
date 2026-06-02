@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -25,7 +26,6 @@ import (
 	"go-authserver/internal/session"
 	"go-authserver/internal/store"
 	"go-authserver/internal/store/gormstore"
-	"go-authserver/internal/store/memory"
 	"go-authserver/internal/token"
 
 	"github.com/lestrrat-go/jwx/v2/jwa"
@@ -64,23 +64,16 @@ func main() {
 	}
 }
 
-// runMigrate opens the configured database, applies the GORM schema
-// migration, and seeds the demo fixtures. It is a one-shot command meant
-// to run at deploy time (not on every cold start). Migrating an in-memory
-// store is meaningless, so the memory driver is rejected with a clear
-// message.
+// runMigrate opens the configured PostgreSQL database, applies the GORM
+// schema migration, and seeds the demo fixtures. It is a one-shot command
+// meant to run at deploy time (not on every cold start). config.Load
+// guarantees the driver is postgres.
 func runMigrate(logger *slog.Logger) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
 	drv := cfg.DBDriver
-	if drv == "" {
-		drv = "memory"
-	}
-	if drv == "memory" {
-		return errors.New("migrate: driver is \"memory\"; nothing to migrate (set AUTH_DB_DRIVER=postgres)")
-	}
 
 	db, err := gormstore.Open(drv, cfg.DBDSN)
 	if err != nil {
@@ -124,12 +117,6 @@ func runRotateKeys(logger *slog.Logger) error {
 		return err
 	}
 	drv := cfg.DBDriver
-	if drv == "" {
-		drv = "memory"
-	}
-	if drv == "memory" {
-		return errors.New("rotate-keys: driver is \"memory\"; nothing persists (set AUTH_DB_DRIVER=postgres)")
-	}
 
 	db, err := gormstore.Open(drv, cfg.DBDSN)
 	if err != nil {
@@ -184,21 +171,19 @@ func run(logger *slog.Logger) error {
 		defer closer()
 	}
 
-	// Migrate on the serve path only when explicitly opted in. For a
-	// persistent DB in production, run `authserver migrate` at deploy time
-	// and set AUTH_AUTO_MIGRATE=false so cold starts stay fast.
-	if gormDB != nil && cfg.AutoMigrate {
+	// Migrate on the serve path only when explicitly opted in. In
+	// production, run `authserver migrate` at deploy time and set
+	// AUTH_AUTO_MIGRATE=false so cold starts stay fast.
+	if cfg.AutoMigrate {
 		if err := gormstore.Migrate(gormDB); err != nil {
 			return err
 		}
 		logger.Info("schema migrated on startup")
 	}
 
-	// Seed: an in-memory store (gormDB == nil) loses its data every boot,
-	// so it must always be seeded or the server is unusable. A persistent
-	// store is seeded only when AUTH_SEED is set (default true; turn off in
-	// production once the migrate command has run).
-	if gormDB == nil || cfg.Seed {
+	// Seed demo fixtures only when AUTH_SEED is set (default true; turn off
+	// in production once the migrate command has run).
+	if cfg.Seed {
 		if err := seedBundle(bundle); err != nil {
 			return err
 		}
@@ -443,53 +428,38 @@ func run(logger *slog.Logger) error {
 	return srv.Shutdown(shutdownCtx)
 }
 
-// buildStores picks a backend based on driver and returns a populated
-// storeBundle. The third return value is a closer (always non-nil for
-// the GORM path) the caller should defer.
+// buildStores opens the PostgreSQL-backed store bundle. Postgres is the
+// only runtime driver: the in-memory store is never used by the running
+// server (it loses sessions and signing keys on restart and cannot be
+// shared across instances), it exists solely for the test suite. The
+// returned closer shuts the pool down and must be deferred by the caller.
 //
-// The "memory" driver is honoured explicitly so tests/CLI users can
-// ask for it; an empty driver also falls back to memory.
+// Schema migration is NOT run here — that is the job of the `migrate`
+// command (or AUTH_AUTO_MIGRATE in run()). Opening the pool is cheap;
+// migrating is what costs cold-start time.
 func buildStores(driver, dsn string, now func() time.Time, logger *slog.Logger) (*storeBundle, *gorm.DB, func(), error) {
 	drv := driver
 	if drv == "" {
-		drv = "memory"
+		drv = "postgres"
 	}
-	switch drv {
-	case "memory":
-		return &storeBundle{
-			Clients:       memory.NewClientStore(),
-			AuthCodes:     memory.NewAuthorizationCodeStore(),
-			RefreshTokens: memory.NewRefreshTokenStore(),
-			Sessions:      memory.NewSessionStore(),
-			SigningKeys:   memory.NewSigningKeyStore(),
-			Scopes:        memory.NewScopeStore(),
-			AuditLogs:     memory.NewAuditLogStore(),
-			Users:         memory.NewUserStore(),
-			Roles:         memory.NewRoleStore(),
-			Tracker:       memory.NewLoginAttemptTracker(now),
-		}, nil, func() {}, nil
-	case "postgres":
-		db, err := gormstore.Open(drv, dsn)
+	if drv != "postgres" {
+		return nil, nil, nil, errors.New("unsupported DB driver " + strconv.Quote(drv) + "; the server runs on postgres only")
+	}
+	db, err := gormstore.Open(drv, dsn)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if logger != nil {
+		logger.Info("gormstore ready", "driver", drv)
+	}
+	closer := func() {
+		sqlDB, err := db.DB()
 		if err != nil {
-			return nil, nil, nil, err
+			return
 		}
-		// Note: schema migration is NOT run here — that is the job of the
-		// `migrate` command (or AUTH_AUTO_MIGRATE in run()). Opening the
-		// pool is cheap; migrating is what costs cold-start time.
-		if logger != nil {
-			logger.Info("gormstore ready", "driver", drv)
-		}
-		closer := func() {
-			sqlDB, err := db.DB()
-			if err != nil {
-				return
-			}
-			_ = sqlDB.Close()
-		}
-		return newGormBundle(db, now), db, closer, nil
-	default:
-		return nil, nil, nil, errors.New("unknown DB driver: " + drv)
+		_ = sqlDB.Close()
 	}
+	return newGormBundle(db, now), db, closer, nil
 }
 
 // newGormBundle wires every GORM-backed store over a single *gorm.DB.

@@ -153,13 +153,16 @@ func (c *Config) validate() error {
 	if !c.AdminAllowAnonymous && strings.TrimSpace(c.AdminToken) == "" {
 		return errors.New("AUTH_ADMIN_TOKEN must be set unless AUTH_ADMIN_ALLOW_ANONYMOUS=true")
 	}
-	// In production (RequireHTTPS) the data store must be durable and
-	// shared. The "memory" driver keeps sessions, refresh tokens, and —
-	// critically — signing keys per-process, so each instance behind a
-	// load balancer would mint a different signing key and reject the
-	// others' tokens. Force a persistent backend.
-	if c.RequireHTTPS && (c.DBDriver == "" || c.DBDriver == "memory") {
-		return errors.New("AUTH_DB_DRIVER=memory is unsafe when AUTH_REQUIRE_HTTPS=true; use postgres")
+	// The server runs on PostgreSQL only. The in-memory store keeps
+	// sessions, refresh tokens, and — critically — signing keys per-process:
+	// they vanish on restart and differ across instances behind a load
+	// balancer, so each would mint a different signing key and reject the
+	// others' tokens. Never allow it as a runtime driver.
+	if c.DBDriver != "postgres" {
+		return fmt.Errorf("AUTH_DB_DRIVER must be \"postgres\" (got %q); the server runs on postgres only", c.DBDriver)
+	}
+	if strings.TrimSpace(c.DBDSN) == "" {
+		return errors.New("AUTH_DB_DSN is required (a PostgreSQL DSN)")
 	}
 	return nil
 }

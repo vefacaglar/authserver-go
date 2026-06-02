@@ -3,9 +3,9 @@
 # dev.sh — one-command local dev runner for go-authserver.
 #
 # Mirrors the convenience of `pnpm run dev`: it fills in safe local-dev
-# defaults (HTTP issuer, no TLS, a persistent SQLite file) and generates
-# the required secret keys on the fly if they are not already exported,
-# then runs the server in the foreground. Press Ctrl-C to stop it.
+# defaults (HTTP issuer, no TLS), generates the required secret keys on the
+# fly if not already exported, then runs the server in the foreground
+# against the PostgreSQL given by AUTH_DB_DSN. Press Ctrl-C to stop it.
 #
 # Override any value by exporting the matching AUTH_* variable before
 # calling this script.
@@ -30,14 +30,18 @@ export AUTH_REQUIRE_HTTPS="${AUTH_REQUIRE_HTTPS:-false}"
 export AUTH_ISSUER="${AUTH_ISSUER:-http://localhost:5175}"
 export AUTH_LISTEN_ADDR="${AUTH_LISTEN_ADDR:-:5175}"
 
-# Zero-dependency dev: a throwaway in-memory store (allowed because
-# AUTH_REQUIRE_HTTPS=false here). For a persistent, production-like setup
-# point these at Postgres, e.g.:
-#   AUTH_DB_DRIVER=postgres \
-#   AUTH_DB_DSN=postgres://postgres:postgres@localhost:5432/authserver?sslmode=disable
-# then run `authserver migrate` once before starting.
-export AUTH_DB_DRIVER="${AUTH_DB_DRIVER:-memory}"
-export AUTH_DB_DSN="${AUTH_DB_DSN:-}"
+# The server runs on PostgreSQL only. Point AUTH_DB_DSN at your database
+# (set it here, in your shell, or in a gitignored .env file). A managed
+# Postgres such as Neon works out of the box — its data persists across
+# server restarts, so sessions survive a restart.
+export AUTH_DB_DRIVER="${AUTH_DB_DRIVER:-postgres}"
+
+if [ -z "${AUTH_DB_DSN:-}" ]; then
+  echo "ERROR: AUTH_DB_DSN is not set." >&2
+  echo "       Put your PostgreSQL DSN in a .env file (gitignored), e.g.:" >&2
+  echo "         AUTH_DB_DSN=postgres://USER:PASS@HOST:5432/DB?sslmode=require" >&2
+  exit 1
+fi
 
 echo "==> go-authserver dev"
 echo "    issuer : $AUTH_ISSUER"
