@@ -22,8 +22,11 @@ import (
 	"go-authserver/internal/server"
 	"go-authserver/internal/session"
 	"go-authserver/internal/store"
+	"go-authserver/internal/store/gormstore"
 	"go-authserver/internal/store/memory"
 	"go-authserver/internal/token"
+
+	"gorm.io/gorm"
 )
 
 func main() {
@@ -36,6 +39,29 @@ func main() {
 	}
 }
 
+// storeBundle is the bag of store interfaces the rest of the wiring
+// reads from. Both the memory and the GORM backends produce a
+// value of this type, so handlers don't know (or care) which one is
+// in use.
+type storeBundle struct {
+	Clients       store.ClientStore
+	AuthCodes     store.AuthorizationCodeStore
+	RefreshTokens store.RefreshTokenStore
+	Sessions      store.SessionStore
+	SigningKeys   store.SigningKeyStore
+	Scopes        store.ScopeStore
+	AuditLogs     store.AuditLogStore
+	Users         store.UserStore
+	Tracker       store.LoginAttemptTracker
+}
+
+// userAdder is the seed-only extension of UserStore. The memory and
+// gormstore implementations both satisfy it; the interface lives here
+// so the rest of main doesn't have to import either concrete type.
+type userAdder interface {
+	Add(u domain.UserInfo, password string) error
+}
+
 func run(logger *slog.Logger) error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -43,21 +69,19 @@ func run(logger *slog.Logger) error {
 	}
 
 	clk := clock.SystemClock{}
-	keys := memory.NewSigningKeyStore()
-	scopes := memory.NewScopeStore()
-	clients := memory.NewClientStore()
-	sessions := memory.NewSessionStore()
-	authCodes := memory.NewAuthorizationCodeStore()
-	refreshTokens := memory.NewRefreshTokenStore()
-	users := memory.NewUserStore()
-	auditLogs := memory.NewAuditLogStore()
-	tracker := memory.NewLoginAttemptTracker(clk.Now)
+	bundle, gormDB, closer, err := buildStores(cfg.DBDriver, cfg.DBDSN, clk.Now, logger)
+	if err != nil {
+		return err
+	}
+	if closer != nil {
+		defer closer()
+	}
 
-	if err := seed(scopes, clients, users); err != nil {
+	if err := seedBundle(bundle); err != nil {
 		return err
 	}
 
-	keyManager := token.NewKeyManager(keys, clk)
+	keyManager := token.NewKeyManager(bundle.SigningKeys, clk)
 	issuer := token.NewIssuer(cfg.Issuer, keyManager, clk)
 	issuer.DefaultAccessTokenLifetime = cfg.AccessTokenLifetime
 	issuer.DefaultIDTokenLifetime = cfg.IDTokenLifetime
@@ -79,10 +103,10 @@ func run(logger *slog.Logger) error {
 			AuthorizePath:   "/connect/authorize",
 			SessionLifetime: 8 * time.Hour,
 		},
-		Users:    users,
-		Sessions: sessions,
+		Users:    bundle.Users,
+		Sessions: bundle.Sessions,
 		Cookies:  cookieMgr,
-		Tracker:  tracker,
+		Tracker:  bundle.Tracker,
 		Clock:    clk,
 		Logger:   logger,
 		Template: loginTmpl,
@@ -95,10 +119,10 @@ func run(logger *slog.Logger) error {
 			AuthCodeLifetime: cfg.AuthCodeLifetime,
 			RequirePKCE:      cfg.RequirePKCE,
 		},
-		Clients:   clients,
-		AuthCodes: authCodes,
-		Sessions:  sessions,
-		Users:     users,
+		Clients:   bundle.Clients,
+		AuthCodes: bundle.AuthCodes,
+		Sessions:  bundle.Sessions,
+		Users:     bundle.Users,
 		Cookies:   cookieMgr,
 		Issuer:    issuer,
 		Clock:     clk,
@@ -106,10 +130,10 @@ func run(logger *slog.Logger) error {
 	}
 	tokenHandler := &oidc.TokenHandler{
 		AuthCode: &grants.AuthCodeGrant{
-			AuthCodes:     authCodes,
-			RefreshTokens: refreshTokens,
-			Clients:       clients,
-			Users:         users,
+			AuthCodes:     bundle.AuthCodes,
+			RefreshTokens: bundle.RefreshTokens,
+			Clients:       bundle.Clients,
+			Users:         bundle.Users,
 			Issuer:        issuer,
 			Clock:         clk,
 			Cfg: grants.AuthCodeConfig{
@@ -120,11 +144,11 @@ func run(logger *slog.Logger) error {
 			},
 		},
 		Refresh: &grants.RefreshGrant{
-			RefreshTokens: refreshTokens,
-			Sessions:      sessions,
-			Clients:       clients,
-			Users:         users,
-			AuditLogs:     auditLogs,
+			RefreshTokens: bundle.RefreshTokens,
+			Sessions:      bundle.Sessions,
+			Clients:       bundle.Clients,
+			Users:         bundle.Users,
+			AuditLogs:     bundle.AuditLogs,
 			Issuer:        issuer,
 			Clock:         clk,
 			Logger:        logger,
@@ -137,10 +161,10 @@ func run(logger *slog.Logger) error {
 			},
 		},
 	}
-	userInfoHandler := oidc.NewUserInfoHandler(issuer, users, logger)
+	userInfoHandler := oidc.NewUserInfoHandler(issuer, bundle.Users, logger)
 	revokeHandler := &oidc.RevokeHandler{
-		RefreshTokens: refreshTokens,
-		Clients:       clients,
+		RefreshTokens: bundle.RefreshTokens,
+		Clients:       bundle.Clients,
 		Now:           clk.Now,
 		Logger:        logger,
 	}
@@ -152,9 +176,9 @@ func run(logger *slog.Logger) error {
 			PostLogoutRedirectURI: cfg.PostLogoutRedirectURI,
 		},
 		Cookies:       cookieMgr,
-		Sessions:      sessions,
-		RefreshTokens: refreshTokens,
-		Clients:       clients,
+		Sessions:      bundle.Sessions,
+		RefreshTokens: bundle.RefreshTokens,
+		Clients:       bundle.Clients,
 		Issuer:        issuer,
 		Clock:         clk,
 		Logger:        logger,
@@ -169,8 +193,6 @@ func run(logger *slog.Logger) error {
 	}
 	cancel()
 
-	_ = store.ScopeStore(nil)
-
 	handlers := server.Handlers{
 		Login:     loginHandler,
 		Logout:    logoutHandler,
@@ -178,7 +200,7 @@ func run(logger *slog.Logger) error {
 		Token:     tokenHandler,
 		UserInfo:  userInfoHandler,
 		Revoke:    revokeHandler,
-		Discovery: oidc.NewDiscoveryHandler(cfg.Issuer, scopes),
+		Discovery: oidc.NewDiscoveryHandler(cfg.Issuer, bundle.Scopes),
 		JWKS:      oidc.NewJWKSHandler(issuer),
 		Health:    server.NewHealth(),
 	}
@@ -208,7 +230,7 @@ func run(logger *slog.Logger) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("listening", "addr", cfg.Listen, "issuer", cfg.Issuer)
+		logger.Info("listening", "addr", cfg.Listen, "issuer", cfg.Issuer, "driver", cfg.DBDriver)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -224,13 +246,77 @@ func run(logger *slog.Logger) error {
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	_ = gormDB // kept alive until shutdown
 	return srv.Shutdown(shutdownCtx)
 }
 
-// seed writes the minimum sample data: the openid/profile/email/offline_access
-// scopes, a sample public client, and a sample user. It runs synchronously
-// at boot so the server is usable immediately without any admin UI.
-func seed(scopes store.ScopeStore, clients store.ClientStore, users *memory.UserStore) error {
+// buildStores picks a backend based on driver and returns a populated
+// storeBundle. The third return value is a closer (always non-nil for
+// the GORM path) the caller should defer.
+//
+// The "memory" driver is honoured explicitly so tests/CLI users can
+// ask for it; an empty driver also falls back to memory.
+func buildStores(driver, dsn string, now func() time.Time, logger *slog.Logger) (*storeBundle, *gorm.DB, func(), error) {
+	drv := driver
+	if drv == "" {
+		drv = "memory"
+	}
+	switch drv {
+	case "memory":
+		return &storeBundle{
+			Clients:       memory.NewClientStore(),
+			AuthCodes:     memory.NewAuthorizationCodeStore(),
+			RefreshTokens: memory.NewRefreshTokenStore(),
+			Sessions:      memory.NewSessionStore(),
+			SigningKeys:   memory.NewSigningKeyStore(),
+			Scopes:        memory.NewScopeStore(),
+			AuditLogs:     memory.NewAuditLogStore(),
+			Users:         memory.NewUserStore(),
+			Tracker:       memory.NewLoginAttemptTracker(now),
+		}, nil, func() {}, nil
+	case "sqlite", "postgres":
+		db, err := gormstore.Open(drv, dsn)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if err := gormstore.Migrate(db); err != nil {
+			return nil, nil, nil, err
+		}
+		if logger != nil {
+			logger.Info("gormstore ready", "driver", drv)
+		}
+		bundle := &storeBundle{
+			Clients:       gormstore.NewClientStore(db),
+			AuthCodes:     gormstore.NewAuthorizationCodeStore(db),
+			RefreshTokens: gormstore.NewRefreshTokenStore(db),
+			Sessions:      gormstore.NewSessionStore(db),
+			SigningKeys:   gormstore.NewSigningKeyStore(db),
+			Scopes:        gormstore.NewScopeStore(db),
+			AuditLogs:     gormstore.NewAuditLogStore(db),
+			Users:         gormstore.NewUserStore(db),
+			// The login-attempt tracker stays in-process. It's a
+			// sliding-window brute-force counter, not a durable
+			// record; sharing it across instances is not a
+			// requirement.
+			Tracker: memory.NewLoginAttemptTracker(now),
+		}
+		closer := func() {
+			sqlDB, err := db.DB()
+			if err != nil {
+				return
+			}
+			_ = sqlDB.Close()
+		}
+		return bundle, db, closer, nil
+	default:
+		return nil, nil, nil, errors.New("unknown DB driver: " + drv)
+	}
+}
+
+// seedBundle writes the minimum sample data so the server is usable
+// immediately without any admin UI: the four standard OIDC scopes, a
+// public demo client, and a demo user.
+func seedBundle(b *storeBundle) error {
 	ctx := context.Background()
 	for _, s := range []domain.Scope{
 		{Name: "openid", DisplayName: "OpenID", Description: "Verify your identity", Required: true, Emphasize: true},
@@ -238,7 +324,7 @@ func seed(scopes store.ScopeStore, clients store.ClientStore, users *memory.User
 		{Name: "email", DisplayName: "Email", Description: "Your email address"},
 		{Name: "offline_access", DisplayName: "Offline access", Description: "Refresh tokens for long-lived access"},
 	} {
-		if err := scopes.Store(ctx, &s); err != nil {
+		if err := b.Scopes.Store(ctx, &s); err != nil {
 			return err
 		}
 	}
@@ -252,10 +338,14 @@ func seed(scopes store.ScopeStore, clients store.ClientStore, users *memory.User
 		AllowRefreshTokens:      true,
 		TokenEndpointAuthMethod: domain.TokenEndpointAuthMethodNone,
 	}
-	if err := clients.Store(ctx, c); err != nil {
+	if err := b.Clients.Store(ctx, c); err != nil {
 		return err
 	}
-	return users.Add(domain.UserInfo{
+	adder, ok := b.Users.(userAdder)
+	if !ok {
+		return errors.New("user store does not support Add (seed path)")
+	}
+	return adder.Add(domain.UserInfo{
 		UserID: "u-demo",
 		Claims: map[string]any{
 			"preferred_username": "demo",

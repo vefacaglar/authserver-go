@@ -1,6 +1,6 @@
 // Package test contains end-to-end integration tests that exercise the
-// real router with in-memory stores. The tests follow the verification
-// scenario in BUILD_PROMPT.md §"Verification".
+// real router with both the in-memory and the GORM-backed stores. The
+// tests follow the verification scenario in BUILD_PROMPT.md §"Verification".
 package test
 
 import (
@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,8 @@ import (
 	"go-authserver/internal/oidc/grants"
 	"go-authserver/internal/server"
 	"go-authserver/internal/session"
+	"go-authserver/internal/store"
+	"go-authserver/internal/store/gormstore"
 	"go-authserver/internal/store/memory"
 	"go-authserver/internal/token"
 )
@@ -46,39 +49,131 @@ func testChallenge() string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-// testServer is a fully-wired router against in-memory stores, ready to
-// serve httptest requests.
+// storeBuilder is the seam through which newTestServer/newGormTestServer
+// inject their preferred backend. Returning the bundle + a closer keeps
+// the GORM path honest about its *sql.DB lifetime.
+type storeBuilder struct {
+	Build func(t *testing.T) (bundle, func())
+}
+
+// bundle is the cross-backend set of store interfaces the router needs.
+// All fields are interface types so the test server is identical no
+// matter which builder produced it.
+type bundle struct {
+	Clients       store.ClientStore
+	AuthCodes     store.AuthorizationCodeStore
+	RefreshTokens store.RefreshTokenStore
+	Sessions      store.SessionStore
+	SigningKeys   store.SigningKeyStore
+	Scopes        store.ScopeStore
+	AuditLogs     store.AuditLogStore
+	Users         store.UserStore
+	Tracker       store.LoginAttemptTracker
+}
+
+// userAdder lets the seed step populate a user without caring which
+// concrete UserStore impl is in play.
+type userAdder interface {
+	Add(u domain.UserInfo, password string) error
+}
+
+// memoryBuilder returns a fully in-memory store bundle. The closer is
+// a no-op. This is the default for fast unit-style integration runs.
+func memoryBuilder() storeBuilder {
+	return storeBuilder{
+		Build: func(t *testing.T) (bundle, func()) {
+			return bundle{
+				Clients:       memory.NewClientStore(),
+				AuthCodes:     memory.NewAuthorizationCodeStore(),
+				RefreshTokens: memory.NewRefreshTokenStore(),
+				Sessions:      memory.NewSessionStore(),
+				SigningKeys:   memory.NewSigningKeyStore(),
+				Scopes:        memory.NewScopeStore(),
+				AuditLogs:     memory.NewAuditLogStore(),
+				Users:         memory.NewUserStore(),
+				Tracker:       memory.NewLoginAttemptTracker(time.Now),
+			}, func() {}
+		},
+	}
+}
+
+// gormBuilder returns a SQLite-backed bundle on a temp file. The
+// closer shuts the underlying *sql.DB down. Re-runs the M3+M4 suite
+// against a real database to prove T5.4 (full parity).
+func gormBuilder() storeBuilder {
+	return storeBuilder{
+		Build: func(t *testing.T) (bundle, func()) {
+			dir := t.TempDir()
+			dsn := filepath.Join(dir, "gorm.db") + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)"
+			db, err := gormstore.Open("sqlite", dsn)
+			if err != nil {
+				t.Fatalf("gormstore.Open: %v", err)
+			}
+			if err := gormstore.Migrate(db); err != nil {
+				t.Fatalf("gormstore.Migrate: %v", err)
+			}
+			closer := func() {
+				sqlDB, err := db.DB()
+				if err != nil {
+					return
+				}
+				_ = sqlDB.Close()
+			}
+			return bundle{
+				Clients:       gormstore.NewClientStore(db),
+				AuthCodes:     gormstore.NewAuthorizationCodeStore(db),
+				RefreshTokens: gormstore.NewRefreshTokenStore(db),
+				Sessions:      gormstore.NewSessionStore(db),
+				SigningKeys:   gormstore.NewSigningKeyStore(db),
+				Scopes:        gormstore.NewScopeStore(db),
+				AuditLogs:     gormstore.NewAuditLogStore(db),
+				Users:         gormstore.NewUserStore(db),
+				Tracker:       memory.NewLoginAttemptTracker(time.Now),
+			}, closer
+		},
+	}
+}
+
+// testServer is a fully-wired router against a chosen backend, ready
+// to serve httptest requests.
 type testServer struct {
 	srv           *httptest.Server
 	clk           *clock.FakeClock
-	clients       *memory.ClientStore
-	refreshTokens *memory.RefreshTokenStore
-	auditLogs     *memory.AuditLogStore
+	clients       store.ClientStore
+	refreshTokens store.RefreshTokenStore
+	auditLogs     store.AuditLogStore
 	issuer        *token.Issuer
 	client        *http.Client
 }
 
+// newTestServer is the memory-backed default. Most tests use it.
 func newTestServer(t *testing.T) *testServer {
+	return newTestServerWith(t, memoryBuilder())
+}
+
+// newGormTestServer is the SQLite-backed variant. The same tests run
+// against it as part of T5.4 verification.
+func newGormTestServer(t *testing.T) *testServer {
+	return newTestServerWith(t, gormBuilder())
+}
+
+// newTestServerWith is the shared constructor; the bundle comes from
+// the supplied builder. All test logic lives in here so the two
+// backends stay in lockstep.
+func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 	t.Helper()
 	clk := clock.NewFakeClock(time.Unix(1700000000, 0))
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	scopes := memory.NewScopeStore()
-	clients := memory.NewClientStore()
-	sessions := memory.NewSessionStore()
-	authCodes := memory.NewAuthorizationCodeStore()
-	refreshTokens := memory.NewRefreshTokenStore()
-	users := memory.NewUserStore()
-	auditLogs := memory.NewAuditLogStore()
-	keys := memory.NewSigningKeyStore()
-	tracker := memory.NewLoginAttemptTracker(clk.Now)
+	b, closer := sb.Build(t)
+	t.Cleanup(closer)
 
 	for _, s := range []domain.Scope{
 		{Name: "openid"}, {Name: "profile"}, {Name: "email"}, {Name: "offline_access"},
 	} {
-		_ = scopes.Store(context.Background(), &s)
+		_ = b.Scopes.Store(context.Background(), &s)
 	}
-	_ = clients.Store(context.Background(), &domain.Client{
+	_ = b.Clients.Store(context.Background(), &domain.Client{
 		ClientID:                testClientID,
 		DisplayName:             "Demo Public Client",
 		RedirectURIs:            []string{testRedirectURI},
@@ -87,7 +182,11 @@ func newTestServer(t *testing.T) *testServer {
 		AllowRefreshTokens:      true,
 		TokenEndpointAuthMethod: domain.TokenEndpointAuthMethodNone,
 	})
-	_ = users.Add(domain.UserInfo{
+	adder, ok := b.Users.(userAdder)
+	if !ok {
+		t.Fatalf("UserStore %T does not support Add (seed path)", b.Users)
+	}
+	if err := adder.Add(domain.UserInfo{
 		UserID: "u-demo",
 		Claims: map[string]any{
 			"preferred_username": testUser,
@@ -95,9 +194,11 @@ func newTestServer(t *testing.T) *testServer {
 			"email":              "demo@example.com",
 			"email_verified":     true,
 		},
-	}, testPassword)
+	}, testPassword); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
 
-	km := token.NewKeyManager(keys, clk)
+	km := token.NewKeyManager(b.SigningKeys, clk)
 	issuer := token.NewIssuer(testIssuer, km, clk)
 	issuer.DefaultAccessTokenLifetime = time.Hour
 	issuer.DefaultIDTokenLifetime = time.Hour
@@ -118,10 +219,10 @@ func newTestServer(t *testing.T) *testServer {
 			AuthorizePath:   "/connect/authorize",
 			SessionLifetime: time.Hour,
 		},
-		Users:    users,
-		Sessions: sessions,
+		Users:    b.Users,
+		Sessions: b.Sessions,
 		Cookies:  cookieMgr,
-		Tracker:  tracker,
+		Tracker:  b.Tracker,
 		Clock:    clk,
 		Logger:   logger,
 		Template: loginTmpl,
@@ -134,10 +235,10 @@ func newTestServer(t *testing.T) *testServer {
 			AuthCodeLifetime: time.Minute,
 			RequirePKCE:      true,
 		},
-		Clients:   clients,
-		AuthCodes: authCodes,
-		Sessions:  sessions,
-		Users:     users,
+		Clients:   b.Clients,
+		AuthCodes: b.AuthCodes,
+		Sessions:  b.Sessions,
+		Users:     b.Users,
 		Cookies:   cookieMgr,
 		Issuer:    issuer,
 		Clock:     clk,
@@ -145,10 +246,10 @@ func newTestServer(t *testing.T) *testServer {
 	}
 	tokenHandler := &oidc.TokenHandler{
 		AuthCode: &grants.AuthCodeGrant{
-			AuthCodes:     authCodes,
-			RefreshTokens: refreshTokens,
-			Clients:       clients,
-			Users:         users,
+			AuthCodes:     b.AuthCodes,
+			RefreshTokens: b.RefreshTokens,
+			Clients:       b.Clients,
+			Users:         b.Users,
 			Issuer:        issuer,
 			Clock:         clk,
 			Cfg: grants.AuthCodeConfig{
@@ -159,11 +260,11 @@ func newTestServer(t *testing.T) *testServer {
 			},
 		},
 		Refresh: &grants.RefreshGrant{
-			RefreshTokens: refreshTokens,
-			Sessions:      sessions,
-			Clients:       clients,
-			Users:         users,
-			AuditLogs:     auditLogs,
+			RefreshTokens: b.RefreshTokens,
+			Sessions:      b.Sessions,
+			Clients:       b.Clients,
+			Users:         b.Users,
+			AuditLogs:     b.AuditLogs,
 			Issuer:        issuer,
 			Clock:         clk,
 			Logger:        logger,
@@ -184,9 +285,9 @@ func newTestServer(t *testing.T) *testServer {
 			PostLogoutRedirectURI: "/",
 		},
 		Cookies:       cookieMgr,
-		Sessions:      sessions,
-		RefreshTokens: refreshTokens,
-		Clients:       clients,
+		Sessions:      b.Sessions,
+		RefreshTokens: b.RefreshTokens,
+		Clients:       b.Clients,
 		Issuer:        issuer,
 		Clock:         clk,
 		Logger:        logger,
@@ -198,14 +299,14 @@ func newTestServer(t *testing.T) *testServer {
 		Logout:    logoutHandler,
 		Authorize: authorizeHandler,
 		Token:     tokenHandler,
-		UserInfo:  oidc.NewUserInfoHandler(issuer, users, logger),
+		UserInfo:  oidc.NewUserInfoHandler(issuer, b.Users, logger),
 		Revoke: &oidc.RevokeHandler{
-			RefreshTokens: refreshTokens,
-			Clients:       clients,
+			RefreshTokens: b.RefreshTokens,
+			Clients:       b.Clients,
 			Now:           clk.Now,
 			Logger:        logger,
 		},
-		Discovery: oidc.NewDiscoveryHandler(testIssuer, scopes),
+		Discovery: oidc.NewDiscoveryHandler(testIssuer, b.Scopes),
 		JWKS:      oidc.NewJWKSHandler(issuer),
 		Health:    server.NewHealth(),
 	}
@@ -230,8 +331,6 @@ func newTestServer(t *testing.T) *testServer {
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 
-	// http.Client with redirects disabled so tests can inspect 302 responses
-	// (e.g. login → /connect/authorize → /connect/token flow).
 	client := &http.Client{
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -241,9 +340,9 @@ func newTestServer(t *testing.T) *testServer {
 	return &testServer{
 		srv:           srv,
 		clk:           clk,
-		clients:       clients,
-		refreshTokens: refreshTokens,
-		auditLogs:     auditLogs,
+		clients:       b.Clients,
+		refreshTokens: b.RefreshTokens,
+		auditLogs:     b.AuditLogs,
 		issuer:        issuer,
 		client:        client,
 	}
@@ -253,9 +352,6 @@ func (ts *testServer) URL(path string) string {
 	return ts.srv.URL + path
 }
 
-// httpClient with a shared cookie jar would be nicer; for this test a
-// single request/response pair is enough and we pluck the Set-Cookie
-// header directly.
 func (ts *testServer) do(t *testing.T, method, path string, form url.Values, cookies []*http.Cookie) (*http.Response, error) {
 	t.Helper()
 	var body io.Reader
@@ -278,7 +374,6 @@ func (ts *testServer) do(t *testing.T, method, path string, form url.Values, coo
 func TestE2E_HappyPath(t *testing.T) {
 	ts := newTestServer(t)
 
-	// 1. GET /connect/authorize without session → 302 to /login?returnUrl=...
 	authorizeURL := buildAuthorizeURL(testClientID, testRedirectURI, testState, testNonce, testChallenge())
 	resp, err := ts.do(t, http.MethodGet, authorizeURL, nil, nil)
 	if err != nil {
@@ -301,7 +396,6 @@ func TestE2E_HappyPath(t *testing.T) {
 		t.Errorf("returnURL = %q, want %q", returnURL, authorizeURL)
 	}
 
-	// 2. GET /login → form with csrf_token + csrf cookie.
 	resp, err = ts.do(t, http.MethodGet, "/login", nil, nil)
 	if err != nil {
 		t.Fatalf("GET login: %v", err)
@@ -314,7 +408,6 @@ func TestE2E_HappyPath(t *testing.T) {
 	csrfToken := extractInputValue(t, string(bodyBytes), `name="csrf_token"`)
 	csrfCookie := findCookie(resp.Cookies(), "_csrf")
 
-	// 3. POST /login with valid creds → 302 to returnUrl, session cookie set.
 	form := url.Values{}
 	form.Set("csrf_token", csrfToken)
 	form.Set("username", testUser)
@@ -337,7 +430,6 @@ func TestE2E_HappyPath(t *testing.T) {
 		t.Fatalf("session cookie not set; headers=%v", resp.Header)
 	}
 
-	// 4. GET /connect/authorize with session → 302 to redirect_uri?code=...&state=...
 	resp, err = ts.do(t, http.MethodGet, authorizeURL, nil, []*http.Cookie{sessionCookie})
 	if err != nil {
 		t.Fatalf("GET authorize (with session): %v", err)
@@ -360,7 +452,6 @@ func TestE2E_HappyPath(t *testing.T) {
 		t.Errorf("state = %q, want %q", state, testState)
 	}
 
-	// 5. POST /connect/token with code + verifier → 200 access + id + refresh
 	form = url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", code)
@@ -403,8 +494,6 @@ func TestE2E_HappyPath(t *testing.T) {
 		t.Errorf("token_type = %q, want Bearer", tokenResp.TokenType)
 	}
 
-	// 6. Verify id_token against JWKS + assertions.
-	// Get JWKS
 	jwksResp, err := ts.do(t, http.MethodGet, "/.well-known/jwks.json", nil, nil)
 	if err != nil {
 		t.Fatalf("GET jwks: %v", err)
@@ -418,7 +507,6 @@ func TestE2E_HappyPath(t *testing.T) {
 		t.Errorf("JWKS leaked private exponent: %s", jwksBody)
 	}
 
-	// Verify ID token
 	idTok, err := ts.issuer.VerifyToken(context.Background(), tokenResp.IDToken)
 	if err != nil {
 		t.Fatalf("VerifyToken(id): %v", err)
@@ -438,7 +526,6 @@ func TestE2E_HappyPath(t *testing.T) {
 		t.Errorf("id_token missing auth_time")
 	}
 
-	// Verify access token
 	accessTok, err := ts.issuer.VerifyToken(context.Background(), tokenResp.AccessToken)
 	if err != nil {
 		t.Fatalf("VerifyToken(access): %v", err)
@@ -447,7 +534,6 @@ func TestE2E_HappyPath(t *testing.T) {
 		t.Errorf("access sub = %q", accessTok.Subject())
 	}
 
-	// 7. Replay attack: same code again → invalid_grant
 	resp, err = ts.do(t, http.MethodPost, "/connect/token", form, nil)
 	if err != nil {
 		t.Fatalf("replay: %v", err)
@@ -469,11 +555,8 @@ func TestE2E_HappyPath(t *testing.T) {
 func TestE2E_BadPKCEVerifier(t *testing.T) {
 	ts := newTestServer(t)
 	authorizeURL := buildAuthorizeURL(testClientID, testRedirectURI, "", "", testChallenge())
-
-	// login
 	sessionCookie := loginAs(t, ts, "demo", "demo", authorizeURL)
 
-	// authorize
 	resp, err := ts.do(t, http.MethodGet, authorizeURL, nil, []*http.Cookie{sessionCookie})
 	if err != nil {
 		t.Fatalf("authorize: %v", err)
@@ -482,7 +565,6 @@ func TestE2E_BadPKCEVerifier(t *testing.T) {
 	resp.Body.Close()
 	code := mustQuery(t, cb, "code")
 
-	// token with WRONG verifier
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", code)
@@ -523,7 +605,7 @@ func TestE2E_MismatchedRedirectURI(t *testing.T) {
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", code)
-	form.Set("redirect_uri", "https://attacker.example/cb") // different from issued URI
+	form.Set("redirect_uri", "https://attacker.example/cb")
 	form.Set("client_id", testClientID)
 	form.Set("code_verifier", testVerifier)
 	resp, err = ts.do(t, http.MethodPost, "/connect/token", form, nil)
@@ -539,7 +621,6 @@ func TestE2E_MismatchedRedirectURI(t *testing.T) {
 
 func TestE2E_InvalidRedirectURIOnAuthorize_NotRedirected(t *testing.T) {
 	ts := newTestServer(t)
-	// Redirect_uri not registered → must NOT 302 to the unvalidated URI.
 	u := buildAuthorizeURLRaw(testClientID, "https://attacker.example/cb", testState, testNonce, testChallenge())
 	resp, err := ts.do(t, http.MethodGet, u, nil, nil)
 	if err != nil {
@@ -602,7 +683,6 @@ func TestE2E_DiscoveryDocument(t *testing.T) {
 
 // --- M4: refresh, userinfo, revoke, logout, expired-code negative path ---
 
-// tokenResponse mirrors the JSON shape of the /connect/token response.
 type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	TokenType    string `json:"token_type"`
@@ -612,9 +692,6 @@ type tokenResponse struct {
 	Scope        string `json:"scope"`
 }
 
-// exchangeCodeForTokens runs the full happy path through the HTTP layer
-// and returns the parsed token response + the session cookie. Centralised
-// so the M4 tests can focus on what they exercise.
 func exchangeCodeForTokens(t *testing.T, ts *testServer) (tokenResponse, *http.Cookie) {
 	t.Helper()
 	authorizeURL := buildAuthorizeURL(testClientID, testRedirectURI, testState, testNonce, testChallenge())
@@ -659,7 +736,6 @@ func TestE2E_RefreshGrant_Rotates(t *testing.T) {
 	ts := newTestServer(t)
 	first, _ := exchangeCodeForTokens(t, ts)
 
-	// Refresh once → new tokens.
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", first.RefreshToken)
@@ -689,7 +765,6 @@ func TestE2E_RefreshGrant_Rotates(t *testing.T) {
 	if second.IDToken == "" {
 		t.Errorf("id_token missing on refresh")
 	}
-	// The rotated refresh token works; the old one is consumed.
 	form.Set("refresh_token", second.RefreshToken)
 	resp, _ = ts.do(t, http.MethodPost, "/connect/token", form, nil)
 	resp.Body.Close()
@@ -702,7 +777,6 @@ func TestE2E_RefreshGrant_ReuseRevokesChain(t *testing.T) {
 	ts := newTestServer(t)
 	first, _ := exchangeCodeForTokens(t, ts)
 
-	// First refresh: ok.
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", first.RefreshToken)
@@ -713,7 +787,6 @@ func TestE2E_RefreshGrant_ReuseRevokesChain(t *testing.T) {
 		t.Fatalf("first refresh status = %d, want 200", resp.StatusCode)
 	}
 
-	// Replay the ORIGINAL token: reuse detected.
 	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
 	if err != nil {
 		t.Fatalf("reuse request: %v", err)
@@ -735,7 +808,6 @@ func TestE2E_RefreshGrant_ReuseRevokesChain(t *testing.T) {
 		t.Errorf("error_description = %q, want it to mention reuse", er.ErrorDescription)
 	}
 
-	// The chain is revoked: an audit log entry exists.
 	logs, _ := ts.auditLogs.GetPaged(context.Background(), domain.PagedRequest{Page: 1, PageSize: 10})
 	if logs.TotalCount < 1 {
 		t.Errorf("expected at least 1 audit log entry, got %d", logs.TotalCount)
@@ -769,7 +841,6 @@ func TestE2E_UserInfo_BearerGET(t *testing.T) {
 	if claims["sub"] != "u-demo" {
 		t.Errorf("sub = %v, want u-demo", claims["sub"])
 	}
-	// scope includes profile + email → those claims must be present.
 	if _, ok := claims["email"]; !ok {
 		t.Errorf("email claim missing")
 	}
@@ -843,7 +914,6 @@ func TestE2E_Revoke_OwnRefreshToken(t *testing.T) {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 
-	// Now refreshing with the revoked token must fail.
 	form2 := url.Values{}
 	form2.Set("grant_type", "refresh_token")
 	form2.Set("refresh_token", tr.RefreshToken)
@@ -943,7 +1013,6 @@ func TestE2E_Logout_PostRevokesAndClears(t *testing.T) {
 	ts := newTestServer(t)
 	tr, sessionCookie := exchangeCodeForTokens(t, ts)
 
-	// Load the confirm page to get a CSRF cookie + token.
 	resp, err := ts.do(t, http.MethodGet, "/logout", nil, []*http.Cookie{sessionCookie})
 	if err != nil {
 		t.Fatalf("GET /logout: %v", err)
@@ -956,7 +1025,6 @@ func TestE2E_Logout_PostRevokesAndClears(t *testing.T) {
 		t.Fatalf("logout CSRF cookie not set")
 	}
 
-	// POST /connect/logout with CSRF + confirm=yes.
 	form := url.Values{}
 	form.Set("csrf_token", csrfToken)
 	form.Set("post_logout_redirect_uri", "/")
@@ -972,12 +1040,10 @@ func TestE2E_Logout_PostRevokesAndClears(t *testing.T) {
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("status = %d, want 302; body=%s", resp.StatusCode, rb)
 	}
-	// State must be appended to the redirect.
 	loc := resp.Header.Get("Location")
 	if !strings.Contains(loc, "state=abc") {
 		t.Errorf("Location = %q, want it to carry state=abc", loc)
 	}
-	// Session cookie cleared.
 	var cleared bool
 	for _, c := range resp.Cookies() {
 		if c.Name == ".auth.session" && c.MaxAge < 0 {
@@ -988,7 +1054,6 @@ func TestE2E_Logout_PostRevokesAndClears(t *testing.T) {
 		t.Errorf("session cookie not cleared; cookies=%v", resp.Cookies())
 	}
 
-	// The refresh token from this session must now be revoked.
 	rt, _ := ts.refreshTokens.FindByHash(context.Background(), token.HashToken(tr.RefreshToken))
 	if rt == nil || rt.RevokedAt == nil {
 		t.Errorf("refresh token not revoked after logout; rt=%+v", rt)
@@ -999,7 +1064,6 @@ func TestE2E_Logout_PostRejectsBadCSRF(t *testing.T) {
 	ts := newTestServer(t)
 	_, sessionCookie := exchangeCodeForTokens(t, ts)
 
-	// No CSRF cookie at all → POST is rejected.
 	form := url.Values{}
 	form.Set("csrf_token", "totally-bogus")
 	form.Set("confirm", "yes")
@@ -1040,7 +1104,6 @@ func TestE2E_Logout_PostCancelDoesNotRevoke(t *testing.T) {
 		t.Fatalf("status = %d, want 302", resp.StatusCode)
 	}
 
-	// Refresh token must still be valid (cancel did not revoke).
 	rtForm := url.Values{}
 	rtForm.Set("grant_type", "refresh_token")
 	rtForm.Set("refresh_token", tr.RefreshToken)
@@ -1055,10 +1118,6 @@ func TestE2E_Logout_PostCancelDoesNotRevoke(t *testing.T) {
 	}
 }
 
-// TestE2E_ExpiredCode_Rejected: T4.5 negative-path coverage for the
-// expired-code case through the real HTTP layer. The unit test in
-// grants/authcode_test.go covers the same path against the grant
-// directly; this is the integration-level mirror.
 func TestE2E_ExpiredCode_Rejected(t *testing.T) {
 	ts := newTestServer(t)
 	authorizeURL := buildAuthorizeURL(testClientID, testRedirectURI, testState, testNonce, testChallenge())
@@ -1071,8 +1130,6 @@ func TestE2E_ExpiredCode_Rejected(t *testing.T) {
 	resp.Body.Close()
 	code := mustQuery(t, resp.Header.Get("Location"), "code")
 
-	// Advance the clock past the auth-code lifetime (1 minute in the
-	// test config). All subsequent tokens will be expired.
 	ts.clk.Advance(2 * time.Minute)
 
 	form := url.Values{}
@@ -1100,6 +1157,368 @@ func TestE2E_ExpiredCode_Rejected(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(er.ErrorDescription), "expir") {
 		t.Errorf("error_description = %q, want it to mention expiry", er.ErrorDescription)
+	}
+}
+
+// --- T5.4: same suite re-run against the GORM-backed store. ---
+
+// gormFlowTest runs the most important end-to-end paths against the
+// GORM SQLite backend. The intent is to prove functional parity with
+// the memory backend (M3 + M4) and to catch any GORM-specific bug in
+// the CAS, the chain-revoke, and the round-trips.
+func gormFlowTest(t *testing.T, name string, fn func(t *testing.T, ts *testServer)) {
+	t.Helper()
+	t.Run("GORM/"+name, func(t *testing.T) {
+		ts := newGormTestServer(t)
+		fn(t, ts)
+	})
+}
+
+func TestGORM_E2E_HappyPath(t *testing.T) { gormFlowTest(t, "HappyPath", testE2EHappyPath) }
+func TestGORM_E2E_BadPKCE(t *testing.T)   { gormFlowTest(t, "BadPKCE", testE2EBadPKCE) }
+func TestGORM_E2E_MismatchedRedirect(t *testing.T) {
+	gormFlowTest(t, "MismatchedRedirect", testE2EMismatchedRedirect)
+}
+func TestGORM_E2E_RefreshRotates(t *testing.T) {
+	gormFlowTest(t, "RefreshRotates", testE2ERefreshRotates)
+}
+func TestGORM_E2E_RefreshReuseRevokes(t *testing.T) {
+	gormFlowTest(t, "RefreshReuseRevokes", testE2ERefreshReuseRevokes)
+}
+func TestGORM_E2E_UserInfo(t *testing.T) { gormFlowTest(t, "UserInfo", testE2EUserInfo) }
+func TestGORM_E2E_Revoke(t *testing.T)   { gormFlowTest(t, "Revoke", testE2ERevoke) }
+func TestGORM_E2E_Logout(t *testing.T)   { gormFlowTest(t, "Logout", testE2ELogout) }
+func TestGORM_E2E_ExpiredCode(t *testing.T) {
+	gormFlowTest(t, "ExpiredCode", testE2EExpiredCode)
+}
+
+// The following helpers are extracted bodies of the matching
+// in-memory tests so the GORM suite can re-run them byte-for-byte.
+
+// testE2EHappyPath is the in-process version of TestE2E_HappyPath, but
+// without the surrounding newTestServer so the gorm variant can call
+// it. It only differs in the test name; all assertions are identical.
+func testE2EHappyPath(t *testing.T, ts *testServer) {
+	authorizeURL := buildAuthorizeURL(testClientID, testRedirectURI, testState, testNonce, testChallenge())
+	resp, err := ts.do(t, http.MethodGet, authorizeURL, nil, nil)
+	if err != nil {
+		t.Fatalf("GET authorize: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "/login?returnUrl=") {
+		t.Fatalf("Location = %q, want /login?returnUrl=...", loc)
+	}
+
+	resp, err = ts.do(t, http.MethodGet, "/login", nil, nil)
+	if err != nil {
+		t.Fatalf("GET login: %v", err)
+	}
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	csrfToken := extractInputValue(t, string(bodyBytes), `name="csrf_token"`)
+	csrfCookie := findCookie(resp.Cookies(), "_csrf")
+
+	form := url.Values{}
+	form.Set("csrf_token", csrfToken)
+	form.Set("username", testUser)
+	form.Set("password", testPassword)
+	form.Set("returnUrl", authorizeURL)
+	resp, err = ts.do(t, http.MethodPost, "/login", form, []*http.Cookie{csrfCookie})
+	if err != nil {
+		t.Fatalf("POST login: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("login POST status = %d, want 302", resp.StatusCode)
+	}
+	sessionCookie := findCookie(resp.Cookies(), ".auth.session")
+	if sessionCookie == nil {
+		t.Fatalf("session cookie not set")
+	}
+
+	resp, err = ts.do(t, http.MethodGet, authorizeURL, nil, []*http.Cookie{sessionCookie})
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("authorize status = %d, want 302", resp.StatusCode)
+	}
+	cb := resp.Header.Get("Location")
+	cbURL, _ := url.Parse(cb)
+	code := cbURL.Query().Get("code")
+	state := cbURL.Query().Get("state")
+	if code == "" || state != testState {
+		t.Fatalf("callback missing code/state: %s", cb)
+	}
+
+	form = url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", testRedirectURI)
+	form.Set("client_id", testClientID)
+	form.Set("code_verifier", testVerifier)
+	resp, err = ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("token status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	var tokenResp struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		IDToken      string `json:"id_token"`
+		TokenType    string `json:"token_type"`
+	}
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if tokenResp.AccessToken == "" || tokenResp.RefreshToken == "" || tokenResp.IDToken == "" {
+		t.Fatalf("missing tokens: %+v", tokenResp)
+	}
+
+	idTok, err := ts.issuer.VerifyToken(context.Background(), tokenResp.IDToken)
+	if err != nil {
+		t.Fatalf("VerifyToken(id): %v", err)
+	}
+	if idTok.Subject() != "u-demo" {
+		t.Errorf("sub = %q, want u-demo", idTok.Subject())
+	}
+
+	// Replay → invalid_grant.
+	resp, err = ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("replay status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func testE2EBadPKCE(t *testing.T, ts *testServer) {
+	authorizeURL := buildAuthorizeURL(testClientID, testRedirectURI, "", "", testChallenge())
+	sessionCookie := loginAs(t, ts, "demo", "demo", authorizeURL)
+
+	resp, err := ts.do(t, http.MethodGet, authorizeURL, nil, []*http.Cookie{sessionCookie})
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	cb := resp.Header.Get("Location")
+	resp.Body.Close()
+	code := mustQuery(t, cb, "code")
+
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", testRedirectURI)
+	form.Set("client_id", testClientID)
+	form.Set("code_verifier", "wrong-verifier-12345678901234567890123456789012")
+	resp, err = ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body=%s", resp.StatusCode, body)
+	}
+}
+
+func testE2EMismatchedRedirect(t *testing.T, ts *testServer) {
+	authorizeURL := buildAuthorizeURL(testClientID, testRedirectURI, "", "", testChallenge())
+	sessionCookie := loginAs(t, ts, "demo", "demo", authorizeURL)
+
+	resp, err := ts.do(t, http.MethodGet, authorizeURL, nil, []*http.Cookie{sessionCookie})
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	cb := resp.Header.Get("Location")
+	resp.Body.Close()
+	code := mustQuery(t, cb, "code")
+
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", "https://attacker.example/cb")
+	form.Set("client_id", testClientID)
+	form.Set("code_verifier", testVerifier)
+	resp, err = ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body=%s", resp.StatusCode, body)
+	}
+}
+
+func testE2ERefreshRotates(t *testing.T, ts *testServer) {
+	first, _ := exchangeCodeForTokens(t, ts)
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", first.RefreshToken)
+	form.Set("client_id", testClientID)
+	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	var second tokenResponse
+	if err := json.Unmarshal(body, &second); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if second.AccessToken == first.AccessToken {
+		t.Errorf("access token not rotated")
+	}
+	if second.RefreshToken == first.RefreshToken {
+		t.Errorf("refresh token not rotated")
+	}
+}
+
+func testE2ERefreshReuseRevokes(t *testing.T, ts *testServer) {
+	first, _ := exchangeCodeForTokens(t, ts)
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", first.RefreshToken)
+	form.Set("client_id", testClientID)
+	resp, _ := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first refresh status = %d", resp.StatusCode)
+	}
+	// Replay original token → reuse detected.
+	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("reuse: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("reuse status = %d, want 400", resp.StatusCode)
+	}
+	var er struct {
+		Error            string `json:"error"`
+		ErrorDescription string `json:"error_description"`
+	}
+	_ = json.Unmarshal(body, &er)
+	if er.Error != "invalid_grant" {
+		t.Errorf("error = %q, want invalid_grant", er.Error)
+	}
+	logs, _ := ts.auditLogs.GetPaged(context.Background(), domain.PagedRequest{Page: 1, PageSize: 10})
+	if logs.TotalCount < 1 {
+		t.Errorf("expected audit log entry, got 0")
+	}
+}
+
+func testE2EUserInfo(t *testing.T, ts *testServer) {
+	tr, _ := exchangeCodeForTokens(t, ts)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL("/connect/userinfo"), nil)
+	req.Header.Set("Authorization", "Bearer "+tr.AccessToken)
+	resp, err := ts.client.Do(req)
+	if err != nil {
+		t.Fatalf("userinfo: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(body, &claims); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if claims["sub"] != "u-demo" {
+		t.Errorf("sub = %v", claims["sub"])
+	}
+}
+
+func testE2ERevoke(t *testing.T, ts *testServer) {
+	tr, _ := exchangeCodeForTokens(t, ts)
+	form := url.Values{}
+	form.Set("token", tr.RefreshToken)
+	form.Set("client_id", testClientID)
+	resp, err := ts.do(t, http.MethodPost, "/connect/revoke", form, nil)
+	if err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+	rt, _ := ts.refreshTokens.FindByHash(context.Background(), token.HashToken(tr.RefreshToken))
+	if rt == nil || rt.RevokedAt == nil {
+		t.Errorf("refresh token not revoked")
+	}
+}
+
+func testE2ELogout(t *testing.T, ts *testServer) {
+	tr, sessionCookie := exchangeCodeForTokens(t, ts)
+	resp, err := ts.do(t, http.MethodGet, "/logout", nil, []*http.Cookie{sessionCookie})
+	if err != nil {
+		t.Fatalf("GET /logout: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	csrfToken := extractInputValue(t, string(body), `name="csrf_token"`)
+	csrfCookie := findCookie(resp.Cookies(), "_logout_csrf")
+	if csrfCookie == nil {
+		t.Fatalf("CSRF cookie not set")
+	}
+	form := url.Values{}
+	form.Set("csrf_token", csrfToken)
+	form.Set("client_id", testClientID)
+	form.Set("confirm", "yes")
+	resp, err = ts.do(t, http.MethodPost, "/connect/logout", form, []*http.Cookie{sessionCookie, csrfCookie})
+	if err != nil {
+		t.Fatalf("POST logout: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Errorf("status = %d, want 302", resp.StatusCode)
+	}
+	rt, _ := ts.refreshTokens.FindByHash(context.Background(), token.HashToken(tr.RefreshToken))
+	if rt == nil || rt.RevokedAt == nil {
+		t.Errorf("refresh token not revoked after logout")
+	}
+}
+
+func testE2EExpiredCode(t *testing.T, ts *testServer) {
+	authorizeURL := buildAuthorizeURL(testClientID, testRedirectURI, testState, testNonce, testChallenge())
+	sessionCookie := loginAs(t, ts, testUser, testPassword, authorizeURL)
+	resp, err := ts.do(t, http.MethodGet, authorizeURL, nil, []*http.Cookie{sessionCookie})
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	resp.Body.Close()
+	code := mustQuery(t, resp.Header.Get("Location"), "code")
+	ts.clk.Advance(2 * time.Minute)
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", testRedirectURI)
+	form.Set("client_id", testClientID)
+	form.Set("code_verifier", testVerifier)
+	resp, err = ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body=%s", resp.StatusCode, body)
 	}
 }
 
@@ -1207,8 +1626,6 @@ func sliceContains(s []string, want string) bool {
 	return false
 }
 
-// sameURL compares two URL strings by their parsed query params, so the
-// test is not sensitive to whether the path was encoded with %20 or +.
 func sameURL(a, b string) bool {
 	ua, errA := url.Parse(a)
 	ub, errB := url.Parse(b)
@@ -1237,5 +1654,4 @@ func sameURL(a, b string) bool {
 	return true
 }
 
-// touch unused import to keep formatting happy in case fmt is dropped.
 var _ = fmt.Sprintf

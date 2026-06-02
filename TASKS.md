@@ -36,10 +36,10 @@ until **Done when** holds. Full spec lives in `BUILD_PROMPT.md`; this file is th
 - [x] **T4.5 Negative-path tests** — code reuse, expired code, wrong PKCE verifier, mismatched redirect_uri. **Done when** all four rejected.
 
 ## M5 — GORM persistence
-- [ ] **T5.1 Entities + AutoMigrate** — `internal/store/gormstore`: GORM entities (Properties/[]string → JSON or child tables), `Migrate`, DB open from config (postgres|sqlite). **Done when** AutoMigrate builds schema on SQLite.
-- [ ] **T5.2 GORM stores (non-atomic)** — all methods except CAS. **Done when** store/load a client and page refresh tokens on SQLite.
-- [ ] **T5.3 GORM atomic CAS** — `MarkConsumed` via conditional `Update ... WHERE consumed_at IS NULL`, check `RowsAffected`. **Done when** concurrent test → exactly one `true`.
-- [ ] **T5.4 Swap server to GORM** — driver from config, memory kept for unit tests; re-run M3+M4 suite on SQLite. **Done when** full suite passes with GORM.
+- [x] **T5.1 Entities + AutoMigrate** — `internal/store/gormstore`: GORM entities (Properties/[]string → JSON or child tables), `Migrate`, DB open from config (postgres|sqlite). **Done when** AutoMigrate builds schema on SQLite.
+- [x] **T5.2 GORM stores (non-atomic)** — all methods except CAS. **Done when** store/load a client and page refresh tokens on SQLite.
+- [x] **T5.3 GORM atomic CAS** — `MarkConsumed` via conditional `Update ... WHERE consumed_at IS NULL`, check `RowsAffected`. **Done when** concurrent test → exactly one `true`.
+- [x] **T5.4 Swap server to GORM** — driver from config, memory kept for unit tests; re-run M3+M4 suite on SQLite. **Done when** full suite passes with GORM.
 
 ## M6 — Confidential clients
 - [ ] **T6.1 client_credentials grant** — `grants/clientcreds.go`: confidential-only, `AllowClientCredentials`, access token only (`sub=client_id`). **Done when** test asserts no id/refresh token.
