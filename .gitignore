@@ -1,0 +1,79 @@
+# ==========================================
+# Go Binaries and Build Outputs
+# ==========================================
+# Compiled binaries/executables
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries and coverage reports
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Common Go build directories
+/bin/
+/dist/
+/out/
+
+# Delve (Go Debugger) temporary binaries
+__debug_bin
+
+# ==========================================
+# Dependencies
+# ==========================================
+# Go modules are cached globally by default. If you use 'go mod vendor', 
+# uncomment the line below ONLY if you don't want to commit your vendor folder.
+# vendor/
+
+# ==========================================
+# IDEs and Editors
+# ==========================================
+
+# JetBrains (GoLand, IntelliJ IDEA)
+.idea/
+*.iml
+*.iws
+
+# Visual Studio Code
+.vscode/
+!.vscode/extensions.json
+*.code-workspace
+
+# SublimeText / Vim
+*.sublime-project
+*.sublime-workspace
+*~
+*.swp
+*.swo
+
+# ==========================================
+# Environment Variables and Secrets
+# ==========================================
+# NEVER commit sensitive credentials to version control.
+.env
+.env.*
+!.env.example
+config.local.yaml
+secrets.json
+
+# ==========================================
+# Operating System Files
+# ==========================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+.fuse_hidden*
+.directory
