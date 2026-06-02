@@ -397,7 +397,7 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	csrfMW := admin.CSRFMiddleware(dpActive.CSRFKey)
+	csrfMW := admin.CSRFMiddleware(dpActive.CSRFKey, cfg.RequireHTTPS)
 	apiMux := http.NewServeMux()
 	(&admin.API{
 		Clients:       bundle.Clients,

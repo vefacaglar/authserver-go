@@ -341,3 +341,49 @@ func TestMemAssertionCache_LazyGC(t *testing.T) {
 
 // keep the linter quiet about httptest if the file loses its only user.
 var _ = httptest.NewRecorder
+
+// §2.4 (plan-2.md) — RFC 7519 §4.1.3 says the JWT `aud` value is
+// case-sensitive, and RFC 3986 §6.2.2 makes the scheme and host
+// case-insensitive but the rest of the URI case-sensitive. The
+// old equalAudience used EqualFold on the whole string, which let
+// /CONNECT/TOKEN match /connect/token — a spec violation.
+//
+// The fix splits the comparison: scheme + host via EqualFold, the
+// remainder (path, query, fragment) byte-for-byte. Hosts are
+// lower-cased before compare, so HTTPS://Auth.Example.com matches
+// https://auth.example.com.
+func TestEqualAudience_CaseRules(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		// Exact match.
+		{"identical", "https://auth.example.com/connect/token", "https://auth.example.com/connect/token", true},
+		// Host case-insensitive (RFC 3986 §6.2.2.1).
+		{"host upper", "https://AUTH.EXAMPLE.COM/connect/token", "https://auth.example.com/connect/token", true},
+		{"host mixed", "https://Auth.Example.com/connect/token", "https://auth.example.com/connect/token", true},
+		// Scheme case-insensitive.
+		{"scheme upper", "HTTPS://auth.example.com/connect/token", "https://auth.example.com/connect/token", true},
+		// Path case-sensitive (RFC 3986 §6.2.2.1) — the bug.
+		{"path upper", "https://auth.example.com/CONNECT/token", "https://auth.example.com/connect/token", false},
+		{"path mixed", "https://auth.example.com/Connect/Token", "https://auth.example.com/connect/token", false},
+		// Query case-sensitive.
+		{"query case", "https://auth.example.com/x?Token=abc", "https://auth.example.com/x?token=abc", false},
+		// Different host.
+		{"host diff", "https://auth.example.com/x", "https://other.example.com/x", false},
+		{"host suffix attack", "https://auth.example.com.evil.com/x", "https://auth.example.com/x", false},
+		// Fragment.
+		{"fragment diff", "https://auth.example.com/x#a", "https://auth.example.com/x#b", false},
+		// Unparseable on either side: falls back to raw equality.
+		{"raw opaque match", "not://a real url", "not://a real url", true},
+		{"raw opaque diff", "not://a real url", "not://a real url!", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := equalAudience(tc.a, tc.b); got != tc.want {
+				t.Errorf("equalAudience(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+			}
+		})
+	}
+}

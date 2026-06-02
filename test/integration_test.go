@@ -2950,7 +2950,7 @@ func buildTestAdminMount(t *testing.T, b bundle, clk *clock.FakeClock, logger *s
 	if err != nil {
 		t.Fatalf("admin.AuthMiddleware: %v", err)
 	}
-	csrfMW := admin.CSRFMiddleware([]byte("0123456789abcdef0123456789abcdef"))
+	csrfMW := admin.CSRFMiddleware([]byte("0123456789abcdef0123456789abcdef"), false)
 	apiMux := http.NewServeMux()
 	(&admin.API{
 		Clients:       b.Clients,
