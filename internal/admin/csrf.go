@@ -32,5 +32,14 @@ func CSRFMiddleware(key []byte) func(http.Handler) http.Handler {
 		copy(padded, key)
 		key = padded
 	}
-	return csrf.Protect(key, csrf.Secure(false), csrf.Path("/admin/"))
+	return csrf.Protect(key, 
+		csrf.Secure(false), 
+		csrf.Path("/admin/"),
+		csrf.TrustedOrigins([]string{
+			"localhost:5175",
+			"127.0.0.1:5175",
+			"localhost:8090",
+			"127.0.0.1:8090",
+		}),
+	)
 }
