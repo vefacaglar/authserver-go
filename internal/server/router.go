@@ -128,6 +128,10 @@ func NewRouter(cfg RouterConfig, opts RouterOptions, h Handlers) http.Handler {
 	if h.Admin != nil {
 		adminRoot := http.StripPrefix("/admin", h.Admin.Root)
 		adminAPI := http.StripPrefix("/admin", h.Admin.API)
+		// Redirect /admin to /admin/ for developer convenience.
+		r.Get("/admin", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
+		})
 		// /admin/  — SPA index (serves the same handler; the
 		// inner CombineMux dispatches /api/... to the API mux).
 		r.Mount("/admin/", adminRoot)
