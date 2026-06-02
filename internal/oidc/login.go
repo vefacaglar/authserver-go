@@ -81,6 +81,7 @@ func (h *LoginHandler) verifyCSRFToken(r *http.Request) bool {
 type LoginConfig struct {
 	IssuerURL       string
 	LoginPath       string
+	RegisterPath    string
 	AuthorizePath   string
 	SessionLifetime time.Duration
 }
@@ -105,16 +106,18 @@ func (h *LoginHandler) render(w http.ResponseWriter, r *http.Request, errorCode,
 	w.Header().Set("Cache-Control", "no-store")
 	token := h.issueCSRFToken(w, r)
 	data := struct {
-		CSRFToken  string
-		Action     string
-		ReturnURL  string
-		Error      string
-		ErrorLabel string
+		CSRFToken    string
+		Action       string
+		ReturnURL    string
+		RegisterPath string
+		Error        string
+		ErrorLabel   string
 	}{
-		CSRFToken: token,
-		Action:    h.Cfg.LoginPath,
-		ReturnURL: returnURL,
-		Error:     errorCode,
+		CSRFToken:    token,
+		Action:       h.Cfg.LoginPath,
+		ReturnURL:    returnURL,
+		RegisterPath: h.Cfg.RegisterPath,
+		Error:        errorCode,
 	}
 	if errorCode != "" {
 		data.ErrorLabel = loginErrorLabel(errorCode)

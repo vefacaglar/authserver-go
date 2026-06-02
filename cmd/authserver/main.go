@@ -92,12 +92,14 @@ func run(logger *slog.Logger) error {
 	}, clk)
 
 	loginTmpl := template.Must(template.New("login").Parse(oidc.LoginTemplate()))
+	registerTmpl := template.Must(template.New("register").Parse(oidc.RegisterTemplate()))
 	logoutTmpl := template.Must(template.New("logout").Parse(oidc.LogoutTemplate()))
 
 	loginHandler := &oidc.LoginHandler{
 		Cfg: oidc.LoginConfig{
 			IssuerURL:       cfg.Issuer,
 			LoginPath:       cfg.LoginPath,
+			RegisterPath:    cfg.RegisterPath,
 			AuthorizePath:   "/connect/authorize",
 			SessionLifetime: 8 * time.Hour,
 		},
@@ -108,6 +110,17 @@ func run(logger *slog.Logger) error {
 		Clock:    clk,
 		Logger:   logger,
 		Template: loginTmpl,
+	}
+	registerHandler := &oidc.RegisterHandler{
+		Cfg: oidc.RegisterConfig{
+			RegisterPath: cfg.RegisterPath,
+			LoginPath:    cfg.LoginPath,
+			IssuerURL:    cfg.Issuer,
+		},
+		Users:    bundle.Users,
+		Clock:    clk,
+		Logger:   logger,
+		Template: registerTmpl,
 	}
 	authorizeHandler := &oidc.AuthorizeHandler{
 		Cfg: oidc.AuthorizeConfig{
@@ -245,6 +258,7 @@ func run(logger *slog.Logger) error {
 
 	handlers := server.Handlers{
 		Login:     loginHandler,
+		Register:  registerHandler,
 		Logout:    logoutHandler,
 		Authorize: authorizeHandler,
 		Token:     tokenHandler,
@@ -260,6 +274,7 @@ func run(logger *slog.Logger) error {
 			IssuerURL:         cfg.Issuer,
 			RequireHTTPS:      cfg.RequireHTTPS,
 			LoginPath:         cfg.LoginPath,
+			RegisterPath:      cfg.RegisterPath,
 			LogoutPath:        cfg.LogoutPath,
 			AuthorizePath:     "/connect/authorize",
 			TokenPath:         "/connect/token",

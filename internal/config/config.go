@@ -28,6 +28,7 @@ type Config struct {
 
 	LoginPath             string
 	LogoutPath            string
+	RegisterPath          string
 	PostLogoutRedirectURI string
 
 	AuthCodeLifetime             time.Duration
@@ -59,6 +60,7 @@ func Load() (*Config, error) {
 		CookieName:                   getenv("AUTH_COOKIE_NAME", ".auth.session"),
 		LoginPath:                    getenv("AUTH_LOGIN_PATH", "/login"),
 		LogoutPath:                   getenv("AUTH_LOGOUT_PATH", "/logout"),
+		RegisterPath:                 getenv("AUTH_REGISTER_PATH", "/register"),
 		PostLogoutRedirectURI:        getenv("AUTH_POST_LOGOUT_REDIRECT_URI", "/"),
 		AuthCodeLifetime:             getdur("AUTH_AUTH_CODE_LIFETIME", 60*time.Second),
 		AccessTokenLifetime:          getdur("AUTH_ACCESS_TOKEN_LIFETIME", time.Hour),
@@ -121,6 +123,9 @@ func (c *Config) validate() error {
 	}
 	if c.LogoutPath == "" || !strings.HasPrefix(c.LogoutPath, "/") {
 		return errors.New("AUTH_LOGOUT_PATH must be an absolute path")
+	}
+	if c.RegisterPath == "" || !strings.HasPrefix(c.RegisterPath, "/") {
+		return errors.New("AUTH_REGISTER_PATH must be an absolute path")
 	}
 	if len(c.CookieHMAC) == 0 || len(c.CookieBlock) == 0 {
 		return errors.New("AUTH_COOKIE_HASH_KEY and AUTH_COOKIE_BLOCK_KEY are required")

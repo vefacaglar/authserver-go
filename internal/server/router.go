@@ -23,6 +23,7 @@ type RouterConfig struct {
 	IssuerURL     string
 	RequireHTTPS  bool
 	LoginPath     string
+	RegisterPath  string
 	LogoutPath    string
 	AuthorizePath string
 	TokenPath     string
@@ -43,6 +44,7 @@ type RouterConfig struct {
 // the route is not exposed (e.g. during a partial integration test).
 type Handlers struct {
 	Login     http.Handler
+	Register  http.Handler
 	Logout    http.Handler
 	Authorize http.Handler
 	Token     http.Handler
@@ -86,6 +88,12 @@ func NewRouter(cfg RouterConfig, opts RouterOptions, h Handlers) http.Handler {
 		limiter := NewLoginRateLimiter(cfg.LoginRateLimitRPS, cfg.LoginRateBurst)
 		loginChain := limiter.Middleware(h.Login)
 		r.Handle(cfg.LoginPath, loginChain)
+	}
+	if h.Register != nil && cfg.RegisterPath != "" {
+		// Use the same rate limit logic for registration to prevent abuse.
+		limiter := NewLoginRateLimiter(cfg.LoginRateLimitRPS, cfg.LoginRateBurst)
+		registerChain := limiter.Middleware(h.Register)
+		r.Handle(cfg.RegisterPath, registerChain)
 	}
 	if h.Logout != nil {
 		// Logout owns both /connect/logout and the confirm page at

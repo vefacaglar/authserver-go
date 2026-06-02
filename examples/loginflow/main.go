@@ -53,6 +53,7 @@ func main() {
 	http.HandleFunc("/", home)
 	http.HandleFunc("/login", login)
 	http.HandleFunc("/callback", callback)
+	http.HandleFunc("/logout", logout)
 	log.Printf("demo client on http://localhost%s  (issuer=%s)", addr, issuer)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
@@ -90,6 +91,19 @@ func login(w http.ResponseWriter, r *http.Request) {
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", "S256")
 	http.Redirect(w, r, issuer+"/connect/authorize?"+q.Encode(), http.StatusFound)
+}
+
+// logout redirects the browser to the auth server's end session endpoint.
+func logout(w http.ResponseWriter, r *http.Request) {
+	hint := r.URL.Query().Get("id_token_hint")
+	q := url.Values{}
+	q.Set("client_id", clientID)
+	// The seed sets http://localhost:8090/ for the demo-public client
+	q.Set("post_logout_redirect_uri", "http://localhost:8090/")
+	if hint != "" {
+		q.Set("id_token_hint", hint)
+	}
+	http.Redirect(w, r, issuer+"/connect/logout?"+q.Encode(), http.StatusFound)
 }
 
 // callback receives ?code&state, exchanges the code for tokens, calls
@@ -161,13 +175,15 @@ func callback(w http.ResponseWriter, r *http.Request) {
 		<h2>userinfo</h2><pre>%s</pre>
 		<h2>access_token (decoded)</h2><pre>%s</pre>
 		<h2>refresh_token (opaque)</h2><pre>%s</pre>
-		<p><a class="btn" href="/login">Log in again</a>
+		<p><a class="btn" href="/logout?id_token_hint=%s">Log out</a>
+		   <a class="btn" href="/login">Log in again</a>
 		   <a href="/">home</a></p>`,
 		html(tok.TokenType), tok.ExpiresIn, html(tok.Scope),
 		html(decodeJWT(tok.IDToken)),
 		html(userinfo),
 		html(decodeJWT(tok.AccessToken)),
-		html(truncate(tok.RefreshToken, 24))))
+		html(truncate(tok.RefreshToken, 24)),
+		url.QueryEscape(tok.IDToken)))
 }
 
 // --- helpers ---

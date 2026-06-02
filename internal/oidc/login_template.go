@@ -22,6 +22,8 @@ const loginHTML = `<!doctype html>
   label { display: block; margin: 0.75rem 0 0.25rem; }
   input[type=text], input[type=password] { width: 100%; padding: 0.5rem; box-sizing: border-box; }
   button { margin-top: 1rem; padding: 0.5rem 1rem; }
+  .register-link { display: block; margin-top: 1.5rem; text-align: center; font-size: 0.875rem; color: #0056b3; text-decoration: none; }
+  .register-link:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -36,5 +38,6 @@ const loginHTML = `<!doctype html>
   <input id="password" name="password" type="password" autocomplete="current-password" required>
   <button type="submit">Sign in</button>
 </form>
+<a class="register-link" href="{{ .RegisterPath }}">Don't have an account? Register</a>
 </body>
 </html>`
