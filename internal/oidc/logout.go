@@ -221,13 +221,6 @@ func (h *LogoutHandler) validatePostLogoutURI(ctx context.Context, clientID, tar
 	if !u.IsAbs() {
 		return false, nil
 	}
-	iss, err := url.Parse(h.Cfg.IssuerURL)
-	if err != nil {
-		return false, err
-	}
-	if u.Scheme != iss.Scheme || u.Host != iss.Host {
-		return false, nil
-	}
 	if clientID == "" {
 		return false, nil
 	}

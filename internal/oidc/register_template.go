@@ -23,7 +23,7 @@ const registerHTML = `<!doctype html>
 <body>
 <h1>Create an Account</h1>
 {{ if .Error }}<p class="err">{{ .ErrorLabel }}</p>{{ end }}
-<form method="post" action="{{ .Action }}">
+<form method="post" action="{{ .Action }}{{ if .ReturnURL }}?returnUrl={{ .ReturnURL }}{{ end }}">
   <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
   <label for="username">Username</label>
   <input id="username" name="username" type="text" autocomplete="username" required autofocus>

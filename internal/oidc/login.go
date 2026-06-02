@@ -105,6 +105,10 @@ func (h *LoginHandler) render(w http.ResponseWriter, r *http.Request, errorCode,
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	token := h.issueCSRFToken(w, r)
+	registerPath := h.Cfg.RegisterPath
+	if returnURL != "" {
+		registerPath += "?returnUrl=" + url.QueryEscape(returnURL)
+	}
 	data := struct {
 		CSRFToken    string
 		Action       string
@@ -116,7 +120,7 @@ func (h *LoginHandler) render(w http.ResponseWriter, r *http.Request, errorCode,
 		CSRFToken:    token,
 		Action:       h.Cfg.LoginPath,
 		ReturnURL:    returnURL,
-		RegisterPath: h.Cfg.RegisterPath,
+		RegisterPath: registerPath,
 		Error:        errorCode,
 	}
 	if errorCode != "" {
