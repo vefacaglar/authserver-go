@@ -139,7 +139,16 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client
 		granted = requested
 	}
 
-	authTime := existing.CreatedAt
+	// Resolve the chain root so the access token and ID token carry
+	// the *original* authentication time. The consumed token's own
+	// CreatedAt is just the most-recent rotation; writing that as
+	// auth_time would defeat max_age enforcement at the resource
+	// server because every refresh would push auth_time forward.
+	authTime, err := g.chainRootCreatedAt(ctx, existing)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "server_error", "auth_time lookup failed")
+		return
+	}
 	access, err := g.Issuer.IssueAccessToken(ctx, token.AccessTokenClaims{
 		Subject:   existing.UserID,
 		ClientID:  client.ClientID,
@@ -284,4 +293,30 @@ func subset(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// chainRootCreatedAt walks the refresh-token chain from `start` back
+// to the root (the token with no ParentTokenID) and returns the root
+// token's CreatedAt. The walk is bounded by the chain length — a
+// single rotation chain in practice has a handful of entries at most.
+// If a ParentTokenID in the chain refers to a missing token (should
+// not happen: the chain is created sequentially and stored under
+// the same transaction), the walk stops at the first missing parent
+// and returns the last seen CreatedAt.
+func (g *RefreshGrant) chainRootCreatedAt(ctx context.Context, start *domain.RefreshToken) (time.Time, error) {
+	const maxDepth = 1000 // safety net; expected chain depth << this
+	cur := start
+	for i := 0; i < maxDepth; i++ {
+		if cur.ParentTokenID == nil {
+			return cur.CreatedAt, nil
+		}
+		parent, err := g.RefreshTokens.FindByID(ctx, *cur.ParentTokenID)
+		if err != nil {
+			// Missing parent: return the deepest reached CreatedAt
+			// rather than failing the whole token issuance.
+			return cur.CreatedAt, nil
+		}
+		cur = parent
+	}
+	return cur.CreatedAt, nil
 }

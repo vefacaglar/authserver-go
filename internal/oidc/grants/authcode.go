@@ -77,7 +77,11 @@ func (g *AuthCodeGrant) Handle(ctx context.Context, w http.ResponseWriter, clien
 		return
 	}
 	if client.ClientID != clientID {
-		g.writeError(w, http.StatusBadRequest, "invalid_grant", "client_id mismatch with authenticated client")
+		// The form's client_id does not match the client that the
+		// dispatcher authenticated. Per RFC 6749 §5.2 the error is
+		// invalid_client, not invalid_grant: the cause is a client
+		// identity mismatch, not a grant problem.
+		g.writeError(w, http.StatusUnauthorized, "invalid_client", "client_id mismatch with authenticated client")
 		return
 	}
 

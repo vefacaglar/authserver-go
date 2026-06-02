@@ -445,5 +445,100 @@ func (s *stubUserStore) FindByID(context.Context, string) (*domain.UserInfo, err
 	return s.info, s.err
 }
 
+// TestRefresh_AuthTime_UsesChainRoot: regression for §1.4 of plan-2.md.
+// After several rotations, the ID token's auth_time must equal the
+// *root* refresh token's CreatedAt, not the most recently consumed
+// token's. Writing the consumed token's CreatedAt as auth_time
+// would advance auth_time on every rotation and defeat max_age
+// enforcement at the resource server.
+func TestRefresh_AuthTime_UsesChainRoot(t *testing.T) {
+	g, rt, _, client := newTestRefresh(t)
+	raw := mintRefresh(t, rt, g.Clock, id1())
+
+	// Capture the root token's CreatedAt before any rotation.
+	root, err := rt.FindByHash(context.Background(), token.HashToken(raw))
+	if err != nil {
+		t.Fatalf("find root: %v", err)
+	}
+	rootCreatedAt := root.CreatedAt
+
+	// Advance the clock so each rotation creates a token with a
+	// distinct CreatedAt — if the bug were present the ID token
+	// would carry the most-recent rotation's time, not the root's.
+	fc, ok := g.Clock.(*clock.FakeClock)
+	if !ok {
+		t.Fatalf("test setup: g.Clock is %T, want *clock.FakeClock", g.Clock)
+	}
+	fc.Advance(10 * time.Minute)
+
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", raw)
+	form.Set("client_id", "client-1")
+
+	rr := httptest.NewRecorder()
+	g.Handle(context.Background(), rr, client, form)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("refresh: status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	var resp TokenResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.IDToken == "" {
+		t.Fatal("id_token missing")
+	}
+
+	idTok, err := g.Issuer.VerifyToken(context.Background(), resp.IDToken)
+	if err != nil {
+		t.Fatalf("VerifyToken(id): %v", err)
+	}
+	gotAuthTime, _ := idTok.Get("auth_time")
+	if gotAuthTime == nil {
+		t.Fatal("id_token missing auth_time")
+	}
+	var gotSec int64
+	switch v := gotAuthTime.(type) {
+	case float64:
+		gotSec = int64(v)
+	case int64:
+		gotSec = v
+	case json.Number:
+		gotSec, _ = v.Int64()
+	default:
+		t.Fatalf("auth_time has unexpected type %T", gotAuthTime)
+	}
+	wantSec := rootCreatedAt.Unix()
+	if gotSec != wantSec {
+		t.Errorf("auth_time = %d (%s), want %d (chain root CreatedAt = %s)", gotSec, time.Unix(gotSec, 0).UTC(), wantSec, rootCreatedAt)
+	}
+
+	// And the access token carries the same auth_time. The grant
+	// passes AuthTime into both the access and ID token issuance
+	// paths; assert both stay in sync.
+	accessTok, err := g.Issuer.VerifyToken(context.Background(), resp.AccessToken)
+	if err != nil {
+		t.Fatalf("VerifyToken(access): %v", err)
+	}
+	gotAccessAuth, _ := accessTok.Get("auth_time")
+	if gotAccessAuth == nil {
+		t.Fatal("access token missing auth_time")
+	}
+	var gotAccessSec int64
+	switch v := gotAccessAuth.(type) {
+	case float64:
+		gotAccessSec = int64(v)
+	case int64:
+		gotAccessSec = v
+	case json.Number:
+		gotAccessSec, _ = v.Int64()
+	default:
+		t.Fatalf("access auth_time has unexpected type %T", gotAccessAuth)
+	}
+	if gotAccessSec != wantSec {
+		t.Errorf("access auth_time = %d, want %d (chain root)", gotAccessSec, wantSec)
+	}
+}
+
 // keep the store import alive for the linter
 var _ = store.ErrNotFound

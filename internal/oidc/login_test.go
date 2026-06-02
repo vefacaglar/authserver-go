@@ -189,6 +189,67 @@ func TestLogin_POST_RejectsOpenRedirect(t *testing.T) {
 	}
 }
 
+// TestLogin_POST_EmptyReturnUrl_RedirectsToIssuerRoot: regression for
+// §1.3 of plan-2.md. A successful login with no returnUrl used to
+// land the user back on /login with an error=invalid_return banner,
+// because validateReturnURL returns ("", nil) for empty input.
+// The handler must now redirect to the issuer root.
+func TestLogin_POST_EmptyReturnUrl_RedirectsToIssuerRoot(t *testing.T) {
+	h, _, _ := newTestLoginHandler(t)
+	getRR := httptest.NewRecorder()
+	h.ServeHTTP(getRR, httptest.NewRequest(http.MethodGet, "/login", nil))
+	csrfToken := extractCSRFToken(t, getRR.Body.String())
+	csrfCookie := findCookie(getRR.Result().Cookies(), csrfCookieName)
+
+	postRR := httptest.NewRecorder()
+	body := "username=alice&password=s3cr3t&csrf_token=" + url.QueryEscape(csrfToken)
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(csrfCookie)
+	h.ServeHTTP(postRR, req)
+
+	if postRR.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", postRR.Code)
+	}
+	loc := postRR.Header().Get("Location")
+	want := "https://auth.example.com/"
+	if loc != want {
+		t.Errorf("Location = %q, want %q", loc, want)
+	}
+	if findCookie(postRR.Result().Cookies(), ".auth.session") == nil {
+		t.Errorf("session cookie must be set on successful login")
+	}
+}
+
+// TestLogin_POST_DisallowedPathReturnUrl_Rejects: a returnUrl that
+// passes URL parsing but is not on the allow-list still triggers
+// invalid_return. This is the same open-redirect guard the
+// TestLogin_POST_RejectsOpenRedirect test exercises; pinning the
+// behaviour here so a refactor of validateReturnURL does not
+// silently widen the allow-list.
+func TestLogin_POST_DisallowedPathReturnUrl_Rejects(t *testing.T) {
+	h, _, _ := newTestLoginHandler(t)
+	getRR := httptest.NewRecorder()
+	h.ServeHTTP(getRR, httptest.NewRequest(http.MethodGet, "/login", nil))
+	csrfToken := extractCSRFToken(t, getRR.Body.String())
+	csrfCookie := findCookie(getRR.Result().Cookies(), csrfCookieName)
+
+	postRR := httptest.NewRecorder()
+	body := "username=alice&password=s3cr3t&csrf_token=" + url.QueryEscape(csrfToken) + "&returnUrl=/admin"
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(csrfCookie)
+	h.ServeHTTP(postRR, req)
+
+	if postRR.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", postRR.Code)
+	}
+	loc := postRR.Header().Get("Location")
+	if !strings.Contains(loc, "error=invalid_return") {
+		t.Errorf("Location = %q, want error=invalid_return", loc)
+	}
+}
+
 func TestLogin_POST_LockedOut(t *testing.T) {
 	h, _, _ := newTestLoginHandler(t)
 	// Drive enough failures to lock the account.

@@ -2522,6 +2522,135 @@ func generateKey(t *testing.T) *rsa.PrivateKey {
 	return k
 }
 
+// --- authorize: prompt + max_age interactions (T9.1) ---
+
+// buildAuthorizeURLWithExtras lets a test append arbitrary query
+// params (prompt, max_age, ...) to the standard authorize URL.
+func buildAuthorizeURLWithExtras(clientID, redirectURI, state, nonce, challenge string, extra url.Values) string {
+	v := url.Values{}
+	v.Set("client_id", clientID)
+	v.Set("redirect_uri", redirectURI)
+	v.Set("response_type", "code")
+	v.Set("scope", "openid profile email offline_access")
+	v.Set("code_challenge", challenge)
+	v.Set("code_challenge_method", "S256")
+	if state != "" {
+		v.Set("state", state)
+	}
+	if nonce != "" {
+		v.Set("nonce", nonce)
+	}
+	for k, vs := range extra {
+		for _, val := range vs {
+			v.Add(k, val)
+		}
+	}
+	return "/connect/authorize?" + v.Encode()
+}
+
+// TestAuthorize_PromptNone_MaxAgeExceeded returns login_required even
+// when the session exists. Regression for §1.2 of plan-2.md: the
+// max_age check was nested under the else branch and was skipped
+// when prompt=none.
+func TestAuthorize_PromptNone_MaxAgeExceeded(t *testing.T) {
+	ts := newTestServer(t)
+
+	authURL := buildAuthorizeURL(testClientID, testRedirectURI, testState, testNonce, testChallenge())
+	sess := loginAs(t, ts, testUser, testPassword, authURL)
+
+	// Advance the clock past max_age=5s.
+	ts.clk.Advance(10 * time.Second)
+
+	v := url.Values{}
+	v.Set("prompt", "none")
+	v.Set("max_age", "5")
+	authURL = buildAuthorizeURLWithExtras(testClientID, testRedirectURI, testState, testNonce, testChallenge(), v)
+
+	resp, err := ts.do(t, http.MethodGet, authURL, nil, []*http.Cookie{sess})
+	if err != nil {
+		t.Fatalf("GET authorize: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, testRedirectURI) {
+		t.Fatalf("Location = %q, want redirect to %s", loc, testRedirectURI)
+	}
+	q, err := url.Parse(loc)
+	if err != nil {
+		t.Fatalf("parse redirect: %v", err)
+	}
+	if q.Query().Get("error") != "login_required" {
+		t.Errorf("error = %q, want login_required", q.Query().Get("error"))
+	}
+	if !strings.Contains(q.Query().Get("error_description"), "max_age") {
+		t.Errorf("error_description = %q, want it to mention max_age", q.Query().Get("error_description"))
+	}
+}
+
+// TestAuthorize_NoPrompt_MaxAgeExceeded still bounces to /login (the
+// non-prompt=none path was already working; lock the behaviour so a
+// future refactor doesn't regress it).
+func TestAuthorize_NoPrompt_MaxAgeExceeded(t *testing.T) {
+	ts := newTestServer(t)
+
+	authURL := buildAuthorizeURL(testClientID, testRedirectURI, testState, testNonce, testChallenge())
+	sess := loginAs(t, ts, testUser, testPassword, authURL)
+
+	ts.clk.Advance(10 * time.Second)
+
+	v := url.Values{}
+	v.Set("max_age", "5")
+	authURL = buildAuthorizeURLWithExtras(testClientID, testRedirectURI, testState, testNonce, testChallenge(), v)
+
+	resp, err := ts.do(t, http.MethodGet, authURL, nil, []*http.Cookie{sess})
+	if err != nil {
+		t.Fatalf("GET authorize: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "/login?") {
+		t.Errorf("Location = %q, want /login?returnUrl=... (session was zeroed by max_age)", loc)
+	}
+}
+
+// TestAuthorize_PromptNone_MaxAgeZero forces re-authentication
+// unconditionally per OIDC §3.1.2.1. Regression for the same §1.2
+// path: max_age=0 is valid and must be enforced.
+func TestAuthorize_PromptNone_MaxAgeZero(t *testing.T) {
+	ts := newTestServer(t)
+
+	authURL := buildAuthorizeURL(testClientID, testRedirectURI, testState, testNonce, testChallenge())
+	sess := loginAs(t, ts, testUser, testPassword, authURL)
+
+	v := url.Values{}
+	v.Set("prompt", "none")
+	v.Set("max_age", "0")
+	authURL = buildAuthorizeURLWithExtras(testClientID, testRedirectURI, testState, testNonce, testChallenge(), v)
+
+	resp, err := ts.do(t, http.MethodGet, authURL, nil, []*http.Cookie{sess})
+	if err != nil {
+		t.Fatalf("GET authorize: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, testRedirectURI) {
+		t.Fatalf("Location = %q, want redirect to %s", loc, testRedirectURI)
+	}
+	q, _ := url.Parse(loc)
+	if q.Query().Get("error") != "login_required" {
+		t.Errorf("error = %q, want login_required", q.Query().Get("error"))
+	}
+}
+
 // --- admin helpers ---
 
 // buildTestAdminMount wires the admin auth + CSRF + API + SPA for

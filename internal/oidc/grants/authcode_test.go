@@ -257,6 +257,35 @@ func TestAuthCode_Handle_RejectsRedirectMismatch(t *testing.T) {
 	}
 }
 
+// TestAuthCode_Handle_ClientIDMismatch_ReturnsInvalidClient401: when
+// the form's client_id does not match the client the dispatcher
+// authenticated, the response must be 401 invalid_client, not
+// 400 invalid_grant. The cause is a client identity mismatch
+// (RFC 6749 §5.2), not a grant problem. The dispatcher normally
+// prevents this path, but the grant keeps a defensive check.
+func TestAuthCode_Handle_ClientIDMismatch_ReturnsInvalidClient401(t *testing.T) {
+	g, ac, _, _, _, _, client := newTestGrant(t)
+	code := mintAuthCode(t, ac, &memory.ClientStore{}, g.Clock)
+
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", "https://app.example/cb")
+	form.Set("client_id", "different-client")
+	form.Set("code_verifier", testVerifier)
+
+	rr := httptest.NewRecorder()
+	g.Handle(context.Background(), rr, client, form)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+	var body ErrorResponse
+	_ = json.NewDecoder(rr.Body).Decode(&body)
+	if body.Error != "invalid_client" {
+		t.Errorf("error = %q, want invalid_client", body.Error)
+	}
+}
+
 func TestAuthCode_Handle_RejectsExpiredCode(t *testing.T) {
 	g, ac, _, _, _, _, client := newTestGrant(t)
 	code := mintAuthCode(t, ac, &memory.ClientStore{}, g.Clock)

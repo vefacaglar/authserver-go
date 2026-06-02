@@ -206,9 +206,15 @@ func (h *LoginHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	target, err := validateReturnURL(returnURL, h.Cfg.IssuerURL, h.Cfg.AuthorizePath)
-	if err != nil || target == "" {
+	if err != nil {
 		h.respondWithError(w, r, LoginErrInvalidReturn, "")
 		return
+	}
+	if target == "" {
+		// No returnUrl supplied (or it was empty after validation);
+		// send the user to the issuer root rather than dumping them
+		// back on the login page after a successful credential check.
+		target = strings.TrimRight(h.Cfg.IssuerURL, "/") + "/"
 	}
 	http.Redirect(w, r, target, http.StatusFound)
 }

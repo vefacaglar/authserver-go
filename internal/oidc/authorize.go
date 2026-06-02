@@ -124,6 +124,22 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sess = nil
 	}
 
+	// max_age applies regardless of prompt value (OIDC §3.1.2.1). A
+	// non-negative max_age that is exceeded forces re-authentication.
+	// max_age=0 is valid and means "require re-authentication now",
+	// which the strict-greater-than check below would otherwise miss
+	// when the session was just created in the same clock tick. A
+	// negative value is rejected earlier in form parsing. The
+	// maxAgeRaw != "" guard distinguishes "explicitly set" from
+	// "parameter omitted" (maxAge zero value).
+	if sess != nil && maxAgeRaw != "" && (maxAge == 0 || h.Clock.Now().Sub(sess.CreatedAt) > maxAge) {
+		if prompt == "none" {
+			redirectErr(ErrLoginRequired, "max_age exceeded")
+			return
+		}
+		sess = nil
+	}
+
 	if prompt == "none" {
 		if sess == nil || sess.RevokedAt != nil || h.Clock.Now().After(sess.ExpiresAt) {
 			redirectErr(ErrLoginRequired, "login required")
@@ -131,10 +147,6 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if prompt == "login" {
 		sess = nil
-	} else if sess != nil && maxAge > 0 {
-		if h.Clock.Now().Sub(sess.CreatedAt) > maxAge {
-			sess = nil
-		}
 	}
 
 	if sess == nil {

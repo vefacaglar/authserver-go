@@ -41,6 +41,17 @@ func (s *RefreshTokenStore) FindByHash(ctx context.Context, hash string) (*domai
 	return ent.toDomain()
 }
 
+func (s *RefreshTokenStore) FindByID(ctx context.Context, id uuid.UUID) (*domain.RefreshToken, error) {
+	var ent refreshTokenEntity
+	if err := s.db.WithContext(ctx).Where("id = ?", id.String()).First(&ent).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("refresh token %s: %w", id, store.ErrNotFound)
+		}
+		return nil, err
+	}
+	return ent.toDomain()
+}
+
 func (s *RefreshTokenStore) GetPaged(ctx context.Context, req domain.PagedRequest) (domain.PagedResult[domain.RefreshToken], error) {
 	req = req.Normalized()
 	var (

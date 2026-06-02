@@ -53,6 +53,16 @@ func (s *RefreshTokenStore) FindByHash(_ context.Context, tokenHash string) (*do
 	return &t, nil
 }
 
+func (s *RefreshTokenStore) FindByID(_ context.Context, id uuid.UUID) (*domain.RefreshToken, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, ok := s.tokens[id]
+	if !ok {
+		return nil, fmt.Errorf("refresh token %s: %w", id, store.ErrNotFound)
+	}
+	return &t, nil
+}
+
 func (s *RefreshTokenStore) GetPaged(_ context.Context, req domain.PagedRequest) (domain.PagedResult[domain.RefreshToken], error) {
 	req = req.Normalized()
 	s.mu.RLock()
