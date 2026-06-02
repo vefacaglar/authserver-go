@@ -26,7 +26,7 @@ func testChallenge(t *testing.T) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-func newTestGrant(t *testing.T) (*AuthCodeGrant, *memory.AuthorizationCodeStore, *memory.RefreshTokenStore, *memory.ClientStore, *memory.UserStore, *token.Issuer) {
+func newTestGrant(t *testing.T) (*AuthCodeGrant, *memory.AuthorizationCodeStore, *memory.RefreshTokenStore, *memory.ClientStore, *memory.UserStore, *token.Issuer, *domain.Client) {
 	t.Helper()
 	clk := clock.NewFakeClock(time.Unix(1700000000, 0))
 	ac := memory.NewAuthorizationCodeStore()
@@ -46,7 +46,7 @@ func newTestGrant(t *testing.T) (*AuthCodeGrant, *memory.AuthorizationCodeStore,
 		},
 	}, "ignored")
 
-	_ = cl.Store(context.Background(), &domain.Client{
+	testClient := &domain.Client{
 		ClientID:                "client-1",
 		DisplayName:             "Test Client",
 		RedirectURIs:            []string{"https://app.example/cb"},
@@ -54,7 +54,8 @@ func newTestGrant(t *testing.T) (*AuthCodeGrant, *memory.AuthorizationCodeStore,
 		RequirePKCE:             true,
 		AllowRefreshTokens:      true,
 		TokenEndpointAuthMethod: domain.TokenEndpointAuthMethodNone,
-	})
+	}
+	_ = cl.Store(context.Background(), testClient)
 
 	g := &AuthCodeGrant{
 		AuthCodes:     ac,
@@ -70,7 +71,7 @@ func newTestGrant(t *testing.T) (*AuthCodeGrant, *memory.AuthorizationCodeStore,
 			RefreshTokenAbsoluteLifetime: 24 * time.Hour,
 		},
 	}
-	return g, ac, rt, cl, us, issuer
+	return g, ac, rt, cl, us, issuer, testClient
 }
 
 func mintAuthCode(t *testing.T, ac *memory.AuthorizationCodeStore, cl *memory.ClientStore, clk clock.Clock) string {
@@ -103,7 +104,7 @@ func mintAuthCode(t *testing.T, ac *memory.AuthorizationCodeStore, cl *memory.Cl
 }
 
 func TestAuthCode_Handle_IssuesAccessAndIDToken(t *testing.T) {
-	g, ac, rt, _, _, issuer := newTestGrant(t)
+	g, ac, rt, _, _, issuer, client := newTestGrant(t)
 	code := mintAuthCode(t, ac, &memory.ClientStore{}, g.Clock)
 
 	form := url.Values{}
@@ -114,7 +115,7 @@ func TestAuthCode_Handle_IssuesAccessAndIDToken(t *testing.T) {
 	form.Set("code_verifier", testVerifier)
 
 	rr := httptest.NewRecorder()
-	g.Handle(context.Background(), rr, form)
+	g.Handle(context.Background(), rr, client, form)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
@@ -177,7 +178,7 @@ func TestAuthCode_Handle_IssuesAccessAndIDToken(t *testing.T) {
 }
 
 func TestAuthCode_Handle_RejectsReplay(t *testing.T) {
-	g, ac, _, _, _, _ := newTestGrant(t)
+	g, ac, _, _, _, _, client := newTestGrant(t)
 	code := mintAuthCode(t, ac, &memory.ClientStore{}, g.Clock)
 
 	form := url.Values{}
@@ -188,13 +189,13 @@ func TestAuthCode_Handle_RejectsReplay(t *testing.T) {
 	form.Set("code_verifier", testVerifier)
 
 	rr1 := httptest.NewRecorder()
-	g.Handle(context.Background(), rr1, form)
+	g.Handle(context.Background(), rr1, client, form)
 	if rr1.Code != http.StatusOK {
 		t.Fatalf("first exchange: status = %d, want 200", rr1.Code)
 	}
 
 	rr2 := httptest.NewRecorder()
-	g.Handle(context.Background(), rr2, form)
+	g.Handle(context.Background(), rr2, client, form)
 	if rr2.Code != http.StatusBadRequest {
 		t.Fatalf("replay: status = %d, want 400", rr2.Code)
 	}
@@ -206,7 +207,7 @@ func TestAuthCode_Handle_RejectsReplay(t *testing.T) {
 }
 
 func TestAuthCode_Handle_RejectsBadPKCE(t *testing.T) {
-	g, ac, _, _, _, _ := newTestGrant(t)
+	g, ac, _, _, _, _, client := newTestGrant(t)
 	code := mintAuthCode(t, ac, &memory.ClientStore{}, g.Clock)
 
 	form := url.Values{}
@@ -217,7 +218,7 @@ func TestAuthCode_Handle_RejectsBadPKCE(t *testing.T) {
 	form.Set("code_verifier", "wrong-verifier-12345678901234567890123456789012")
 
 	rr := httptest.NewRecorder()
-	g.Handle(context.Background(), rr, form)
+	g.Handle(context.Background(), rr, client, form)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rr.Code)
 	}
@@ -229,7 +230,7 @@ func TestAuthCode_Handle_RejectsBadPKCE(t *testing.T) {
 }
 
 func TestAuthCode_Handle_RejectsRedirectMismatch(t *testing.T) {
-	g, ac, _, _, _, _ := newTestGrant(t)
+	g, ac, _, _, _, _, client := newTestGrant(t)
 	code := mintAuthCode(t, ac, &memory.ClientStore{}, g.Clock)
 
 	form := url.Values{}
@@ -240,7 +241,7 @@ func TestAuthCode_Handle_RejectsRedirectMismatch(t *testing.T) {
 	form.Set("code_verifier", testVerifier)
 
 	rr := httptest.NewRecorder()
-	g.Handle(context.Background(), rr, form)
+	g.Handle(context.Background(), rr, client, form)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rr.Code)
 	}
@@ -252,7 +253,7 @@ func TestAuthCode_Handle_RejectsRedirectMismatch(t *testing.T) {
 }
 
 func TestAuthCode_Handle_RejectsExpiredCode(t *testing.T) {
-	g, ac, _, _, _, _ := newTestGrant(t)
+	g, ac, _, _, _, _, client := newTestGrant(t)
 	code := mintAuthCode(t, ac, &memory.ClientStore{}, g.Clock)
 
 	// Advance the clock past the code's expiry.
@@ -268,7 +269,7 @@ func TestAuthCode_Handle_RejectsExpiredCode(t *testing.T) {
 	form.Set("code_verifier", testVerifier)
 
 	rr := httptest.NewRecorder()
-	g.Handle(context.Background(), rr, form)
+	g.Handle(context.Background(), rr, client, form)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rr.Code)
 	}

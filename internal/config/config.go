@@ -42,6 +42,11 @@ type Config struct {
 	AdminAllowAnonymous          bool
 
 	CSRFKey []byte
+
+	// AdminToken is the static bearer shared with admin operators.
+	// When empty, the admin API is unreachable unless
+	// AdminAllowAnonymous is set (which is a dev-only convenience).
+	AdminToken string
 }
 
 func Load() (*Config, error) {
@@ -77,6 +82,7 @@ func Load() (*Config, error) {
 	if c.CSRFKey, err = decodeB64(getenv("AUTH_CSRF_KEY", ""), 32); err != nil {
 		return nil, fmt.Errorf("AUTH_CSRF_KEY: %w", err)
 	}
+	c.AdminToken = getenv("AUTH_ADMIN_TOKEN", "")
 
 	if err := c.validate(); err != nil {
 		return nil, err
@@ -124,6 +130,9 @@ func (c *Config) validate() error {
 	}
 	if c.LoginRateLimit < 1 {
 		return errors.New("AUTH_LOGIN_RATE_LIMIT must be >= 1")
+	}
+	if !c.AdminAllowAnonymous && strings.TrimSpace(c.AdminToken) == "" {
+		return errors.New("AUTH_ADMIN_TOKEN must be set unless AUTH_ADMIN_ALLOW_ANONYMOUS=true")
 	}
 	return nil
 }

@@ -22,6 +22,45 @@ go test ./...      # run unit + integration tests
 go run ./cmd/authserver   # run the binary
 ```
 
+### Running the server
+
+The server is configured entirely via environment variables. The minimum
+required to start it (in-memory store, no auth required for the admin SPA,
+no TLS) is:
+
+```sh
+export AUTH_ISSUER=https://auth.example.com
+export AUTH_COOKIE_HASH_KEY=$(head -c 32 /dev/urandom | base64)
+export AUTH_COOKIE_BLOCK_KEY=$(head -c 32 /dev/urandom | base64)
+export AUTH_CSRF_KEY=$(head -c 32 /dev/urandom | base64)
+export AUTH_ADMIN_TOKEN=$(head -c 32 /dev/urandom | base64)
+go run ./cmd/authserver
+```
+
+The first call bootstraps an RSA-2048 signing key, seeds the standard
+OIDC scopes (`openid`, `profile`, `email`, `offline_access`), a public
+demo client, a confidential demo client (with a freshly generated
+keypair — re-seeded every restart), and a demo user (`demo` / `demo`).
+
+### OIDC discovery
+
+The server publishes its metadata at:
+
+```
+GET /.well-known/openid-configuration
+```
+
+### Smoke test
+
+A real `coreos/go-oidc` client (the same library Kubernetes and
+Terraform use) completes the discovery → JWKS → ID-token verify →
+userinfo flow against the server. The test is build-tagged so it
+does not run by default:
+
+```sh
+RUN_SMOKE=1 go test -tags m8smoke -v -count=1 -run TestSmoke_RealOIDCClient ./test/...
+```
+
 ## Source of truth
 
 - [BUILD_PROMPT.md](BUILD_PROMPT.md) — full technical spec (architecture,

@@ -31,6 +31,12 @@ type RouterConfig struct {
 	JWKSPath      string
 	DiscoveryPath string
 	HealthPath    string
+
+	// LoginRateLimitRPS is the per-IP rate applied to the login
+	// POST. 0 disables the limiter.
+	LoginRateLimitRPS int
+	// LoginRateBurst is the per-IP burst for the login limiter.
+	LoginRateBurst int
 }
 
 // Handlers is the bundle of ready-to-mount handlers. A nil entry means
@@ -45,6 +51,24 @@ type Handlers struct {
 	Discovery http.Handler
 	JWKS      http.Handler
 	Health    http.Handler
+
+	// Admin is the bundle of admin API + SPA. Mounted under /admin/
+	// as a separate chi group so the middleware (auth + CSRF) only
+	// applies to that subtree.
+	Admin *AdminMount
+}
+
+// AdminMount is the set of handlers the /admin group needs. The
+// router mounts whatever it finds at /admin/ and /admin/api/.
+// Both fields are typically the same handler (the wrapped
+// admin mux that combines auth + CSRF + API + index).
+type AdminMount struct {
+	// Root serves requests at /admin/ (the SPA index). When nil,
+	// /admin/ returns 404.
+	Root http.Handler
+	// API serves requests under /admin/api/. When nil, /admin/api/
+	// returns 404.
+	API http.Handler
 }
 
 // NewRouter assembles the production route table and middleware chain.
@@ -56,7 +80,12 @@ func NewRouter(cfg RouterConfig, opts RouterOptions, h Handlers) http.Handler {
 	r.Use(securityHeadersMiddleware(cfg.RequireHTTPS))
 
 	if h.Login != nil && cfg.LoginPath != "" {
-		r.Handle(cfg.LoginPath, h.Login)
+		// Per-IP rate limit on the login endpoint, before any other
+		// middleware, so that a flood of failed attempts cannot
+		// even reach the user store.
+		limiter := NewLoginRateLimiter(cfg.LoginRateLimitRPS, cfg.LoginRateBurst)
+		loginChain := limiter.Middleware(h.Login)
+		r.Handle(cfg.LoginPath, loginChain)
 	}
 	if h.Logout != nil {
 		// Logout owns both /connect/logout and the confirm page at
@@ -88,6 +117,25 @@ func NewRouter(cfg RouterConfig, opts RouterOptions, h Handlers) http.Handler {
 	if h.Health != nil && cfg.HealthPath != "" {
 		r.Method(http.MethodGet, cfg.HealthPath, h.Health)
 	}
+
+	// Admin group: everything under /admin/ goes through the auth
+	// middleware supplied by main.go. The admin mount is plain
+	// stdlib net/http so the SPA can call any path the admin.API
+	// ServeMux registered. We use chi.Mount for prefix routing —
+	// chi's Handle does not treat a trailing slash as a prefix
+	// match. StripPrefix("/admin") lets the inner mux see paths
+	// like /api/clients instead of /admin/api/clients.
+	if h.Admin != nil {
+		adminRoot := http.StripPrefix("/admin", h.Admin.Root)
+		adminAPI := http.StripPrefix("/admin", h.Admin.API)
+		// /admin/  — SPA index (serves the same handler; the
+		// inner CombineMux dispatches /api/... to the API mux).
+		r.Mount("/admin/", adminRoot)
+		// /admin/api/...  — explicit API mount so chi knows it's
+		// a sub-tree.
+		r.Mount("/admin/api/", adminAPI)
+	}
+
 	return r
 }
 
@@ -143,6 +191,8 @@ func securityHeadersMiddleware(requireHTTPS bool) func(http.Handler) http.Handle
 			h.Set("X-Frame-Options", "DENY")
 			h.Set("Referrer-Policy", "no-referrer")
 			h.Set("Cross-Origin-Opener-Policy", "same-origin")
+			h.Set("Cross-Origin-Resource-Policy", "same-origin")
+			h.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 			if requireHTTPS {
 				h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 			}

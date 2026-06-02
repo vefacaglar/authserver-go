@@ -42,15 +42,15 @@ until **Done when** holds. Full spec lives in `BUILD_PROMPT.md`; this file is th
 - [x] **T5.4 Swap server to GORM** — driver from config, memory kept for unit tests; re-run M3+M4 suite on SQLite. **Done when** full suite passes with GORM.
 
 ## M6 — Confidential clients
-- [ ] **T6.1 client_credentials grant** — `grants/clientcreds.go`: confidential-only, `AllowClientCredentials`, access token only (`sub=client_id`). **Done when** test asserts no id/refresh token.
-- [ ] **T6.2 private_key_jwt** — `internal/token/clientassertion.go` + `internal/oidc/clientauth.go`: verify vs client JWKS, asymmetric-only, aud/iss/sub/exp, jti replay cache; discovery advertises methods. **Done when** valid authenticates; forged-key + replayed-jti rejected (401 invalid_client).
+- [x] **T6.1 client_credentials grant** — `grants/clientcreds.go`: confidential-only, `AllowClientCredentials`, access token only (`sub=client_id`). **Done when** test asserts no id/refresh token.
+- [x] **T6.2 private_key_jwt** — `internal/token/clientassertion.go` + `internal/oidc/clientauth.go`: verify vs client JWKS, asymmetric-only, aud/iss/sub/exp, jti replay cache; discovery advertises methods. **Done when** valid authenticates; forged-key + replayed-jti rejected (401 invalid_client).
 
 ## M7 — Admin UI / API
-- [ ] **T7.1 Admin auth group** — chi group + auth middleware + `AdminAllowAnonymous`. **Done when** anonymous rejected unless flag set.
-- [ ] **T7.2 Admin JSON CRUD** — clients/scopes/sessions(+revoke)/refresh-tokens(+revoke)/keys(private stripped)/audit, CSRF on mutations. **Done when** client create/list/delete tested + key responses omit private PEM.
-- [ ] **T7.3 Admin SPA** — minimal `web/` page consuming the API. **Done when** index renders and lists clients via the API.
+- [x] **T7.1 Admin auth group** — chi group + auth middleware + `AdminAllowAnonymous`. **Done when** anonymous rejected unless flag set.
+- [x] **T7.2 Admin JSON CRUD** — clients/scopes/sessions(+revoke)/refresh-tokens(+revoke)/keys(private stripped)/audit, CSRF on mutations. **Done when** client create/list/delete tested + key responses omit private PEM.
+- [x] **T7.3 Admin SPA** — minimal `web/` page consuming the API. **Done when** index renders and lists clients via the API.
 
 ## M8 — Hardening
-- [ ] **T8.1 Rate limit + lockout + headers** — per-IP limiter on /login, wire `LoginAttemptTracker`, security-headers middleware. **Done when** over-limit → 429; repeated failures lock out.
-- [ ] **T8.2 Security checklist sweep** — map every checklist item to a passing test or code reference. **Done when** each line is covered.
-- [ ] **T8.3 Seed + one-command run** — demo public client, confidential client, scopes, sample user; document `go run ./cmd/authserver`. **Done when** a real OIDC client (`coreos/go-oidc`) completes login+token+userinfo.
+- [x] **T8.1 Rate limit + lockout + headers** — per-IP limiter on /login, wire `LoginAttemptTracker`, security-headers middleware. **Done when** over-limit → 429; repeated failures lock out.
+- [x] **T8.2 Security checklist sweep** — map every checklist item to a passing test or code reference. **Done when** each line is covered. See `SECURITY.md`.
+- [x] **T8.3 Seed + one-command run** — demo public client, confidential client, scopes, sample user; document `go run ./cmd/authserver`. **Done when** a real OIDC client (`coreos/go-oidc`) completes login+token+userinfo. See `test/smoke_test.go` (build tag `m8smoke`).

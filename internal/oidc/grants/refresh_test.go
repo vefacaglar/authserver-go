@@ -24,7 +24,7 @@ import (
 // stores. The returned helpers make tests easy to write: a function to
 // mint a refresh token, and a function to look it up by hash so the
 // CAS-driven reuse path can be exercised.
-func newTestRefresh(t *testing.T) (*RefreshGrant, *memory.RefreshTokenStore, *memory.AuditLogStore) {
+func newTestRefresh(t *testing.T) (*RefreshGrant, *memory.RefreshTokenStore, *memory.AuditLogStore, *domain.Client) {
 	t.Helper()
 	clk := clock.NewFakeClock(time.Unix(1700000000, 0))
 	rt := memory.NewRefreshTokenStore()
@@ -44,7 +44,7 @@ func newTestRefresh(t *testing.T) (*RefreshGrant, *memory.RefreshTokenStore, *me
 			"email_verified":     true,
 		},
 	}, "ignored")
-	_ = clients.Store(context.Background(), &domain.Client{
+	testClient := &domain.Client{
 		ClientID:                "client-1",
 		DisplayName:             "Test Client",
 		RedirectURIs:            []string{"https://app.example/cb"},
@@ -52,7 +52,8 @@ func newTestRefresh(t *testing.T) (*RefreshGrant, *memory.RefreshTokenStore, *me
 		RequirePKCE:             true,
 		AllowRefreshTokens:      true,
 		TokenEndpointAuthMethod: domain.TokenEndpointAuthMethodNone,
-	})
+	}
+	_ = clients.Store(context.Background(), testClient)
 
 	g := &RefreshGrant{
 		RefreshTokens: rt,
@@ -71,7 +72,7 @@ func newTestRefresh(t *testing.T) (*RefreshGrant, *memory.RefreshTokenStore, *me
 			DetectReuse:                  true,
 		},
 	}
-	return g, rt, auditLogs
+	return g, rt, auditLogs, testClient
 }
 
 // mintRefresh inserts a refresh token into the store, returning the raw
@@ -102,7 +103,7 @@ func mintRefresh(t *testing.T, rt *memory.RefreshTokenStore, clk clock.Clock, se
 }
 
 func TestRefresh_Handle_RotatesAndMintsNewTokens(t *testing.T) {
-	g, rt, _ := newTestRefresh(t)
+	g, rt, _, client := newTestRefresh(t)
 	raw := mintRefresh(t, rt, g.Clock, id1())
 
 	form := url.Values{}
@@ -111,7 +112,7 @@ func TestRefresh_Handle_RotatesAndMintsNewTokens(t *testing.T) {
 	form.Set("client_id", "client-1")
 
 	rr := httptest.NewRecorder()
-	g.Handle(context.Background(), rr, form)
+	g.Handle(context.Background(), rr, client, form)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
@@ -161,7 +162,7 @@ func TestRefresh_Handle_RotatesAndMintsNewTokens(t *testing.T) {
 }
 
 func TestRefresh_Handle_DetectsReuseAndRevokesChain(t *testing.T) {
-	g, rt, auditLogs := newTestRefresh(t)
+	g, rt, auditLogs, client := newTestRefresh(t)
 	sid := id1()
 	raw := mintRefresh(t, rt, g.Clock, sid)
 	mintRefresh(t, rt, g.Clock, sid) // a sibling in the same session chain
@@ -173,14 +174,14 @@ func TestRefresh_Handle_DetectsReuseAndRevokesChain(t *testing.T) {
 
 	// First call rotates successfully.
 	rr1 := httptest.NewRecorder()
-	g.Handle(context.Background(), rr1, form)
+	g.Handle(context.Background(), rr1, client, form)
 	if rr1.Code != http.StatusOK {
 		t.Fatalf("first: status = %d, want 200; body=%s", rr1.Code, rr1.Body.String())
 	}
 
 	// Second call with the same token → reuse.
 	rr2 := httptest.NewRecorder()
-	g.Handle(context.Background(), rr2, form)
+	g.Handle(context.Background(), rr2, client, form)
 	if rr2.Code != http.StatusBadRequest {
 		t.Fatalf("reuse: status = %d, want 400; body=%s", rr2.Code, rr2.Body.String())
 	}
@@ -218,30 +219,32 @@ func TestRefresh_Handle_DetectsReuseAndRevokesChain(t *testing.T) {
 }
 
 func TestRefresh_Handle_RejectsForeignClient(t *testing.T) {
-	g, rt, _ := newTestRefresh(t)
+	g, rt, _, client := newTestRefresh(t)
 	raw := mintRefresh(t, rt, g.Clock, id1())
 
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", raw)
+	// form's client_id differs from the authenticated client →
+	// the grant's defence-in-depth rejects as invalid_grant.
 	form.Set("client_id", "someone-else")
 
 	rr := httptest.NewRecorder()
-	g.Handle(context.Background(), rr, form)
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", rr.Code)
+	g.Handle(context.Background(), rr, client, form)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
 	}
 	var body ErrorResponse
 	_ = json.NewDecoder(rr.Body).Decode(&body)
-	if body.Error != "invalid_client" {
-		t.Errorf("error = %q, want invalid_client", body.Error)
+	if body.Error != "invalid_grant" {
+		t.Errorf("error = %q, want invalid_grant", body.Error)
 	}
 }
 
 func TestRefresh_Handle_RejectsMissingFields(t *testing.T) {
-	g, _, _ := newTestRefresh(t)
+	g, _, _, client := newTestRefresh(t)
 	rr := httptest.NewRecorder()
-	g.Handle(context.Background(), rr, url.Values{})
+	g.Handle(context.Background(), rr, client, url.Values{})
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rr.Code)
 	}
@@ -253,7 +256,7 @@ func TestRefresh_Handle_RejectsMissingFields(t *testing.T) {
 }
 
 func TestRefresh_Handle_RejectsExpiredToken(t *testing.T) {
-	g, rt, _ := newTestRefresh(t)
+	g, rt, _, client := newTestRefresh(t)
 	raw := mintRefresh(t, rt, g.Clock, id1())
 
 	// Push past the absolute expiry.
@@ -267,7 +270,7 @@ func TestRefresh_Handle_RejectsExpiredToken(t *testing.T) {
 	form.Set("client_id", "client-1")
 
 	rr := httptest.NewRecorder()
-	g.Handle(context.Background(), rr, form)
+	g.Handle(context.Background(), rr, client, form)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rr.Code)
 	}
@@ -279,7 +282,7 @@ func TestRefresh_Handle_RejectsExpiredToken(t *testing.T) {
 }
 
 func TestRefresh_Handle_RejectsRevokedToken(t *testing.T) {
-	g, rt, _ := newTestRefresh(t)
+	g, rt, _, client := newTestRefresh(t)
 	raw := mintRefresh(t, rt, g.Clock, id1())
 
 	tok, err := rt.FindByHash(context.Background(), token.HashToken(raw))
@@ -296,7 +299,7 @@ func TestRefresh_Handle_RejectsRevokedToken(t *testing.T) {
 	form.Set("client_id", "client-1")
 
 	rr := httptest.NewRecorder()
-	g.Handle(context.Background(), rr, form)
+	g.Handle(context.Background(), rr, client, form)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rr.Code)
 	}
@@ -308,14 +311,14 @@ func TestRefresh_Handle_RejectsRevokedToken(t *testing.T) {
 }
 
 func TestRefresh_Handle_RejectsUnknownToken(t *testing.T) {
-	g, _, _ := newTestRefresh(t)
+	g, _, _, client := newTestRefresh(t)
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", "not-a-real-token")
 	form.Set("client_id", "client-1")
 
 	rr := httptest.NewRecorder()
-	g.Handle(context.Background(), rr, form)
+	g.Handle(context.Background(), rr, client, form)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rr.Code)
 	}
@@ -327,7 +330,7 @@ func TestRefresh_Handle_RejectsUnknownToken(t *testing.T) {
 }
 
 func TestRefresh_Handle_Downscopes(t *testing.T) {
-	g, rt, _ := newTestRefresh(t)
+	g, rt, _, client := newTestRefresh(t)
 	raw := mintRefresh(t, rt, g.Clock, id1())
 
 	form := url.Values{}
@@ -337,7 +340,7 @@ func TestRefresh_Handle_Downscopes(t *testing.T) {
 	form.Set("scope", "openid profile") // drop email + offline_access
 
 	rr := httptest.NewRecorder()
-	g.Handle(context.Background(), rr, form)
+	g.Handle(context.Background(), rr, client, form)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
@@ -352,7 +355,7 @@ func TestRefresh_Handle_Downscopes(t *testing.T) {
 }
 
 func TestRefresh_Handle_RejectsUpscope(t *testing.T) {
-	g, rt, _ := newTestRefresh(t)
+	g, rt, _, client := newTestRefresh(t)
 	raw := mintRefresh(t, rt, g.Clock, id1())
 
 	form := url.Values{}
@@ -362,7 +365,7 @@ func TestRefresh_Handle_RejectsUpscope(t *testing.T) {
 	form.Set("scope", "openid profile email offline_access address phone") // address+phone not granted
 
 	rr := httptest.NewRecorder()
-	g.Handle(context.Background(), rr, form)
+	g.Handle(context.Background(), rr, client, form)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rr.Code)
 	}
@@ -376,7 +379,7 @@ func TestRefresh_Handle_RejectsUpscope(t *testing.T) {
 // Ensure the grant conforms to the store.RefreshTokenStore CAS contract:
 // MarkConsumed is the only path that flips ConsumedAt.
 func TestRefresh_Handle_OnlyOneWinnerOnConcurrentUse(t *testing.T) {
-	g, rt, _ := newTestRefresh(t)
+	g, rt, _, client := newTestRefresh(t)
 	raw := mintRefresh(t, rt, g.Clock, id1())
 
 	form := url.Values{}
@@ -395,7 +398,7 @@ func TestRefresh_Handle_OnlyOneWinnerOnConcurrentUse(t *testing.T) {
 		i := i
 		go func() {
 			rr := httptest.NewRecorder()
-			g.Handle(context.Background(), rr, form)
+			g.Handle(context.Background(), rr, client, form)
 			var b ErrorResponse
 			_ = json.NewDecoder(rr.Body).Decode(&b)
 			results[i] = result{code: rr.Code, err: b.Error}

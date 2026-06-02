@@ -56,9 +56,11 @@ type RefreshGrant struct {
 	Cfg           RefreshConfig
 }
 
-// Handle is the entry point invoked by the token dispatcher. form is the
+// Handle is the entry point invoked by the token dispatcher. The
+// authenticated client is supplied by the dispatcher; we re-check
+// the form's client_id against it as defence-in-depth. form is the
 // already-parsed application/x-www-form-urlencoded body.
-func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, form url.Values) {
+func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client *domain.Client, form url.Values) {
 	raw := form.Get("refresh_token")
 	clientID := form.Get("client_id")
 	scopeParam := form.Get("scope") // optional down-scope request
@@ -67,10 +69,12 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, form u
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "refresh_token and client_id are required")
 		return
 	}
-
-	client, err := g.Clients.FindByClientID(ctx, clientID)
-	if err != nil {
-		g.writeError(w, http.StatusUnauthorized, "invalid_client", "unknown client")
+	if client == nil {
+		g.writeError(w, http.StatusUnauthorized, "invalid_client", "client authentication required")
+		return
+	}
+	if client.ClientID != clientID {
+		g.writeError(w, http.StatusBadRequest, "invalid_grant", "client_id mismatch with authenticated client")
 		return
 	}
 

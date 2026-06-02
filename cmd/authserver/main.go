@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"html/template"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"go-authserver/internal/admin"
 	"go-authserver/internal/clock"
 	"go-authserver/internal/config"
 	"go-authserver/internal/domain"
@@ -26,6 +28,8 @@ import (
 	"go-authserver/internal/store/memory"
 	"go-authserver/internal/token"
 
+	"github.com/lestrrat-go/jwx/v2/jwa"
+	"github.com/lestrrat-go/jwx/v2/jwk"
 	"gorm.io/gorm"
 )
 
@@ -160,6 +164,25 @@ func run(logger *slog.Logger) error {
 				DetectReuse:                  cfg.DetectRefreshTokenReuse,
 			},
 		},
+		ClientCredentials: &grants.ClientCredentialsGrant{
+			Clients: bundle.Clients,
+			Issuer:  issuer,
+			Clock:   clk,
+			Cfg: grants.ClientCredentialsConfig{
+				AccessTokenLifetime: cfg.AccessTokenLifetime,
+			},
+		},
+		ClientAuth: oidc.ClientAuthConfig{
+			IssuerURL:        cfg.Issuer,
+			TokenEndpointURL: cfg.Issuer + "/connect/token",
+			AssertionCache:   token.NewMemAssertionCache(clk.Now),
+			AssertionSkew:    cfg.ClientAssertionClockSkew,
+			Clock:            clk,
+			Logger:           logger,
+		},
+		Clients: bundle.Clients,
+		Clock:   clk,
+		Logger:  logger,
 	}
 	userInfoHandler := oidc.NewUserInfoHandler(issuer, bundle.Users, logger)
 	revokeHandler := &oidc.RevokeHandler{
@@ -185,6 +208,36 @@ func run(logger *slog.Logger) error {
 		Confirm:       logoutTmpl,
 	}
 
+	// --- Admin API + SPA ---
+	authMW, err := admin.AuthMiddleware(admin.AuthConfig{
+		Token:          cfg.AdminToken,
+		AllowAnonymous: cfg.AdminAllowAnonymous,
+	}, logger)
+	if err != nil {
+		return err
+	}
+	csrfMW := admin.CSRFMiddleware(cfg.CSRFKey)
+	apiMux := http.NewServeMux()
+	(&admin.API{
+		Clients:       bundle.Clients,
+		Scopes:        bundle.Scopes,
+		Sessions:      bundle.Sessions,
+		RefreshTokens: bundle.RefreshTokens,
+		SigningKeys:   bundle.SigningKeys,
+		AuditLogs:     bundle.AuditLogs,
+		Clock:         clk,
+		Logger:        logger,
+	}).Mount(apiMux)
+	// Wrap the API + SPA with auth then CSRF so every admin route
+	// is covered.
+	adminHandler := authMW(csrfMW(admin.CombineMux(apiMux,
+		&admin.UI{Template: template.Must(template.New("admin").Parse(admin.IndexPage())), Logger: logger},
+	)))
+	adminMount := &server.AdminMount{
+		Root: adminHandler,
+		API:  adminHandler,
+	}
+
 	// EnsureActiveKey so discovery/JWKS have a key to publish on first boot.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if _, err := keyManager.EnsureActiveKey(ctx); err != nil {
@@ -203,20 +256,23 @@ func run(logger *slog.Logger) error {
 		Discovery: oidc.NewDiscoveryHandler(cfg.Issuer, bundle.Scopes),
 		JWKS:      oidc.NewJWKSHandler(issuer),
 		Health:    server.NewHealth(),
+		Admin:     adminMount,
 	}
 	router := server.NewRouter(
 		server.RouterConfig{
-			IssuerURL:     cfg.Issuer,
-			RequireHTTPS:  cfg.RequireHTTPS,
-			LoginPath:     cfg.LoginPath,
-			LogoutPath:    cfg.LogoutPath,
-			AuthorizePath: "/connect/authorize",
-			TokenPath:     "/connect/token",
-			UserInfoPath:  "/connect/userinfo",
-			RevokePath:    "/connect/revoke",
-			JWKSPath:      "/.well-known/jwks.json",
-			DiscoveryPath: "/.well-known/openid-configuration",
-			HealthPath:    "/healthz",
+			IssuerURL:         cfg.Issuer,
+			RequireHTTPS:      cfg.RequireHTTPS,
+			LoginPath:         cfg.LoginPath,
+			LogoutPath:        cfg.LogoutPath,
+			AuthorizePath:     "/connect/authorize",
+			TokenPath:         "/connect/token",
+			UserInfoPath:      "/connect/userinfo",
+			RevokePath:        "/connect/revoke",
+			JWKSPath:          "/.well-known/jwks.json",
+			DiscoveryPath:     "/.well-known/openid-configuration",
+			HealthPath:        "/healthz",
+			LoginRateLimitRPS: cfg.LoginRateLimit,
+			LoginRateBurst:    cfg.LoginRateLimit, // burst == rps for the default config
 		},
 		server.RouterOptions{Logger: logger},
 		handlers,
@@ -315,7 +371,8 @@ func buildStores(driver, dsn string, now func() time.Time, logger *slog.Logger) 
 
 // seedBundle writes the minimum sample data so the server is usable
 // immediately without any admin UI: the four standard OIDC scopes, a
-// public demo client, and a demo user.
+// public demo client, a confidential demo client (private_key_jwt
+// with a freshly generated keypair), and a demo user.
 func seedBundle(b *storeBundle) error {
 	ctx := context.Background()
 	for _, s := range []domain.Scope{
@@ -328,7 +385,7 @@ func seedBundle(b *storeBundle) error {
 			return err
 		}
 	}
-	c := &domain.Client{
+	public := &domain.Client{
 		ClientID:                "demo-public",
 		DisplayName:             "Demo Public Client",
 		RedirectURIs:            []string{"https://demo.example/callback"},
@@ -338,7 +395,18 @@ func seedBundle(b *storeBundle) error {
 		AllowRefreshTokens:      true,
 		TokenEndpointAuthMethod: domain.TokenEndpointAuthMethodNone,
 	}
-	if err := b.Clients.Store(ctx, c); err != nil {
+	if err := b.Clients.Store(ctx, public); err != nil {
+		return err
+	}
+	// Confidential demo client. The server generates a fresh RSA
+	// keypair here; the public half is published inline as JWKS.
+	// The private key is NOT stored — operators wanting to use this
+	// client for real testing should override it via the admin API.
+	confidential, err := newSeededConfidentialClient()
+	if err != nil {
+		return err
+	}
+	if err := b.Clients.Store(ctx, confidential); err != nil {
 		return err
 	}
 	adder, ok := b.Users.(userAdder)
@@ -354,4 +422,44 @@ func seedBundle(b *storeBundle) error {
 			"email_verified":     true,
 		},
 	}, "demo")
+}
+
+// newSeededConfidentialClient generates a fresh RSA-2048 keypair,
+// keeps the private key in memory (lost on restart — by design; this
+// is a demo seed), and returns a *domain.Client with the public
+// JWKS registered inline.
+func newSeededConfidentialClient() (*domain.Client, error) {
+	priv, err := token.GenerateRSAKey(token.RSAKeyBits)
+	if err != nil {
+		return nil, err
+	}
+	pubJWK, err := jwk.FromRaw(&priv.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	if err := pubJWK.Set(jwk.KeyIDKey, "demo-confidential-kid"); err != nil {
+		return nil, err
+	}
+	if err := pubJWK.Set(jwk.AlgorithmKey, jwa.RS256); err != nil {
+		return nil, err
+	}
+	if err := pubJWK.Set(jwk.KeyUsageKey, jwk.ForSignature); err != nil {
+		return nil, err
+	}
+	set := jwk.NewSet()
+	if err := set.AddKey(pubJWK); err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(set)
+	if err != nil {
+		return nil, err
+	}
+	return &domain.Client{
+		ClientID:                "demo-confidential",
+		DisplayName:             "Demo Confidential Client",
+		AllowedScopes:           []string{"read", "write", "openid"},
+		TokenEndpointAuthMethod: domain.TokenEndpointAuthMethodPrivateKeyJWT,
+		AllowClientCredentials:  true,
+		JWKSJSON:                string(raw),
+	}, nil
 }

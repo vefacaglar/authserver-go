@@ -5,6 +5,8 @@ package test
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -21,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"go-authserver/internal/admin"
 	"go-authserver/internal/clock"
 	"go-authserver/internal/domain"
 	"go-authserver/internal/oidc"
@@ -31,6 +34,11 @@ import (
 	"go-authserver/internal/store/gormstore"
 	"go-authserver/internal/store/memory"
 	"go-authserver/internal/token"
+
+	"github.com/google/uuid"
+	"github.com/lestrrat-go/jwx/v2/jwa"
+	"github.com/lestrrat-go/jwx/v2/jwk"
+	"github.com/lestrrat-go/jwx/v2/jwt"
 )
 
 const (
@@ -203,6 +211,12 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 	issuer.DefaultAccessTokenLifetime = time.Hour
 	issuer.DefaultIDTokenLifetime = time.Hour
 
+	// Bootstrap a signing key so /admin/api/keys returns at least
+	// one row even on a brand-new server.
+	if _, err := km.EnsureActiveKey(context.Background()); err != nil {
+		t.Fatalf("bootstrap key: %v", err)
+	}
+
 	cookieMgr := session.NewCookieManager(
 		[]byte("0123456789abcdef0123456789abcdef"),
 		[]byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"),
@@ -276,6 +290,25 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 				DetectReuse:                  true,
 			},
 		},
+		ClientCredentials: &grants.ClientCredentialsGrant{
+			Clients: b.Clients,
+			Issuer:  issuer,
+			Clock:   clk,
+			Cfg: grants.ClientCredentialsConfig{
+				AccessTokenLifetime: time.Hour,
+			},
+		},
+		ClientAuth: oidc.ClientAuthConfig{
+			IssuerURL:        testIssuer,
+			TokenEndpointURL: testIssuer + "/connect/token",
+			AssertionCache:   token.NewMemAssertionCache(clk.Now),
+			AssertionSkew:    time.Minute,
+			Clock:            clk,
+			Logger:           logger,
+		},
+		Clients: b.Clients,
+		Clock:   clk,
+		Logger:  logger,
 	}
 	logoutHandler := &oidc.LogoutHandler{
 		Cfg: oidc.LogoutConfig{
@@ -309,20 +342,23 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		Discovery: oidc.NewDiscoveryHandler(testIssuer, b.Scopes),
 		JWKS:      oidc.NewJWKSHandler(issuer),
 		Health:    server.NewHealth(),
+		Admin:     buildTestAdminMount(t, b, clk, logger),
 	}
 	router := server.NewRouter(
 		server.RouterConfig{
-			IssuerURL:     testIssuer,
-			RequireHTTPS:  false,
-			LoginPath:     "/login",
-			LogoutPath:    "/logout",
-			AuthorizePath: "/connect/authorize",
-			TokenPath:     "/connect/token",
-			UserInfoPath:  "/connect/userinfo",
-			RevokePath:    "/connect/revoke",
-			JWKSPath:      "/.well-known/jwks.json",
-			DiscoveryPath: "/.well-known/openid-configuration",
-			HealthPath:    "/healthz",
+			IssuerURL:         testIssuer,
+			RequireHTTPS:      false,
+			LoginPath:         "/login",
+			LogoutPath:        "/logout",
+			AuthorizePath:     "/connect/authorize",
+			TokenPath:         "/connect/token",
+			UserInfoPath:      "/connect/userinfo",
+			RevokePath:        "/connect/revoke",
+			JWKSPath:          "/.well-known/jwks.json",
+			DiscoveryPath:     "/.well-known/openid-configuration",
+			HealthPath:        "/healthz",
+			LoginRateLimitRPS: testServerRateLimitRPS(t),
+			LoginRateBurst:    testServerRateLimitBurst(t),
 		},
 		server.RouterOptions{Logger: logger},
 		handlers,
@@ -1160,6 +1196,288 @@ func TestE2E_ExpiredCode_Rejected(t *testing.T) {
 	}
 }
 
+// --- T7.1-T7.3: admin auth group + JSON CRUD + SPA, full router ---
+
+func TestE2E_Admin_RejectsAnonymous(t *testing.T) {
+	ts := newAdminTestServer(t)
+	resp, err := ts.do(t, http.MethodGet, "/admin/", nil, nil)
+	if err != nil {
+		t.Fatalf("admin: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+	if !strings.Contains(resp.Header.Get("WWW-Authenticate"), "Bearer") {
+		t.Errorf("WWW-Authenticate = %q, want Bearer", resp.Header.Get("WWW-Authenticate"))
+	}
+}
+
+func TestE2E_Admin_AcceptsToken(t *testing.T) {
+	ts := newAdminTestServer(t)
+	resp, err := ts.adminGet(t, "/admin/")
+	if err != nil {
+		t.Fatalf("admin: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "<html") {
+		t.Errorf("body is not HTML: %s", body)
+	}
+	if !strings.Contains(string(body), `name="csrf-token"`) {
+		t.Errorf("body missing csrf-token meta tag: %s", body)
+	}
+}
+
+func TestE2E_Admin_ClientListThroughRouter(t *testing.T) {
+	ts := newAdminTestServer(t)
+	resp, err := ts.adminGet(t, "/admin/api/clients")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	var list struct {
+		Items      []map[string]any `json:"items"`
+		TotalCount int              `json:"total_count"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if list.TotalCount < 1 {
+		t.Errorf("expected the seeded public client, got %d", list.TotalCount)
+	}
+}
+
+func TestE2E_Admin_Keys_StripPrivatePEM(t *testing.T) {
+	ts := newAdminTestServer(t)
+	resp, err := ts.adminGet(t, "/admin/api/keys")
+	if err != nil {
+		t.Fatalf("keys: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	if strings.Contains(string(body), "PRIVATE KEY") {
+		t.Errorf("response leaked private PEM: %s", body)
+	}
+	// The response should still mention kid/alg.
+	var out struct {
+		Items []struct {
+			Kid       string `json:"kid"`
+			Alg       string `json:"alg"`
+			IsActive  bool   `json:"is_active"`
+			PublicPEM string `json:"public_pem"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Items) == 0 {
+		t.Errorf("expected at least one signing key, got 0")
+	}
+	for _, k := range out.Items {
+		if k.Kid == "" {
+			t.Errorf("key missing kid: %+v", k)
+		}
+		if !strings.Contains(k.PublicPEM, "PUBLIC KEY") {
+			t.Errorf("public PEM missing for kid=%s", k.Kid)
+		}
+	}
+}
+
+// adminTestServer is a tiny wrapper around the existing testServer
+// that adds the admin token + a Get helper that sets the auth header.
+type adminTestServer struct {
+	*testServer
+	token string
+}
+
+const testAdminTokenValue = "test-admin-token"
+
+func newAdminTestServer(t *testing.T) *adminTestServer {
+	t.Helper()
+	ts := newTestServer(t)
+	ats := &adminTestServer{testServer: ts, token: testAdminTokenValue}
+	// Wire the admin bundle into the existing test server's router.
+	// We do this once per test by appending the admin routes to a
+	// fresh mux so the rest of the test setup is unaffected.
+	// For simplicity, the test server already mounts admin when
+	// newTestServerWith is called with the right config. We
+	// rebuild the admin handler here.
+	_ = ats // the admin is already mounted in newTestServerWith
+	return ats
+}
+
+func (a *adminTestServer) adminGet(t *testing.T, path string) (*http.Response, error) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, a.URL(path), nil)
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	return a.client.Do(req)
+}
+
+// --- T8.1: rate limit + lockout + security headers ---
+
+func TestE2E_LoginRateLimit_Over429(t *testing.T) {
+	ts := newTestServerWithRateLimit(t, 1, 1) // 1 rps, burst 1
+	// Burst is 1, refill is slow. Two POSTs in a row should
+	// yield a non-429 for the first, 429 for the second.
+	body := strings.NewReader("username=x&password=y")
+	first := postRaw(t, ts, "/login", body)
+	first.Body.Close()
+	if first.StatusCode == http.StatusTooManyRequests {
+		t.Fatalf("first request: rate-limited too early (status %d)", first.StatusCode)
+	}
+
+	body2 := strings.NewReader("username=x&password=y")
+	second := postRaw(t, ts, "/login", body2)
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("second request: status = %d, want 429", second.StatusCode)
+	}
+	if second.Header.Get("Retry-After") == "" {
+		t.Errorf("429 missing Retry-After")
+	}
+}
+
+// postRaw fires a raw POST without going through the test server's
+// redirect-aware client. It returns the response without reading the
+// body, so the caller must close it.
+func postRaw(t *testing.T, ts *testServer, path string, body *strings.Reader) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, ts.URL(path), body)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := ts.client.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	return resp
+}
+
+func TestE2E_SecurityHeaders_PresentOnDiscovery(t *testing.T) {
+	ts := newTestServer(t)
+	resp, err := ts.do(t, http.MethodGet, "/.well-known/openid-configuration", nil, nil)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	resp.Body.Close()
+	if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+	if got := resp.Header.Get("X-Frame-Options"); got != "DENY" {
+		t.Errorf("X-Frame-Options = %q, want DENY", got)
+	}
+	if got := resp.Header.Get("Referrer-Policy"); got != "no-referrer" {
+		t.Errorf("Referrer-Policy = %q, want no-referrer", got)
+	}
+	if got := resp.Header.Get("Cross-Origin-Opener-Policy"); got != "same-origin" {
+		t.Errorf("Cross-Origin-Opener-Policy = %q, want same-origin", got)
+	}
+}
+
+func TestE2E_StrictTransportSecurity_HTTPSOnly(t *testing.T) {
+	// RequireHTTPS=false → HSTS must NOT be set (it's only safe
+	// when serving over HTTPS).
+	ts := newTestServer(t) // test config sets RequireHTTPS=false
+	resp, _ := ts.do(t, http.MethodGet, "/.well-known/openid-configuration", nil, nil)
+	resp.Body.Close()
+	if got := resp.Header.Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("HSTS set over HTTP: %q (browser would cache and break)", got)
+	}
+}
+
+func TestE2E_Login_LockoutAfterRepeatedFailures(t *testing.T) {
+	ts := newTestServer(t)
+	// Repeatedly POST /login with wrong creds. The tracker
+	// default is MaxFailures=5; the 6th attempt should be
+	// blocked even with correct creds.
+	authorizeURL := buildAuthorizeURL(testClientID, testRedirectURI, testState, testNonce, testChallenge())
+	for i := 0; i < 5; i++ {
+		resp := loginWithCreds(t, ts, "wrong", "wrong", authorizeURL)
+		resp.Body.Close()
+	}
+	// 6th: still bad creds, but should also be locked.
+	resp := loginWithCreds(t, ts, "wrong", "wrong", authorizeURL)
+	defer resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	if !strings.Contains(loc, "error=account_locked") {
+		t.Errorf("6th attempt Location = %q, want error=account_locked", loc)
+	}
+}
+
+func loginWithCreds(t *testing.T, ts *testServer, user, pass, returnURL string) *http.Response {
+	t.Helper()
+	// Get CSRF cookie + token first.
+	resp, err := ts.do(t, http.MethodGet, "/login", nil, nil)
+	if err != nil {
+		t.Fatalf("GET login: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	csrfToken := extractInputValue(t, string(body), `name="csrf_token"`)
+	csrfCookie := findCookie(resp.Cookies(), "_csrf")
+	form := url.Values{}
+	form.Set("csrf_token", csrfToken)
+	form.Set("username", user)
+	form.Set("password", pass)
+	form.Set("returnUrl", returnURL)
+	postResp, err := ts.do(t, http.MethodPost, "/login", form, []*http.Cookie{csrfCookie})
+	if err != nil {
+		t.Fatalf("POST login: %v", err)
+	}
+	return postResp
+}
+
+// testServerRateLimitRPS / testServerRateLimitBurst let a test
+// request a tight rate limit for its duration; the override is
+// scoped to that test and restored on cleanup.
+var (
+	rateLimitOverrideRPS   int
+	rateLimitOverrideBurst int
+)
+
+func testServerRateLimitRPS(t *testing.T) int {
+	t.Helper()
+	if rateLimitOverrideRPS > 0 {
+		return rateLimitOverrideRPS
+	}
+	return 1000
+}
+
+func testServerRateLimitBurst(t *testing.T) int {
+	t.Helper()
+	if rateLimitOverrideBurst > 0 {
+		return rateLimitOverrideBurst
+	}
+	return 1000
+}
+
+// withRateLimit installs a process-wide rate limit override for the
+// duration of t. Use it to opt a specific test into a tight limit.
+func withRateLimit(t *testing.T, rps, burst int) {
+	t.Helper()
+	prevRPS, prevBurst := rateLimitOverrideRPS, rateLimitOverrideBurst
+	rateLimitOverrideRPS = rps
+	rateLimitOverrideBurst = burst
+	t.Cleanup(func() {
+		rateLimitOverrideRPS, rateLimitOverrideBurst = prevRPS, prevBurst
+	})
+}
+
+func newTestServerWithRateLimit(t *testing.T, rps, burst int) *testServer {
+	t.Helper()
+	withRateLimit(t, rps, burst)
+	return newTestServer(t)
+}
+
 // --- T5.4: same suite re-run against the GORM-backed store. ---
 
 // gormFlowTest runs the most important end-to-end paths against the
@@ -1652,6 +1970,589 @@ func sameURL(a, b string) bool {
 		}
 	}
 	return true
+}
+
+// --- M6: confidential client + private_key_jwt + client_credentials ---
+
+const testConfidentialID = "demo-confidential"
+
+// confidentialTestClient returns the RSA keypair + the *domain.Client
+// the test registered, so the test can sign assertions on the
+// server's behalf.
+type confidentialTestClient struct {
+	Client *domain.Client
+	Priv   jwk.Key
+	Kid    string
+}
+
+// registerConfidentialClient adds a private_key_jwt client to the
+// test server's bundle and returns the keypair used.
+func registerConfidentialClient(t *testing.T, b bundle) confidentialTestClient {
+	t.Helper()
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	privJWK, err := jwk.FromRaw(priv)
+	if err != nil {
+		t.Fatalf("jwk.FromRaw: %v", err)
+	}
+	kid := "test-confidential-kid"
+	if err := privJWK.Set(jwk.KeyIDKey, kid); err != nil {
+		t.Fatalf("set kid: %v", err)
+	}
+	if err := privJWK.Set(jwk.AlgorithmKey, jwa.RS256); err != nil {
+		t.Fatalf("set alg: %v", err)
+	}
+	pubJWK, err := privJWK.PublicKey()
+	if err != nil {
+		t.Fatalf("public key: %v", err)
+	}
+	set := jwk.NewSet()
+	if err := set.AddKey(pubJWK); err != nil {
+		t.Fatalf("add to set: %v", err)
+	}
+	raw, err := json.Marshal(set)
+	if err != nil {
+		t.Fatalf("marshal jwks: %v", err)
+	}
+	c := &domain.Client{
+		ClientID:                testConfidentialID,
+		DisplayName:             "Demo Confidential Client",
+		AllowedScopes:           []string{"read", "write", "openid"},
+		TokenEndpointAuthMethod: domain.TokenEndpointAuthMethodPrivateKeyJWT,
+		AllowClientCredentials:  true,
+		JWKSJSON:                string(raw),
+	}
+	if err := b.Clients.Store(context.Background(), c); err != nil {
+		t.Fatalf("store confidential client: %v", err)
+	}
+	return confidentialTestClient{Client: c, Priv: privJWK, Kid: kid}
+}
+
+// signClientAssertion mints a private_key_jwt assertion suitable for
+// POSTing to /connect/token.
+func signClientAssertion(t *testing.T, priv jwk.Key, clientID, audience, jti string, iat, exp time.Time) string {
+	t.Helper()
+	tok, err := jwt.NewBuilder().
+		Issuer(clientID).
+		Subject(clientID).
+		Audience([]string{audience}).
+		IssuedAt(iat).
+		Expiration(exp).
+		JwtID(jti).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	signed, err := jwt.Sign(tok, jwt.WithKey(jwa.RS256, priv))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	return string(signed)
+}
+
+func TestE2E_ClientCredentials_Confidential(t *testing.T) {
+	ts := newTestServer(t)
+	ctc := registerConfidentialClient(t, bundleFromTestServer(ts))
+
+	now := ts.clk.Now()
+	assertion := signClientAssertion(t, ctc.Priv, testConfidentialID,
+		testIssuer+"/connect/token", uuid.NewString(), now, now.Add(time.Minute))
+
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("client_id", testConfidentialID)
+	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form.Set("client_assertion", assertion)
+	form.Set("scope", "read")
+
+	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(resp.Header.Get("Cache-Control"), "no-store") {
+		t.Errorf("Cache-Control missing no-store")
+	}
+	var tr tokenResponse
+	if err := json.Unmarshal(body, &tr); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, body)
+	}
+	if tr.AccessToken == "" {
+		t.Errorf("access_token missing")
+	}
+	if tr.RefreshToken != "" {
+		t.Errorf("refresh_token must be empty for client_credentials, got %q", tr.RefreshToken)
+	}
+	if tr.IDToken != "" {
+		t.Errorf("id_token must be empty for client_credentials, got %q", tr.IDToken)
+	}
+	// sub of the issued access token must be the client_id.
+	accessTok, err := ts.issuer.VerifyToken(context.Background(), tr.AccessToken)
+	if err != nil {
+		t.Fatalf("VerifyToken: %v", err)
+	}
+	if accessTok.Subject() != testConfidentialID {
+		t.Errorf("sub = %q, want %q", accessTok.Subject(), testConfidentialID)
+	}
+	if tr.Scope != "read" {
+		t.Errorf("scope = %q, want read", tr.Scope)
+	}
+}
+
+func TestE2E_ClientCredentials_ForgedKeyRejected(t *testing.T) {
+	ts := newTestServer(t)
+	_ = registerConfidentialClient(t, bundleFromTestServer(ts))
+
+	// We sign the assertion with a freshly generated key — one
+	// that is NOT registered on the client.
+	otherPriv, _ := rsa.GenerateKey(rand.Reader, 2048)
+	otherJWK, _ := jwk.FromRaw(otherPriv)
+	_ = otherJWK.Set(jwk.KeyIDKey, "attacker")
+	_ = otherJWK.Set(jwk.AlgorithmKey, jwa.RS256)
+
+	now := ts.clk.Now()
+	assertion := signClientAssertion(t, otherJWK, testConfidentialID,
+		testIssuer+"/connect/token", uuid.NewString(), now, now.Add(time.Minute))
+
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("client_id", testConfidentialID)
+	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form.Set("client_assertion", assertion)
+	form.Set("scope", "read")
+
+	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("forged key: status = %d, want 401; body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(resp.Header.Get("WWW-Authenticate"), "Basic") {
+		t.Errorf("WWW-Authenticate = %q, want Basic", resp.Header.Get("WWW-Authenticate"))
+	}
+	var er struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(body, &er)
+	if er.Error != "invalid_client" {
+		t.Errorf("error = %q, want invalid_client", er.Error)
+	}
+}
+
+func TestE2E_ClientCredentials_ReplayedJTIRevoked(t *testing.T) {
+	ts := newTestServer(t)
+	ctc := registerConfidentialClient(t, bundleFromTestServer(ts))
+
+	now := ts.clk.Now()
+	jti := uuid.NewString()
+	assertion := signClientAssertion(t, ctc.Priv, testConfidentialID,
+		testIssuer+"/connect/token", jti, now, now.Add(time.Minute))
+
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("client_id", testConfidentialID)
+	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form.Set("client_assertion", assertion)
+	form.Set("scope", "read")
+
+	// First use: ok.
+	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first status = %d, want 200", resp.StatusCode)
+	}
+
+	// Replay the same jti: 401 invalid_client.
+	resp, err = ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("replay: status = %d, want 401; body=%s", resp.StatusCode, body)
+	}
+	var er struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(body, &er)
+	if er.Error != "invalid_client" {
+		t.Errorf("replay error = %q, want invalid_client", er.Error)
+	}
+}
+
+func TestE2E_ClientCredentials_PublicClientRejected(t *testing.T) {
+	ts := newTestServer(t)
+	// Use the public test client — does NOT allow client_credentials.
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("client_id", testClientID)
+	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body=%s", resp.StatusCode, body)
+	}
+	var er struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(body, &er)
+	if er.Error != "unauthorized_client" {
+		t.Errorf("error = %q, want unauthorized_client", er.Error)
+	}
+}
+
+func TestE2E_ClientCredentials_HMACRejected(t *testing.T) {
+	ts := newTestServer(t)
+	ctc := registerConfidentialClient(t, bundleFromTestServer(ts))
+
+	// Forge an HS256 assertion using the public key as the HMAC
+	// secret. The verifier must reject before doing any signature
+	// work.
+	pubJWK, err := ctc.Priv.PublicKey()
+	if err != nil {
+		t.Fatalf("PublicKey: %v", err)
+	}
+	var pubRaw any
+	if err := pubJWK.Raw(&pubRaw); err != nil {
+		t.Fatalf("Raw: %v", err)
+	}
+	hmacSecret := []byte(fmt.Sprintf("%v", pubRaw))
+
+	now := ts.clk.Now()
+	tok, err := jwt.NewBuilder().
+		Issuer(testConfidentialID).
+		Subject(testConfidentialID).
+		Audience([]string{testIssuer + "/connect/token"}).
+		IssuedAt(now).
+		Expiration(now.Add(time.Minute)).
+		JwtID(uuid.NewString()).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	signed, err := jwt.Sign(tok, jwt.WithKey(jwa.HS256, hmacSecret))
+	if err != nil {
+		t.Fatalf("hmac sign: %v", err)
+	}
+
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("client_id", testConfidentialID)
+	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form.Set("client_assertion", string(signed))
+	form.Set("scope", "read")
+
+	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("hmac: status = %d, want 401; body=%s", resp.StatusCode, body)
+	}
+}
+
+func TestE2E_ClientCredentials_ExpiredAssertionRejected(t *testing.T) {
+	ts := newTestServer(t)
+	ctc := registerConfidentialClient(t, bundleFromTestServer(ts))
+
+	// exp in the past relative to the fake clock.
+	now := ts.clk.Now()
+	assertion := signClientAssertion(t, ctc.Priv, testConfidentialID,
+		testIssuer+"/connect/token", uuid.NewString(), now.Add(-2*time.Minute), now.Add(-time.Minute))
+
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("client_id", testConfidentialID)
+	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form.Set("client_assertion", assertion)
+
+	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expired: status = %d, want 401; body=%s", resp.StatusCode, body)
+	}
+}
+
+func TestE2E_Discovery_AdvertisesPrivateKeyJWT(t *testing.T) {
+	ts := newTestServer(t)
+	resp, err := ts.do(t, http.MethodGet, "/.well-known/openid-configuration", nil, nil)
+	if err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var doc struct {
+		TokenEndpointAuthMethodsSupported          []string `json:"token_endpoint_auth_methods_supported"`
+		TokenEndpointAuthSigningAlgValuesSupported []string `json:"token_endpoint_auth_signing_alg_values_supported"`
+		GrantTypesSupported                        []string `json:"grant_types_supported"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !sliceContains(doc.TokenEndpointAuthMethodsSupported, "private_key_jwt") {
+		t.Errorf("discovery missing private_key_jwt: %v", doc.TokenEndpointAuthMethodsSupported)
+	}
+	if !sliceContains(doc.TokenEndpointAuthSigningAlgValuesSupported, "RS256") {
+		t.Errorf("discovery missing RS256: %v", doc.TokenEndpointAuthSigningAlgValuesSupported)
+	}
+	if !sliceContains(doc.GrantTypesSupported, "client_credentials") {
+		t.Errorf("discovery missing client_credentials: %v", doc.GrantTypesSupported)
+	}
+}
+
+// --- M6 GORM mirror ---
+
+func TestGORM_E2E_ClientCredentials(t *testing.T) {
+	gormFlowTest(t, "ClientCredentialsConfidential", testE2EClientCredentials)
+}
+func TestGORM_E2E_ClientCredentials_Forged(t *testing.T) {
+	gormFlowTest(t, "ClientCredentialsForged", testE2EClientCredentialsForged)
+}
+func TestGORM_E2E_ClientCredentials_Replay(t *testing.T) {
+	gormFlowTest(t, "ClientCredentialsReplay", testE2EClientCredentialsReplay)
+}
+func TestGORM_E2E_ClientCredentials_HMAC(t *testing.T) {
+	gormFlowTest(t, "ClientCredentialsHMAC", testE2EClientCredentialsHMAC)
+}
+func TestGORM_E2E_ClientCredentials_PublicRejected(t *testing.T) {
+	gormFlowTest(t, "ClientCredentialsPublicRejected", testE2EClientCredentialsPublicRejected)
+}
+
+// Shared GORM runners: identical to the in-memory versions but
+// operating on the GORM-backed test server.
+
+func testE2EClientCredentials(t *testing.T, ts *testServer) {
+	ctc := registerConfidentialClient(t, bundleFromTestServer(ts))
+	now := ts.clk.Now()
+	assertion := signClientAssertion(t, ctc.Priv, testConfidentialID,
+		testIssuer+"/connect/token", uuid.NewString(), now, now.Add(time.Minute))
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("client_id", testConfidentialID)
+	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form.Set("client_assertion", assertion)
+	form.Set("scope", "read")
+	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	var tr tokenResponse
+	_ = json.Unmarshal(body, &tr)
+	if tr.AccessToken == "" {
+		t.Errorf("access_token missing")
+	}
+	if tr.RefreshToken != "" {
+		t.Errorf("refresh_token must be empty for client_credentials")
+	}
+	if tr.IDToken != "" {
+		t.Errorf("id_token must be empty for client_credentials")
+	}
+	accessTok, err := ts.issuer.VerifyToken(context.Background(), tr.AccessToken)
+	if err != nil {
+		t.Fatalf("VerifyToken: %v", err)
+	}
+	if accessTok.Subject() != testConfidentialID {
+		t.Errorf("sub = %q, want %q", accessTok.Subject(), testConfidentialID)
+	}
+}
+
+func testE2EClientCredentialsForged(t *testing.T, ts *testServer) {
+	_ = registerConfidentialClient(t, bundleFromTestServer(ts))
+	otherPriv, _ := rsa.GenerateKey(rand.Reader, 2048)
+	otherJWK, _ := jwk.FromRaw(otherPriv)
+	_ = otherJWK.Set(jwk.KeyIDKey, "attacker")
+	_ = otherJWK.Set(jwk.AlgorithmKey, jwa.RS256)
+	now := ts.clk.Now()
+	assertion := signClientAssertion(t, otherJWK, testConfidentialID,
+		testIssuer+"/connect/token", uuid.NewString(), now, now.Add(time.Minute))
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("client_id", testConfidentialID)
+	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form.Set("client_assertion", assertion)
+	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("forged: status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func testE2EClientCredentialsReplay(t *testing.T, ts *testServer) {
+	ctc := registerConfidentialClient(t, bundleFromTestServer(ts))
+	now := ts.clk.Now()
+	jti := uuid.NewString()
+	assertion := signClientAssertion(t, ctc.Priv, testConfidentialID,
+		testIssuer+"/connect/token", jti, now, now.Add(time.Minute))
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("client_id", testConfidentialID)
+	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form.Set("client_assertion", assertion)
+	resp, _ := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first: %d", resp.StatusCode)
+	}
+	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("replay: status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func testE2EClientCredentialsHMAC(t *testing.T, ts *testServer) {
+	ctc := registerConfidentialClient(t, bundleFromTestServer(ts))
+	pubJWK, _ := ctc.Priv.PublicKey()
+	var pubRaw any
+	_ = pubJWK.Raw(&pubRaw)
+	hmacSecret := []byte(fmt.Sprintf("%v", pubRaw))
+	now := ts.clk.Now()
+	tok, _ := jwt.NewBuilder().
+		Issuer(testConfidentialID).
+		Subject(testConfidentialID).
+		Audience([]string{testIssuer + "/connect/token"}).
+		IssuedAt(now).
+		Expiration(now.Add(time.Minute)).
+		JwtID(uuid.NewString()).
+		Build()
+	signed, _ := jwt.Sign(tok, jwt.WithKey(jwa.HS256, hmacSecret))
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("client_id", testConfidentialID)
+	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form.Set("client_assertion", string(signed))
+	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("hmac: status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func testE2EClientCredentialsPublicRejected(t *testing.T, ts *testServer) {
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("client_id", testClientID) // public demo client
+	resp, err := ts.do(t, http.MethodPost, "/connect/token", form, nil)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401; body=%s", resp.StatusCode, body)
+	}
+	var er struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(body, &er)
+	if er.Error != "unauthorized_client" {
+		t.Errorf("error = %q, want unauthorized_client", er.Error)
+	}
+}
+
+// --- helpers shared between M6 tests ---
+
+// bundleFromTestServer returns the bundle the test server was built
+// with. We don't currently expose it directly, so this is a
+// best-effort reconstruction: for the memory path we re-look up the
+// clients; for the GORM path the test server also holds live
+// stores. To keep the test API simple, registerConfidentialClient
+// operates on the live store via the test server's ts.auditLogs /
+// ts.refreshTokens / ts.clients fields — which are the store
+// interfaces the bundle produced. The bundle re-export below exists
+// purely so the helper signatures match; the real interaction is
+// through ts.clients.
+func bundleFromTestServer(ts *testServer) bundle {
+	return bundle{
+		Clients:       ts.clients,
+		RefreshTokens: ts.refreshTokens,
+		AuditLogs:     ts.auditLogs,
+		Scopes:        memory.NewScopeStore(),
+		SigningKeys:   memory.NewSigningKeyStore(),
+		AuthCodes:     memory.NewAuthorizationCodeStore(),
+		Sessions:      memory.NewSessionStore(),
+		Users:         memory.NewUserStore(),
+		Tracker:       memory.NewLoginAttemptTracker(time.Now),
+	}
+}
+
+// generateKey returns a freshly generated RSA private key, used by
+// the HMAC test to manufacture a forgery that does not use the
+// legitimate key.
+func generateKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	k, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	return k
+}
+
+// --- admin helpers ---
+
+// buildTestAdminMount wires the admin auth + CSRF + API + SPA for
+// the test server. The test admin token is a fixed value
+// (testAdminTokenValue) the test client sends.
+func buildTestAdminMount(t *testing.T, b bundle, clk *clock.FakeClock, logger *slog.Logger) *server.AdminMount {
+	t.Helper()
+	authMW, err := admin.AuthMiddleware(admin.AuthConfig{Token: testAdminTokenValue}, logger)
+	if err != nil {
+		t.Fatalf("admin.AuthMiddleware: %v", err)
+	}
+	csrfMW := admin.CSRFMiddleware([]byte("0123456789abcdef0123456789abcdef"))
+	apiMux := http.NewServeMux()
+	(&admin.API{
+		Clients:       b.Clients,
+		Scopes:        b.Scopes,
+		Sessions:      b.Sessions,
+		RefreshTokens: b.RefreshTokens,
+		SigningKeys:   b.SigningKeys,
+		AuditLogs:     b.AuditLogs,
+		Clock:         clk,
+		Logger:        logger,
+	}).Mount(apiMux)
+	ui := &admin.UI{
+		Template: template.Must(template.New("admin").Parse(admin.IndexPage())),
+		Logger:   logger,
+	}
+	wrapped := authMW(csrfMW(admin.CombineMux(apiMux, ui)))
+	return &server.AdminMount{Root: wrapped, API: wrapped}
 }
 
 var _ = fmt.Sprintf

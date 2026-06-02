@@ -58,9 +58,11 @@ type ErrorResponse struct {
 	ErrorDescription string `json:"error_description,omitempty"`
 }
 
-// Handle is the entry point invoked by the token dispatcher. form is the
+// Handle is the entry point invoked by the token dispatcher. The
+// authenticated client is supplied by the dispatcher; we re-check
+// the form's client_id against it as defence-in-depth. form is the
 // already-parsed application/x-www-form-urlencoded body.
-func (g *AuthCodeGrant) Handle(ctx context.Context, w http.ResponseWriter, form url.Values) {
+func (g *AuthCodeGrant) Handle(ctx context.Context, w http.ResponseWriter, client *domain.Client, form url.Values) {
 	clientID := form.Get("client_id")
 	codeRaw := form.Get("code")
 	redirectURI := form.Get("redirect_uri")
@@ -70,10 +72,12 @@ func (g *AuthCodeGrant) Handle(ctx context.Context, w http.ResponseWriter, form 
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "client_id, code, redirect_uri are required")
 		return
 	}
-
-	client, err := g.Clients.FindByClientID(ctx, clientID)
-	if err != nil {
-		g.writeError(w, http.StatusUnauthorized, "invalid_client", "unknown client")
+	if client == nil {
+		g.writeError(w, http.StatusUnauthorized, "invalid_client", "client authentication required")
+		return
+	}
+	if client.ClientID != clientID {
+		g.writeError(w, http.StatusBadRequest, "invalid_grant", "client_id mismatch with authenticated client")
 		return
 	}
 

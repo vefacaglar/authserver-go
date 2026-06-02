@@ -14,6 +14,14 @@ func env(t *testing.T, kv map[string]string) {
 	for k, v := range kv {
 		t.Setenv(k, v)
 	}
+	// Every test must opt-in to admin auth somehow. The default
+	// is to set a non-empty static token so production-shaped
+	// configs are exercised.
+	if _, ok := kv["AUTH_ADMIN_TOKEN"]; !ok {
+		if _, ok := kv["AUTH_ADMIN_ALLOW_ANONYMOUS"]; !ok {
+			t.Setenv("AUTH_ADMIN_TOKEN", "test-admin-token")
+		}
+	}
 }
 
 func TestLoad_Valid(t *testing.T) {
@@ -108,5 +116,32 @@ func TestEffectiveCookieName(t *testing.T) {
 	cfg, _ := Load()
 	if !strings.HasPrefix(cfg.EffectiveCookieName(), "__Host-") {
 		t.Errorf("EffectiveCookieName = %q, want __Host- prefix under HTTPS", cfg.EffectiveCookieName())
+	}
+}
+
+func TestLoad_RejectsAdminMisconfigured(t *testing.T) {
+	// No admin token, no anonymous flag → must fail.
+	t.Setenv("AUTH_ISSUER", "https://auth.example.com")
+	t.Setenv("AUTH_COOKIE_HASH_KEY", b64(make([]byte, 32)))
+	t.Setenv("AUTH_COOKIE_BLOCK_KEY", b64(make([]byte, 32)))
+	t.Setenv("AUTH_CSRF_KEY", b64(make([]byte, 32)))
+	t.Setenv("AUTH_ADMIN_TOKEN", "")
+	t.Setenv("AUTH_ADMIN_ALLOW_ANONYMOUS", "")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "AUTH_ADMIN_TOKEN") {
+		t.Fatalf("Load = %v, want admin-token error", err)
+	}
+}
+
+func TestLoad_AdminAnonymousAccepted(t *testing.T) {
+	env(t, map[string]string{
+		"AUTH_ISSUER":                "https://auth.example.com",
+		"AUTH_COOKIE_HASH_KEY":       b64(make([]byte, 32)),
+		"AUTH_COOKIE_BLOCK_KEY":      b64(make([]byte, 32)),
+		"AUTH_CSRF_KEY":              b64(make([]byte, 32)),
+		"AUTH_ADMIN_ALLOW_ANONYMOUS": "true",
+		// AUTH_ADMIN_TOKEN intentionally unset.
+	})
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load with anonymous admin: %v", err)
 	}
 }
