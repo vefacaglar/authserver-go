@@ -4,7 +4,6 @@
 package config
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/url"
@@ -34,9 +33,7 @@ type Config struct {
 	// command seeds explicitly.
 	Seed bool
 
-	CookieName  string
-	CookieHMAC  []byte
-	CookieBlock []byte
+	CookieName string
 
 	LoginPath             string
 	LogoutPath            string
@@ -53,8 +50,6 @@ type Config struct {
 	RequirePKCE                  bool
 	LoginRateLimit               int
 	AdminAllowAnonymous          bool
-
-	CSRFKey []byte
 
 	// AdminToken is the static bearer shared with admin operators.
 	// When empty, the admin API is unreachable unless
@@ -88,16 +83,9 @@ func Load() (*Config, error) {
 		AdminAllowAnonymous:          getbool("AUTH_ADMIN_ALLOW_ANONYMOUS", false),
 	}
 
-	var err error
-	if c.CookieHMAC, err = decodeB64(getenv("AUTH_COOKIE_HASH_KEY", ""), 32); err != nil {
-		return nil, fmt.Errorf("AUTH_COOKIE_HASH_KEY: %w", err)
-	}
-	if c.CookieBlock, err = decodeB64(getenv("AUTH_COOKIE_BLOCK_KEY", ""), 32); err != nil {
-		return nil, fmt.Errorf("AUTH_COOKIE_BLOCK_KEY: %w", err)
-	}
-	if c.CSRFKey, err = decodeB64(getenv("AUTH_CSRF_KEY", ""), 32); err != nil {
-		return nil, fmt.Errorf("AUTH_CSRF_KEY: %w", err)
-	}
+	// Cookie + CSRF keys are no longer read from the environment: they live
+	// in the data-protection key ring (data_protection_keys table),
+	// generated server-side and shared across instances.
 	c.AdminToken = getenv("AUTH_ADMIN_TOKEN", "")
 
 	if err := c.validate(); err != nil {
@@ -140,12 +128,6 @@ func (c *Config) validate() error {
 	}
 	if c.RegisterPath == "" || !strings.HasPrefix(c.RegisterPath, "/") {
 		return errors.New("AUTH_REGISTER_PATH must be an absolute path")
-	}
-	if len(c.CookieHMAC) == 0 || len(c.CookieBlock) == 0 {
-		return errors.New("AUTH_COOKIE_HASH_KEY and AUTH_COOKIE_BLOCK_KEY are required")
-	}
-	if len(c.CSRFKey) == 0 {
-		return errors.New("AUTH_CSRF_KEY is required")
 	}
 	if c.LoginRateLimit < 1 {
 		return errors.New("AUTH_LOGIN_RATE_LIMIT must be >= 1")
@@ -218,29 +200,4 @@ func getdur(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
-}
-
-// decodeB64 decodes a base64 (std or URL) string and asserts a minimum
-// length. Empty input is allowed and yields a zero-length slice.
-func decodeB64(s string, minLen int) ([]byte, error) {
-	if s == "" {
-		return nil, nil
-	}
-	b, err := base64.StdEncoding.DecodeString(s)
-	if err != nil {
-		b, err = base64.URLEncoding.DecodeString(s)
-		if err != nil {
-			b, err = base64.RawStdEncoding.DecodeString(s)
-			if err != nil {
-				b, err = base64.RawURLEncoding.DecodeString(s)
-			}
-		}
-	}
-	if err != nil {
-		return nil, fmt.Errorf("not valid base64: %w", err)
-	}
-	if len(b) < minLen {
-		return nil, fmt.Errorf("decoded length %d < required %d", len(b), minLen)
-	}
-	return b, nil
 }

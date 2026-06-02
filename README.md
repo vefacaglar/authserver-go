@@ -78,12 +78,11 @@ export AUTH_ISSUER=https://auth.example.com          # must be https unless AUTH
 export AUTH_LISTEN_ADDR=:5175
 export AUTH_DB_DRIVER=postgres
 export AUTH_DB_DSN="host=db user=auth password=... dbname=auth sslmode=require"
-export AUTH_COOKIE_HASH_KEY=$(head -c 32 /dev/urandom | base64)
-export AUTH_COOKIE_BLOCK_KEY=$(head -c 32 /dev/urandom | base64)
-export AUTH_CSRF_KEY=$(head -c 32 /dev/urandom | base64)
 export AUTH_ADMIN_TOKEN=$(head -c 32 /dev/urandom | base64)
 
-make build && ./authserver
+# Cookie + CSRF keys are generated server-side and stored in the database
+# (the data-protection key ring) — no key env vars to manage.
+make build && ./authserver migrate && ./authserver serve
 ```
 
 On first boot the server bootstraps an RSA-2048 signing key, seeds the
@@ -103,9 +102,6 @@ public demo client (`demo-public`), a confidential demo client
 | `AUTH_DB_DSN` | _(required)_ | PostgreSQL DSN, e.g. `postgres://user:pass@host:5432/db?sslmode=require` |
 | `AUTH_AUTO_MIGRATE` | `true` | Run schema migration on startup. Set `false` in production and run `authserver migrate` at deploy time for fast cold starts |
 | `AUTH_SEED` | `true` | Seed demo client/user/scopes on startup. Set `false` in production |
-| `AUTH_COOKIE_HASH_KEY` | _(required)_ | base64, ≥32 bytes — session cookie HMAC |
-| `AUTH_COOKIE_BLOCK_KEY` | _(required)_ | base64, ≥32 bytes — session cookie encryption |
-| `AUTH_CSRF_KEY` | _(required)_ | base64, ≥32 bytes — CSRF token key |
 | `AUTH_ADMIN_TOKEN` | _(required\*)_ | Admin API bearer; \*not required if `AUTH_ADMIN_ALLOW_ANONYMOUS=true` |
 | `AUTH_ADMIN_ALLOW_ANONYMOUS` | `false` | Dev-only: open the admin API without a token |
 | `AUTH_AUTH_CODE_LIFETIME` | `60s` | Must be ≤ 2m |
@@ -136,6 +132,7 @@ The binary has three subcommands:
 | `authserver serve` | Start the HTTP server (default when no subcommand given) |
 | `authserver migrate` | Apply the schema, seed demo fixtures, and pre-create the signing key — run once at deploy time |
 | `authserver rotate-keys` | Generate a fresh active signing key and retire the current one (kept in JWKS so old tokens stay verifiable) |
+| `authserver rotate-dp-keys` | Rotate the data-protection key (cookie + CSRF material); retired keys stay in the ring so existing sessions keep working |
 
 ### How migrations work
 
@@ -166,9 +163,12 @@ authserver migrate                       # once, at deploy
 AUTH_AUTO_MIGRATE=false AUTH_SEED=false authserver serve
 ```
 
-All instances must share the same `AUTH_COOKIE_HASH_KEY`,
-`AUTH_COOKIE_BLOCK_KEY`, and `AUTH_CSRF_KEY` so cookies and CSRF tokens
-validate across the fleet.
+The cookie + CSRF keys live in the **data-protection key ring**
+(`data_protection_keys` table): generated on the first `migrate`/boot,
+shared by every instance from the database, and durable across restarts —
+so sessions survive a restart and validate across the whole fleet with no
+key env vars to distribute. Rotate them with `authserver rotate-dp-keys`;
+retired keys stay in the ring so in-flight sessions keep working.
 
 > AutoMigrate intentionally does **not** drop columns or perform
 > destructive/altering changes. For a column rename or type change on a

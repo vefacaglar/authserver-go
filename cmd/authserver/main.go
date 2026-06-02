@@ -54,8 +54,10 @@ func main() {
 		err = runMigrate(logger)
 	case "rotate-keys":
 		err = runRotateKeys(logger)
+	case "rotate-dp-keys":
+		err = runRotateDPKeys(logger)
 	default:
-		logger.Error("unknown command", "cmd", cmd, "want", "serve|migrate|rotate-keys")
+		logger.Error("unknown command", "cmd", cmd, "want", "serve|migrate|rotate-keys|rotate-dp-keys")
 		os.Exit(2)
 	}
 	if err != nil {
@@ -94,15 +96,19 @@ func runMigrate(logger *slog.Logger) error {
 	if err := seedBundle(bundle); err != nil {
 		return err
 	}
-	// Pre-create the active signing key so the serve path never has to
-	// generate one on a cold start.
-	keyManager := token.NewKeyManager(bundle.SigningKeys, clock.SystemClock{})
+	// Pre-create the active signing + data-protection keys so the serve
+	// path never has to generate them on a cold start.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	keyManager := token.NewKeyManager(bundle.SigningKeys, clock.SystemClock{})
 	if _, err := keyManager.EnsureActiveKey(ctx); err != nil {
 		return err
 	}
-	logger.Info("seed + signing key ready", "driver", drv)
+	dpManager := session.NewDPKeyManager(bundle.DataProtection, clock.SystemClock{})
+	if _, err := dpManager.EnsureActiveKey(ctx); err != nil {
+		return err
+	}
+	logger.Info("seed + signing/data-protection keys ready", "driver", drv)
 	return nil
 }
 
@@ -139,21 +145,54 @@ func runRotateKeys(logger *slog.Logger) error {
 	return nil
 }
 
+// runRotateDPKeys generates a fresh active data-protection key (cookie +
+// CSRF material) and retires the current one. Retired keys stay in the ring
+// so existing session cookies keep decoding until they expire; only new
+// cookies use the new key. One-shot operator command for periodic rotation.
+func runRotateDPKeys(logger *slog.Logger) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	drv := cfg.DBDriver
+
+	db, err := gormstore.Open(drv, cfg.DBDSN)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if sqlDB, derr := db.DB(); derr == nil {
+			_ = sqlDB.Close()
+		}
+	}()
+
+	dpManager := session.NewDPKeyManager(gormstore.NewDataProtectionKeyStore(db), clock.SystemClock{})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	k, err := dpManager.Rotate(ctx)
+	if err != nil {
+		return err
+	}
+	logger.Info("data-protection key rotated", "driver", drv, "new_kid", k.KeyID)
+	return nil
+}
+
 // storeBundle is the bag of store interfaces the rest of the wiring
 // reads from. Both the memory and the GORM backends produce a
 // value of this type, so handlers don't know (or care) which one is
 // in use.
 type storeBundle struct {
-	Clients       store.ClientStore
-	AuthCodes     store.AuthorizationCodeStore
-	RefreshTokens store.RefreshTokenStore
-	Sessions      store.SessionStore
-	SigningKeys   store.SigningKeyStore
-	Scopes        store.ScopeStore
-	AuditLogs     store.AuditLogStore
-	Users         store.UserStore
-	Roles         store.RoleStore
-	Tracker       store.LoginAttemptTracker
+	Clients        store.ClientStore
+	AuthCodes      store.AuthorizationCodeStore
+	RefreshTokens  store.RefreshTokenStore
+	Sessions       store.SessionStore
+	SigningKeys    store.SigningKeyStore
+	DataProtection store.DataProtectionKeyStore
+	Scopes         store.ScopeStore
+	AuditLogs      store.AuditLogStore
+	Users          store.UserStore
+	Roles          store.RoleStore
+	Tracker        store.LoginAttemptTracker
 }
 
 func run(logger *slog.Logger) error {
@@ -194,7 +233,18 @@ func run(logger *slog.Logger) error {
 	issuer.DefaultAccessTokenLifetime = cfg.AccessTokenLifetime
 	issuer.DefaultIDTokenLifetime = cfg.IDTokenLifetime
 
-	cookieMgr := session.NewCookieManager(cfg.CookieHMAC, cfg.CookieBlock, session.CookieConfig{
+	// Data-protection key ring: the cookie (HMAC + encryption) and CSRF keys
+	// come from the store — generated server-side, shared across instances,
+	// durable across restarts — not from the environment. The ring lets old
+	// cookies decode after a key rotation.
+	dpManager := session.NewDPKeyManager(bundle.DataProtection, clk)
+	dpCtx, dpCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	dpKeys, dpActive, err := dpManager.Keyset(dpCtx)
+	dpCancel()
+	if err != nil {
+		return err
+	}
+	cookieMgr := session.NewCookieManagerFromKeys(dpKeys, session.CookieConfig{
 		Name:         cfg.EffectiveCookieName(),
 		RequireHTTPS: cfg.RequireHTTPS,
 		Path:         "/",
@@ -333,7 +383,7 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	csrfMW := admin.CSRFMiddleware(cfg.CSRFKey)
+	csrfMW := admin.CSRFMiddleware(dpActive.CSRFKey)
 	apiMux := http.NewServeMux()
 	(&admin.API{
 		Clients:       bundle.Clients,
@@ -467,15 +517,16 @@ func buildStores(driver, dsn string, now func() time.Time, logger *slog.Logger) 
 // state, not durable data). Shared by the serve and migrate paths.
 func newGormBundle(db *gorm.DB, now func() time.Time) *storeBundle {
 	return &storeBundle{
-		Clients:       gormstore.NewClientStore(db),
-		AuthCodes:     gormstore.NewAuthorizationCodeStore(db),
-		RefreshTokens: gormstore.NewRefreshTokenStore(db),
-		Sessions:      gormstore.NewSessionStore(db),
-		SigningKeys:   gormstore.NewSigningKeyStore(db),
-		Scopes:        gormstore.NewScopeStore(db),
-		AuditLogs:     gormstore.NewAuditLogStore(db),
-		Users:         gormstore.NewUserStore(db),
-		Roles:         gormstore.NewRoleStore(db),
+		Clients:        gormstore.NewClientStore(db),
+		AuthCodes:      gormstore.NewAuthorizationCodeStore(db),
+		RefreshTokens:  gormstore.NewRefreshTokenStore(db),
+		Sessions:       gormstore.NewSessionStore(db),
+		SigningKeys:    gormstore.NewSigningKeyStore(db),
+		DataProtection: gormstore.NewDataProtectionKeyStore(db),
+		Scopes:         gormstore.NewScopeStore(db),
+		AuditLogs:      gormstore.NewAuditLogStore(db),
+		Users:          gormstore.NewUserStore(db),
+		Roles:          gormstore.NewRoleStore(db),
 		// Persistent, cross-instance lockout tracker so brute-force limits
 		// hold globally behind a load balancer.
 		Tracker: gormstore.NewLoginAttemptTracker(db, now),

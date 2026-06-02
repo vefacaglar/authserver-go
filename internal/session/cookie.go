@@ -30,35 +30,60 @@ type CookieConfig struct {
 	MaxAge       time.Duration
 }
 
-// CookieManager wraps a securecookie codec with helpers for the request
-// lifecycle: read the cookie, write a fresh one, or clear it.
+// CookieManager wraps a securecookie codec ring with helpers for the
+// request lifecycle: read the cookie, write a fresh one, or clear it.
+//
+// codecs holds the data-protection key ring newest-first: the first codec
+// (active key) signs new cookies, and every codec is tried on decode so a
+// cookie signed under a now-retired key still validates. This makes key
+// rotation non-disruptive — existing sessions keep working.
 type CookieManager struct {
-	codec  *securecookie.SecureCookie
+	codecs []securecookie.Codec
 	config CookieConfig
 	clock  clock.Clock
 }
 
+// NewCookieManager builds a single-key manager from raw hash+block keys.
+// Used by tests and any caller that manages one static key.
 func NewCookieManager(hashKey, blockKey []byte, cfg CookieConfig, clk clock.Clock) *CookieManager {
 	return &CookieManager{
-		codec:  securecookie.New(hashKey, blockKey),
+		codecs: []securecookie.Codec{securecookie.New(hashKey, blockKey)},
 		config: cfg,
 		clock:  clk,
 	}
 }
 
-// Encode returns the encrypted+signed cookie value for the given session id.
+// DPKey is one (hash, block) pair from the data-protection key ring.
+type DPKey struct {
+	Hash  []byte
+	Block []byte
+}
+
+// NewCookieManagerFromKeys builds a manager over a key ring. keys must be
+// ordered newest-first: keys[0] is the active key used to sign new cookies.
+func NewCookieManagerFromKeys(keys []DPKey, cfg CookieConfig, clk clock.Clock) *CookieManager {
+	codecs := make([]securecookie.Codec, 0, len(keys))
+	for _, k := range keys {
+		codecs = append(codecs, securecookie.New(k.Hash, k.Block))
+	}
+	return &CookieManager{codecs: codecs, config: cfg, clock: clk}
+}
+
+// Encode returns the encrypted+signed cookie value for the given session id,
+// using the active (first) codec.
 func (m *CookieManager) Encode(id uuid.UUID) (string, error) {
-	encoded, err := m.codec.Encode(m.config.Name, id.String())
+	encoded, err := securecookie.EncodeMulti(m.config.Name, id.String(), m.codecs...)
 	if err != nil {
 		return "", fmt.Errorf("session: encode: %w", err)
 	}
 	return encoded, nil
 }
 
-// Decode verifies the signature+encryption and returns the session id.
+// Decode verifies the signature+encryption and returns the session id,
+// trying each codec in the ring (so cookies under a retired key still work).
 func (m *CookieManager) Decode(raw string) (uuid.UUID, error) {
 	var s string
-	if err := m.codec.Decode(m.config.Name, raw, &s); err != nil {
+	if err := securecookie.DecodeMulti(m.config.Name, raw, &s, m.codecs...); err != nil {
 		return uuid.Nil, fmt.Errorf("session: decode: %w", err)
 	}
 	id, err := uuid.Parse(s)

@@ -653,6 +653,48 @@ func allEntities() []any {
 		&userTokenEntity{},
 		&auditLogEntity{},
 		&loginAttemptEntity{},
+		&dataProtectionKeyEntity{},
+	}
+}
+
+// --- Data protection key ring ---
+
+// dataProtectionKeyEntity stores one cookie data-protection key (session
+// cookie HMAC + encryption + CSRF material). The active row signs new
+// cookies; retired rows are kept so existing cookies still decode.
+type dataProtectionKeyEntity struct {
+	KeyID     string `gorm:"column:key_id;primaryKey;size:128"`
+	HashKey   []byte
+	BlockKey  []byte
+	CSRFKey   []byte `gorm:"column:csrf_key"`
+	CreatedAt time.Time
+	RetiredAt *time.Time
+	IsActive  bool `gorm:"index"`
+}
+
+func (dataProtectionKeyEntity) TableName() string { return "data_protection_keys" }
+
+func toDataProtectionKeyEntity(k *domain.DataProtectionKey) *dataProtectionKeyEntity {
+	return &dataProtectionKeyEntity{
+		KeyID:     k.KeyID,
+		HashKey:   k.HashKey,
+		BlockKey:  k.BlockKey,
+		CSRFKey:   k.CSRFKey,
+		CreatedAt: k.CreatedAt,
+		RetiredAt: k.RetiredAt,
+		IsActive:  k.IsActive,
+	}
+}
+
+func (e *dataProtectionKeyEntity) toDomain() *domain.DataProtectionKey {
+	return &domain.DataProtectionKey{
+		KeyID:     e.KeyID,
+		HashKey:   e.HashKey,
+		BlockKey:  e.BlockKey,
+		CSRFKey:   e.CSRFKey,
+		CreatedAt: e.CreatedAt,
+		RetiredAt: e.RetiredAt,
+		IsActive:  e.IsActive,
 	}
 }
 

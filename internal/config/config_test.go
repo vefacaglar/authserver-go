@@ -96,13 +96,14 @@ func TestLoad_RejectsAbsoluteShorterThanSliding(t *testing.T) {
 	}
 }
 
-func TestLoad_RejectsMissingCookieKeys(t *testing.T) {
+func TestLoad_DoesNotRequireCookieKeys(t *testing.T) {
+	// Cookie + CSRF keys now come from the data-protection key ring in the
+	// database, not the environment, so Load must succeed without them.
 	env(t, map[string]string{
 		"AUTH_ISSUER": "https://auth.example.com",
 	})
-	_, err := Load()
-	if err == nil || !strings.Contains(err.Error(), "AUTH_COOKIE_HASH_KEY") {
-		t.Fatalf("Load = %v, want hash-key error", err)
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load = %v, want success without cookie keys", err)
 	}
 }
 

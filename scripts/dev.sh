@@ -16,13 +16,12 @@ cd "$(dirname "$0")/.."
 # --- load .env if present (values already exported win over defaults below) ---
 if [ -f .env ]; then set -a; . ./.env; set +a; fi
 
-# --- secrets: generate 32-byte keys and PERSIST them to .env ---
+# --- secrets ---
 #
-# These must stay stable across restarts: the session cookie is encrypted
-# with the cookie keys, so regenerating them on every boot would make every
-# existing session undecryptable and bounce the user back to login. So if a
-# key is missing/empty we generate one and write it back to .env, where the
-# next run picks it up.
+# Cookie + CSRF keys are NOT needed here: they live in the data-protection
+# key ring in the database (data_protection_keys table), generated on first
+# migrate/boot and shared across instances. The only secret we need is the
+# admin bearer; generate one and persist it to .env so it stays stable.
 gen_key() { head -c 32 /dev/urandom | base64; }
 
 ensure_secret() { # $1 = var name
@@ -43,9 +42,6 @@ ensure_secret() { # $1 = var name
   echo "==> generated $name and saved it to .env (stable across restarts)"
 }
 
-ensure_secret AUTH_COOKIE_HASH_KEY
-ensure_secret AUTH_COOKIE_BLOCK_KEY
-ensure_secret AUTH_CSRF_KEY
 ensure_secret AUTH_ADMIN_TOKEN
 
 # --- local-dev server config ---
