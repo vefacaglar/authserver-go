@@ -121,6 +121,8 @@ func newTestAPI(t *testing.T) *API {
 		RefreshTokens: memory.NewRefreshTokenStore(),
 		SigningKeys:   memory.NewSigningKeyStore(),
 		AuditLogs:     memory.NewAuditLogStore(),
+		Users:         memory.NewUserStore(),
+		Roles:         memory.NewRoleStore(),
 		Clock:         clk,
 		Logger:        nil,
 	}
@@ -532,3 +534,106 @@ func uuidNew() uuid.UUID {
 var _ = newUUID
 
 func newUUID() (id [16]byte) { return [16]byte(uuid.New()) }
+
+func TestAPI_ScopeUpdate(t *testing.T) {
+	srv := newTestAPIServer(t)
+	defer srv.Close()
+
+	// 1. Create a scope
+	body, _ := json.Marshal(scopeView{Name: "custom", DisplayName: "Custom Display", Required: true})
+	resp, err := http.Post(srv.URL+"/api/scopes", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+
+	// 2. Update it
+	updateBody, _ := json.Marshal(scopeView{Name: "custom", DisplayName: "Updated Custom Display", Description: "New Desc", Required: false})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/scopes/custom", bytes.NewReader(updateBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("update status = %d, want 200", resp.StatusCode)
+	}
+	var updated scopeView
+	_ = json.NewDecoder(resp.Body).Decode(&updated)
+	resp.Body.Close()
+
+	if updated.DisplayName != "Updated Custom Display" || updated.Description != "New Desc" || updated.Required {
+		t.Errorf("scope update failed: %+v", updated)
+	}
+}
+
+func TestAPI_RoleUpdateAndClaims(t *testing.T) {
+	srv := newTestAPIServer(t)
+	defer srv.Close()
+
+	// 1. Create role
+	body, _ := json.Marshal(createRoleRequest{ID: "role-1", Name: "Role One"})
+	resp, err := http.Post(srv.URL+"/api/roles", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create role status = %d, want 201", resp.StatusCode)
+	}
+
+	// 2. Update role name
+	updateBody, _ := json.Marshal(createRoleRequest{ID: "role-1", Name: "Updated Role One"})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/roles/role-1", bytes.NewReader(updateBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("update role status = %d, want 200", resp.StatusCode)
+	}
+	var updatedRole roleView
+	_ = json.NewDecoder(resp.Body).Decode(&updatedRole)
+	resp.Body.Close()
+
+	if updatedRole.Name != "Updated Role One" {
+		t.Errorf("role update name failed: %+v", updatedRole)
+	}
+
+	// 3. Update Role claims
+	claimsBody, _ := json.Marshal(setRoleClaimsRequest{
+		Claims: []domain.RoleClaim{
+			{Type: "permission", Value: "read"},
+			{Type: "permission", Value: "write"},
+		},
+	})
+	req, _ = http.NewRequest(http.MethodPut, srv.URL+"/api/roles/role-1/claims", bytes.NewReader(claimsBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("put claims: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("set role claims status = %d, want 204", resp.StatusCode)
+	}
+
+	// 4. Retrieve Role claims
+	resp, err = http.Get(srv.URL + "/api/roles/role-1/claims")
+	if err != nil {
+		t.Fatalf("get claims: %v", err)
+	}
+	var getClaimsRes struct {
+		Claims []domain.RoleClaim `json:"claims"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&getClaimsRes)
+	resp.Body.Close()
+
+	if len(getClaimsRes.Claims) != 2 || getClaimsRes.Claims[0].Value != "read" {
+		t.Errorf("get role claims failed: %+v", getClaimsRes.Claims)
+	}
+}

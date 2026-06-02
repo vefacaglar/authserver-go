@@ -12,6 +12,7 @@ type RoleStore interface {
 	FindRoleByID(ctx context.Context, roleID string) (*domain.Role, error)
 	FindRoleByName(ctx context.Context, name string) (*domain.Role, error)
 	GetAllRoles(ctx context.Context) ([]domain.Role, error)
+	UpdateRole(ctx context.Context, role *domain.Role) error
 
 	GetRoleClaims(ctx context.Context, roleID string) ([]domain.RoleClaim, error)
 	AddRoleClaims(ctx context.Context, roleID string, claims []domain.RoleClaim) error

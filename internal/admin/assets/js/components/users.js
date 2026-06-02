@@ -113,11 +113,20 @@ function userForm(u) {
           <input id="f-password" type="password" required class="w-full px-3 py-2 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:text-white">
         </div>
       `}
-      <div class="flex items-center justify-end gap-2 pt-4 border-t border-zinc-100 dark:border-zinc-800 mt-4">
-        <button type="button" id="btn-cancel-user" class="px-4 py-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm font-semibold hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">Cancel</button>
-        <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold shadow-md shadow-indigo-500/10 transition-colors">
-          ${isEdit ? 'Save Profile' : 'Register User'}
-        </button>
+      <div class="flex items-center justify-between pt-4 border-t border-zinc-100 dark:border-zinc-800 mt-4">
+        <div>
+          ${isEdit ? `
+            <button type="button" id="btn-delete-user" class="px-4 py-2 border border-red-200 dark:border-red-900/30 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5">
+              <i data-lucide="trash-2" class="w-4 h-4"></i> Delete User
+            </button>
+          ` : ''}
+        </div>
+        <div class="flex items-center gap-3">
+          <button type="button" id="btn-cancel-user" class="px-4 py-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm font-semibold hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">Cancel</button>
+          <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold shadow-md shadow-indigo-500/10 transition-colors">
+            ${isEdit ? 'Save Profile' : 'Register User'}
+          </button>
+        </div>
       </div>
       <div id="form-error"></div>
     </form>
@@ -225,6 +234,17 @@ export async function showUsers() {
           lucide.createIcons();
           document.getElementById('btn-back-users').addEventListener('click', goBack);
           document.getElementById('btn-cancel-user').addEventListener('click', goBack);
+
+          document.getElementById('btn-delete-user').addEventListener('click', async () => {
+            if (!confirm(`Are you absolutely sure you want to delete user "${id}"?`)) return;
+            try {
+              await call('DELETE', '/admin/api/users/' + encodeURIComponent(id));
+              showToast(`User "${id}" deleted successfully`);
+              showUsers();
+            } catch (err) {
+              document.getElementById('form-error').innerHTML = `<div class="bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 p-3 rounded-lg text-xs mt-3">${esc(err.message)}</div>`;
+            }
+          });
 
           document.getElementById('user-form').addEventListener('submit', async (e) => {
             e.preventDefault();

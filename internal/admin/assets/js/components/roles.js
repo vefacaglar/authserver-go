@@ -8,7 +8,7 @@ function renderRoles(items) {
         <i data-lucide="shield" class="w-4 h-4"></i> New Role
       </button>
     </div>
-    <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-sm overflow-hidden max-w-2xl mt-4">
+    <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-sm overflow-hidden max-w-4xl mt-4">
       <div class="overflow-x-auto">
         <table class="w-full text-left border-collapse">
           <thead>
@@ -26,6 +26,12 @@ function renderRoles(items) {
       <td class="p-4 font-semibold text-zinc-800 dark:text-zinc-100"><code>${esc(r.id)}</code></td>
       <td class="p-4 font-semibold text-indigo-600 dark:text-indigo-400">${esc(r.name)}</td>
       <td class="p-4 text-right whitespace-nowrap space-x-1">
+        <button class="btn-edit-role inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800 font-semibold text-xs transition-colors" data-id="${esc(r.id)}">
+          <i data-lucide="edit-3" class="w-3.5 h-3.5"></i> Edit
+        </button>
+        <button class="btn-claims inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-indigo-200 text-indigo-600 dark:border-indigo-900/30 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/20 font-semibold text-xs transition-colors" data-id="${esc(r.id)}">
+          <i data-lucide="tag" class="w-3.5 h-3.5"></i> Claims
+        </button>
         <button class="btn-del-role inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-red-200 hover:bg-red-50 text-red-600 dark:border-red-900/30 dark:hover:bg-red-950/20 dark:text-red-400 font-semibold text-xs transition-colors" data-id="${esc(r.id)}">
           <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Delete
         </button>
@@ -37,10 +43,10 @@ function renderRoles(items) {
   return h;
 }
 
-function roleForm() {
+function roleForm(r = {}, isEdit = false) {
   return `
     <div class="flex items-center justify-between">
-      <h3 class="text-lg font-bold tracking-tight">Create Identity Role</h3>
+      <h3 class="text-lg font-bold tracking-tight">${isEdit ? 'Edit Identity Role' : 'Create Identity Role'}</h3>
       <button id="btn-back-roles" class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-xs font-semibold transition-colors">
         <i data-lucide="arrow-left" class="w-3.5 h-3.5"></i> Back to Roles
       </button>
@@ -48,19 +54,68 @@ function roleForm() {
     <form id="role-form" class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 md:p-8 shadow-sm space-y-5 max-w-xl mt-4">
       <div class="space-y-1">
         <label for="f-role-id" class="text-xs font-semibold text-zinc-400 uppercase tracking-wider block">Role ID *</label>
-        <input id="f-role-id" required placeholder="e.g. role-admin" class="w-full px-3 py-2 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:text-white">
+        <input id="f-role-id" required placeholder="e.g. role-admin" value="${esc(r.id || '')}" ${isEdit ? 'readonly class="w-full px-3 py-2 bg-zinc-100 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm text-zinc-400 focus:outline-none"' : 'class="w-full px-3 py-2 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:text-white"'}>
       </div>
       <div class="space-y-1">
         <label for="f-role-name" class="text-xs font-semibold text-zinc-400 uppercase tracking-wider block">Role Name *</label>
-        <input id="f-role-name" required placeholder="e.g. admin" class="w-full px-3 py-2 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:text-white">
+        <input id="f-role-name" required placeholder="e.g. admin" value="${esc(r.name || '')}" class="w-full px-3 py-2 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:text-white">
         <p class="text-[10px] text-zinc-400">Roles are matched case-insensitively in claims mappings</p>
       </div>
-      <div class="flex items-center justify-end gap-2 pt-4 border-t border-zinc-100 dark:border-zinc-800 mt-4">
-        <button type="button" id="btn-cancel-role" class="px-4 py-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm font-semibold hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">Cancel</button>
-        <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold shadow-md shadow-indigo-500/10 transition-colors">Create Role</button>
+      <div class="flex items-center justify-between pt-4 border-t border-zinc-100 dark:border-zinc-800 mt-4">
+        <div>
+          ${isEdit ? `
+            <button type="button" id="btn-delete-role" class="px-4 py-2 border border-red-200 dark:border-red-900/30 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5">
+              <i data-lucide="trash-2" class="w-4 h-4"></i> Delete Role
+            </button>
+          ` : ''}
+        </div>
+        <div class="flex items-center gap-3">
+          <button type="button" id="btn-cancel-role" class="px-4 py-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm font-semibold hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">Cancel</button>
+          <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold shadow-md shadow-indigo-500/10 transition-colors">
+            ${isEdit ? 'Save Changes' : 'Create Role'}
+          </button>
+        </div>
       </div>
       <div id="form-error"></div>
     </form>
+  `;
+}
+
+function roleClaimsForm(roleID, claims) {
+  return `
+    <div class="flex items-center justify-between">
+      <div>
+        <h3 class="text-lg font-bold tracking-tight">Access Claims — Role: <span class="text-indigo-600 dark:text-indigo-400">${esc(roleID)}</span></h3>
+        <p class="text-xs text-zinc-400">Claims mapped to this identity role</p>
+      </div>
+      <button id="btn-back-roles" class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-xs font-semibold transition-colors">
+        <i data-lucide="arrow-left" class="w-3.5 h-3.5"></i> Back to Roles
+      </button>
+    </div>
+    <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 md:p-8 shadow-sm space-y-6 max-w-2xl mt-4">
+      <div class="space-y-4" id="claims-list-container"></div>
+      <button id="btn-add-claim-row" class="flex items-center justify-center gap-2 px-3.5 py-2 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs font-bold hover:bg-zinc-50 dark:hover:bg-zinc-955 transition-colors">
+        <i data-lucide="plus" class="w-4 h-4"></i> Add Role Claim
+      </button>
+      <div class="h-px bg-zinc-200 dark:bg-zinc-800 my-4"></div>
+      <div class="flex items-center justify-end gap-2">
+        <button type="button" id="btn-cancel-claims" class="px-4 py-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm font-semibold hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">Cancel</button>
+        <button id="btn-save-claims" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold shadow-md shadow-indigo-500/10 transition-colors">Save Claims</button>
+      </div>
+      <div id="claims-error"></div>
+    </div>
+  `;
+}
+
+function renderRoleClaimRow(type = '', value = '') {
+  return `
+    <div class="flex gap-3 items-center claim-row-item">
+      <input type="text" placeholder="Type (e.g. role, permission)" value="${esc(type)}" class="f-claim-type w-1/3 px-3 py-2 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm focus:outline-none dark:text-white" required>
+      <input type="text" placeholder="Value" value="${esc(value)}" class="f-claim-val flex-1 px-3 py-2 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm focus:outline-none dark:text-white" required>
+      <button class="btn-remove-claim p-2 hover:bg-red-50 text-red-600 rounded-lg dark:hover:bg-red-950/20 dark:text-red-400 transition-colors">
+        <i data-lucide="trash" class="w-4 h-4"></i>
+      </button>
+    </div>
   `;
 }
 
@@ -74,8 +129,9 @@ export async function showRoles() {
 
     const goBack = () => showRoles();
 
+    // Create New Role
     document.getElementById('btn-new-role').addEventListener('click', () => {
-      out.innerHTML = roleForm();
+      out.innerHTML = roleForm({}, false);
       lucide.createIcons();
       document.getElementById('btn-back-roles').addEventListener('click', goBack);
       document.getElementById('btn-cancel-role').addEventListener('click', goBack);
@@ -97,6 +153,117 @@ export async function showRoles() {
       });
     });
 
+    // Edit Role Name
+    out.querySelectorAll('.btn-edit-role').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-id');
+        const role = (r.items || []).find(item => item.id === id);
+        if (!role) return;
+
+        out.innerHTML = roleForm(role, true);
+        lucide.createIcons();
+        document.getElementById('btn-back-roles').addEventListener('click', goBack);
+        document.getElementById('btn-cancel-role').addEventListener('click', goBack);
+
+        document.getElementById('btn-delete-role').addEventListener('click', async () => {
+          if (!confirm(`Are you absolutely sure you want to delete role "${id}"?`)) return;
+          try {
+            await call('DELETE', '/admin/api/roles/' + encodeURIComponent(id));
+            showToast(`Access role "${id}" deleted successfully`);
+            showRoles();
+          } catch(e) {
+            document.getElementById('form-error').innerHTML = `<div class="bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 p-3 rounded-lg text-xs mt-3">${esc(e.message)}</div>`;
+          }
+        });
+
+        document.getElementById('role-form').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const errDiv = document.getElementById('form-error');
+          errDiv.textContent = '';
+          try {
+            await call('PUT', '/admin/api/roles/' + encodeURIComponent(id), {
+              id: id,
+              name: document.getElementById('f-role-name').value.trim()
+            });
+            showToast('Role updated successfully');
+            showRoles();
+          } catch(err) {
+            errDiv.innerHTML = `<div class="bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 p-3 rounded-lg text-xs mt-3">${esc(err.message)}</div>`;
+          }
+        });
+      });
+    });
+
+    // Edit Role Claims
+    out.querySelectorAll('.btn-claims').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-id');
+        out.innerHTML = '<p class="text-zinc-400">loading role claims…</p>';
+        try {
+          const claimsRes = await call('GET', '/admin/api/roles/' + encodeURIComponent(id) + '/claims');
+          const claims = claimsRes.claims || [];
+          
+          out.innerHTML = roleClaimsForm(id, claims);
+          lucide.createIcons();
+
+          const listContainer = document.getElementById('claims-list-container');
+          const appendClaimRow = (t = '', v = '') => {
+            const div = document.createElement('div');
+            div.innerHTML = renderRoleClaimRow(t, v);
+            listContainer.appendChild(div);
+            
+            // Bind remove
+            div.querySelector('.btn-remove-claim').addEventListener('click', () => {
+              div.remove();
+            });
+            lucide.createIcons();
+          };
+
+          // Render existing claims
+          claims.forEach(c => appendClaimRow(c.type, c.value));
+          if (claims.length === 0) appendClaimRow();
+
+          document.getElementById('btn-add-claim-row').addEventListener('click', () => appendClaimRow());
+          document.getElementById('btn-back-roles').addEventListener('click', goBack);
+          document.getElementById('btn-cancel-claims').addEventListener('click', goBack);
+
+          document.getElementById('btn-save-claims').addEventListener('click', async () => {
+            const errDiv = document.getElementById('claims-error');
+            errDiv.textContent = '';
+            const payload = [];
+            let ok = true;
+            
+            document.querySelectorAll('.claim-row-item').forEach(row => {
+              const t = row.querySelector('.f-claim-type').value.trim();
+              const v = row.querySelector('.f-claim-val').value.trim();
+              if (t && v) {
+                payload.push({type: t, value: v});
+              } else if (t || v) {
+                ok = false;
+              }
+            });
+
+            if (!ok) {
+              errDiv.innerHTML = '<div class="bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 p-3 rounded-lg text-xs mt-3">Both claim type and value are required.</div>';
+              return;
+            }
+
+            try {
+              await call('PUT', '/admin/api/roles/' + encodeURIComponent(id) + '/claims', {claims: payload});
+              showToast('Role claims updated successfully');
+              showRoles();
+            } catch(err) {
+              errDiv.innerHTML = `<div class="bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 p-3 rounded-lg text-xs mt-3">${esc(err.message)}</div>`;
+            }
+          });
+
+        } catch (e) {
+          out.innerHTML = `<div class="bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 rounded-xl p-4 text-sm font-semibold">${esc(e.message)}</div>`;
+        }
+      });
+    });
+
+    // Delete Role
     out.querySelectorAll('.btn-del-role').forEach(btn => {
       btn.addEventListener('click', async () => {
         const id = btn.getAttribute('data-id');

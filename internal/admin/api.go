@@ -42,6 +42,7 @@ func (a *API) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/clients/{id}", a.deleteClient)
 	mux.HandleFunc("GET /api/scopes", a.listScopes)
 	mux.HandleFunc("POST /api/scopes", a.createScope)
+	mux.HandleFunc("PUT /api/scopes/{name}", a.updateScope)
 	mux.HandleFunc("DELETE /api/scopes/{name}", a.deleteScope)
 	mux.HandleFunc("GET /api/sessions", a.listSessions)
 	mux.HandleFunc("POST /api/sessions/{id}/revoke", a.revokeSession)
@@ -63,6 +64,7 @@ func (a *API) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/users/{id}/password", a.setUserPassword)
 	mux.HandleFunc("GET /api/roles", a.listRoles)
 	mux.HandleFunc("POST /api/roles", a.createRole)
+	mux.HandleFunc("PUT /api/roles/{id}", a.updateRole)
 	mux.HandleFunc("DELETE /api/roles/{id}", a.deleteRole)
 	mux.HandleFunc("GET /api/roles/{id}/claims", a.getRoleClaims)
 	mux.HandleFunc("PUT /api/roles/{id}/claims", a.setRoleClaims)
@@ -311,6 +313,34 @@ func (a *API) createScope(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.writeJSON(w, http.StatusCreated, toScopeView(s))
+}
+
+func (a *API) updateScope(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var body scopeView
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.writeError(w, http.StatusBadRequest, "invalid json", err)
+		return
+	}
+	existing, err := a.Scopes.FindByName(r.Context(), name)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		return
+	}
+	existing.DisplayName = body.DisplayName
+	existing.Description = body.Description
+	existing.Required = body.Required
+	existing.Emphasize = body.Emphasize
+	existing.Properties = body.Properties
+	if err := a.Scopes.Store(r.Context(), existing); err != nil {
+		a.writeError(w, http.StatusBadRequest, "store failed", err)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, toScopeView(existing))
 }
 
 func (a *API) deleteScope(w http.ResponseWriter, r *http.Request) {
@@ -942,6 +972,30 @@ func (a *API) createRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.writeJSON(w, http.StatusCreated, roleView{ID: role.ID, Name: role.Name})
+}
+
+func (a *API) updateRole(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body createRoleRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.writeError(w, http.StatusBadRequest, "invalid json", err)
+		return
+	}
+	existing, err := a.Roles.FindRoleByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		return
+	}
+	existing.Name = body.Name
+	if err := a.Roles.UpdateRole(r.Context(), existing); err != nil {
+		a.writeError(w, http.StatusBadRequest, "update failed", err)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, roleView{ID: existing.ID, Name: existing.Name})
 }
 
 func (a *API) deleteRole(w http.ResponseWriter, r *http.Request) {

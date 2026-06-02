@@ -130,3 +130,17 @@ func (s *RoleStore) ReplaceRoleClaims(_ context.Context, roleID string, claims [
 	s.claims[roleID] = claims
 	return nil
 }
+
+func (s *RoleStore) UpdateRole(_ context.Context, role *domain.Role) error {
+	if role.ID == "" {
+		return fmt.Errorf("role: empty id")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.roles[role.ID]; !exists {
+		return fmt.Errorf("role %q: %w", role.ID, store.ErrNotFound)
+	}
+	s.roles[role.ID] = role
+	return nil
+}
+

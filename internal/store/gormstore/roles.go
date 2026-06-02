@@ -122,3 +122,12 @@ func (s *RoleStore) ReplaceRoleClaims(ctx context.Context, roleID string, claims
 	}
 	return s.AddRoleClaims(ctx, roleID, claims)
 }
+
+func (s *RoleStore) UpdateRole(ctx context.Context, role *domain.Role) error {
+	if role.ID == "" {
+		return errors.New("role: empty id")
+	}
+	ent := toRoleEntity(role)
+	return s.db.WithContext(ctx).Save(ent).Error
+}
+

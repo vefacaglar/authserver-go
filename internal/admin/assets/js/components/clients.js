@@ -190,11 +190,20 @@ async function clientForm(c, isEdit) {
         <p class="text-[10px] text-zinc-400">Custom key-value pairs (Valid JSON structure required)</p>
       </div>
       <!-- Submission Buttons -->
-      <div class="flex items-center justify-end gap-3 pt-2 mt-4">
-        <button type="button" id="btn-cancel-client" class="px-4 py-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm font-semibold hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">Cancel</button>
-        <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold shadow-md shadow-indigo-500/10 transition-colors">
-          ${isEdit ? 'Save Changes' : 'Register Client'}
-        </button>
+      <div class="flex items-center justify-between pt-2 mt-4 border-t border-zinc-100 dark:border-zinc-800">
+        <div>
+          ${isEdit ? `
+            <button type="button" id="btn-delete-client" class="px-4 py-2 border border-red-200 dark:border-red-900/30 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5">
+              <i data-lucide="trash-2" class="w-4 h-4"></i> Delete Client
+            </button>
+          ` : ''}
+        </div>
+        <div class="flex items-center gap-3">
+          <button type="button" id="btn-cancel-client" class="px-4 py-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm font-semibold hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">Cancel</button>
+          <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold shadow-md shadow-indigo-500/10 transition-colors">
+            ${isEdit ? 'Save Changes' : 'Register Client'}
+          </button>
+        </div>
       </div>
       <div id="form-error"></div>
     </form>
@@ -242,13 +251,32 @@ function readClientForm() {
 
 function bindClientForm(isEdit) {
   document.getElementById('f-auth_method').addEventListener('change', function() {
-    document.getElementById('jwks-field').style.display = this.value === 'private_key_jwt' ? 'block' : 'none';
+    const jwksField = document.getElementById('jwks-field');
+    if (this.value === 'private_key_jwt') {
+      jwksField.classList.remove('hidden');
+    } else {
+      jwksField.classList.add('hidden');
+    }
   });
   
   const goBack = () => showClients();
   document.getElementById('btn-back-clients').addEventListener('click', goBack);
   document.getElementById('btn-cancel-client').addEventListener('click', goBack);
   
+  if (isEdit) {
+    document.getElementById('btn-delete-client').addEventListener('click', async () => {
+      const clientID = document.getElementById('f-client_id').value.trim();
+      if (!confirm(`Are you absolutely sure you want to delete client "${clientID}"?`)) return;
+      try {
+        await call('DELETE', '/admin/api/clients/' + encodeURIComponent(clientID));
+        showToast(`Client "${clientID}" deleted successfully`);
+        showClients();
+      } catch (err) {
+        document.getElementById('form-error').innerHTML = `<div class="bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 p-3 rounded-lg text-xs mt-3">${esc(err.message)}</div>`;
+      }
+    });
+  }
+
   document.getElementById('client-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const errDiv = document.getElementById('form-error');
