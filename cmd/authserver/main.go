@@ -37,10 +37,78 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	if err := run(logger); err != nil {
-		logger.Error("startup failed", "err", err)
+	// Subcommands. The default (no arg, or "serve") starts the HTTP
+	// server. "migrate" runs the schema migration + seed once and exits;
+	// run it at deploy time so the serve path can start cold-fast with
+	// AUTH_AUTO_MIGRATE=false.
+	cmd := "serve"
+	if len(os.Args) > 1 {
+		cmd = os.Args[1]
+	}
+
+	var err error
+	switch cmd {
+	case "serve":
+		err = run(logger)
+	case "migrate":
+		err = runMigrate(logger)
+	default:
+		logger.Error("unknown command", "cmd", cmd, "want", "serve|migrate")
+		os.Exit(2)
+	}
+	if err != nil {
+		logger.Error("startup failed", "cmd", cmd, "err", err)
 		os.Exit(1)
 	}
+}
+
+// runMigrate opens the configured database, applies the GORM schema
+// migration, and seeds the demo fixtures. It is a one-shot command meant
+// to run at deploy time (not on every cold start). Migrating an in-memory
+// store is meaningless, so the memory driver is rejected with a clear
+// message.
+func runMigrate(logger *slog.Logger) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	drv := cfg.DBDriver
+	if drv == "" {
+		drv = "memory"
+	}
+	if drv == "memory" {
+		return errors.New("migrate: driver is \"memory\"; nothing to migrate (use sqlite/postgres)")
+	}
+
+	db, err := gormstore.Open(drv, cfg.DBDSN)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if sqlDB, derr := db.DB(); derr == nil {
+			_ = sqlDB.Close()
+		}
+	}()
+
+	if err := gormstore.Migrate(db); err != nil {
+		return err
+	}
+	logger.Info("migration applied", "driver", drv)
+
+	bundle := newGormBundle(db, time.Now)
+	if err := seedBundle(bundle); err != nil {
+		return err
+	}
+	// Pre-create the active signing key so the serve path never has to
+	// generate one on a cold start.
+	keyManager := token.NewKeyManager(bundle.SigningKeys, clock.SystemClock{})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := keyManager.EnsureActiveKey(ctx); err != nil {
+		return err
+	}
+	logger.Info("seed + signing key ready", "driver", drv)
+	return nil
 }
 
 // storeBundle is the bag of store interfaces the rest of the wiring
@@ -75,8 +143,24 @@ func run(logger *slog.Logger) error {
 		defer closer()
 	}
 
-	if err := seedBundle(bundle); err != nil {
-		return err
+	// Migrate on the serve path only when explicitly opted in. For a
+	// persistent DB in production, run `authserver migrate` at deploy time
+	// and set AUTH_AUTO_MIGRATE=false so cold starts stay fast.
+	if gormDB != nil && cfg.AutoMigrate {
+		if err := gormstore.Migrate(gormDB); err != nil {
+			return err
+		}
+		logger.Info("schema migrated on startup")
+	}
+
+	// Seed: an in-memory store (gormDB == nil) loses its data every boot,
+	// so it must always be seeded or the server is unusable. A persistent
+	// store is seeded only when AUTH_SEED is set (default true; turn off in
+	// production once the migrate command has run).
+	if gormDB == nil || cfg.Seed {
+		if err := seedBundle(bundle); err != nil {
+			return err
+		}
 	}
 
 	keyManager := token.NewKeyManager(bundle.SigningKeys, clk)
@@ -348,23 +432,11 @@ func buildStores(driver, dsn string, now func() time.Time, logger *slog.Logger) 
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		if err := gormstore.Migrate(db); err != nil {
-			return nil, nil, nil, err
-		}
+		// Note: schema migration is NOT run here — that is the job of the
+		// `migrate` command (or AUTH_AUTO_MIGRATE in run()). Opening the
+		// pool is cheap; migrating is what costs cold-start time.
 		if logger != nil {
 			logger.Info("gormstore ready", "driver", drv)
-		}
-		bundle := &storeBundle{
-			Clients:       gormstore.NewClientStore(db),
-			AuthCodes:     gormstore.NewAuthorizationCodeStore(db),
-			RefreshTokens: gormstore.NewRefreshTokenStore(db),
-			Sessions:      gormstore.NewSessionStore(db),
-			SigningKeys:   gormstore.NewSigningKeyStore(db),
-			Scopes:        gormstore.NewScopeStore(db),
-			AuditLogs:     gormstore.NewAuditLogStore(db),
-			Users:         gormstore.NewUserStore(db),
-			Roles:         gormstore.NewRoleStore(db),
-			Tracker:       memory.NewLoginAttemptTracker(now),
 		}
 		closer := func() {
 			sqlDB, err := db.DB()
@@ -373,9 +445,27 @@ func buildStores(driver, dsn string, now func() time.Time, logger *slog.Logger) 
 			}
 			_ = sqlDB.Close()
 		}
-		return bundle, db, closer, nil
+		return newGormBundle(db, now), db, closer, nil
 	default:
 		return nil, nil, nil, errors.New("unknown DB driver: " + drv)
+	}
+}
+
+// newGormBundle wires every GORM-backed store over a single *gorm.DB.
+// The login-attempt tracker stays in memory in all cases (it is rate-limit
+// state, not durable data). Shared by the serve and migrate paths.
+func newGormBundle(db *gorm.DB, now func() time.Time) *storeBundle {
+	return &storeBundle{
+		Clients:       gormstore.NewClientStore(db),
+		AuthCodes:     gormstore.NewAuthorizationCodeStore(db),
+		RefreshTokens: gormstore.NewRefreshTokenStore(db),
+		Sessions:      gormstore.NewSessionStore(db),
+		SigningKeys:   gormstore.NewSigningKeyStore(db),
+		Scopes:        gormstore.NewScopeStore(db),
+		AuditLogs:     gormstore.NewAuditLogStore(db),
+		Users:         gormstore.NewUserStore(db),
+		Roles:         gormstore.NewRoleStore(db),
+		Tracker:       memory.NewLoginAttemptTracker(now),
 	}
 }
 

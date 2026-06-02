@@ -23,7 +23,7 @@ func authPage(content string) string {
 // "heading" (the card title) and "content" (the form + footer); everything
 // else — doctype, head, centered card, error banner slot — lives here.
 const baseLayout = `{{ define "base" }}<!doctype html>
-<html lang="en" class="h-full bg-zinc-950">
+<html lang="en" class="h-full bg-[#121212]">
 <head>
 <meta charset="utf-8">
 <title>{{ template "heading" . }}</title>
@@ -31,17 +31,24 @@ const baseLayout = `{{ define "base" }}<!doctype html>
 <script src="https://cdn.tailwindcss.com"></script>
 {{ template "styles" . }}
 </head>
-<body class="h-full flex min-h-full flex-col justify-center py-12 sm:px-6 lg:px-8">
-<div class="sm:mx-auto sm:w-full sm:max-w-md">
-  <h2 class="mt-6 text-center text-2xl font-semibold leading-9 tracking-tight text-zinc-100">{{ template "heading" . }}</h2>
-</div>
+<body class="h-full flex min-h-full flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 bg-[#121212] text-zinc-400 font-mono antialiased">
+  
+  <div class="sm:mx-auto sm:w-full sm:max-w-[400px]">
+    <div class="bg-[#1a1a1a] p-8 border border-zinc-800/60 shadow-lg rounded-none">
+      
+      <!-- Minimalist heading inside the box -->
+      <div class="mb-6">
+        <h1 class="text-lg font-bold text-zinc-300 tracking-tight lowercase">
+          {{ template "heading" . }}
+        </h1>
+      </div>
 
-<div class="mt-10 sm:mx-auto sm:w-full sm:max-w-[480px]">
-  <div class="bg-zinc-900 px-6 py-12 shadow-xl border border-zinc-800 sm:rounded-xl sm:px-12">
-    {{ template "errorBanner" . }}
-    {{ template "content" . }}
+      {{ template "errorBanner" . }}
+      {{ template "content" . }}
+
+    </div>
   </div>
-</div>
+
 </body>
 </html>{{ end }}`
 
@@ -50,26 +57,29 @@ const baseLayout = `{{ define "base" }}<!doctype html>
 // long utility strings live here once; markup just references .auth-input,
 // .auth-label, .auth-btn, .auth-link.
 const sharedStyles = `{{ define "styles" }}<style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
-  body { font-family: 'Inter', sans-serif; }
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
+  body { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus {
+    -webkit-text-fill-color: #09090b !important;
+    -webkit-box-shadow: 0 0 0px 1000px #cbd5e1 inset !important;
+    transition: background-color 5000s ease-in-out 0s;
+  }
 </style>
 <style type="text/tailwindcss">
   @layer components {
-    .auth-label { @apply block text-sm font-medium leading-6 text-zinc-300; }
-    .auth-input { @apply block w-full rounded-md border-0 py-2.5 px-3 bg-zinc-950/50 text-zinc-100 shadow-sm ring-1 ring-inset ring-zinc-800 placeholder:text-zinc-600 focus:ring-2 focus:ring-inset focus:ring-zinc-500 sm:text-sm sm:leading-6; }
-    .auth-btn { @apply flex w-full justify-center rounded-md bg-zinc-200 px-3 py-2.5 text-sm font-semibold text-zinc-900 shadow-sm hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-300 transition-colors; }
-    .auth-link { @apply font-semibold leading-6 text-zinc-300 hover:text-white transition-colors; }
+    .auth-label { @apply block text-xs text-zinc-500 lowercase tracking-wide mb-2; }
+    .auth-input { @apply block w-full rounded-none border-0 py-3 px-4 bg-[#cbd5e1] text-zinc-950 placeholder:text-zinc-500 focus:bg-[#cbd5e1] focus:ring-0 sm:text-sm font-mono outline-none; }
+    .auth-btn { @apply flex w-full justify-center rounded-none bg-zinc-300 px-3 py-3 text-sm font-bold text-zinc-950 shadow-sm hover:bg-zinc-400 transition-colors lowercase tracking-wide font-mono; }
+    .auth-link { @apply text-zinc-500 hover:text-zinc-300 transition-colors underline decoration-1 underline-offset-4 font-mono text-xs lowercase; }
   }
 </style>{{ end }}`
 
 // errorBanner renders the red alert box when .Error is set. Shared so both
 // pages surface validation/server errors identically.
 const errorBanner = `{{ define "errorBanner" }}{{ if .Error }}
-    <div class="rounded-md bg-red-950/50 p-4 mb-6 border border-red-900">
-      <div class="flex">
-        <div class="ml-3">
-          <h3 class="text-sm font-medium text-red-400">{{ .ErrorLabel }}</h3>
-        </div>
-      </div>
+    <div class="rounded-none bg-red-950/20 px-4 py-3 mb-6 border-l-2 border-red-500 text-red-400 font-mono text-xs lowercase">
+      error: {{ .ErrorLabel }}
     </div>
     {{ end }}{{ end }}`

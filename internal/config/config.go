@@ -22,6 +22,18 @@ type Config struct {
 	DBDriver string
 	DBDSN    string
 
+	// AutoMigrate runs the GORM schema migration during server startup.
+	// Convenient for dev and ephemeral (in-memory) databases, but it
+	// adds noticeable cold-start latency for a persistent DB. In
+	// serverless / production, set AUTH_AUTO_MIGRATE=false and run
+	// `authserver migrate` once at deploy time instead.
+	AutoMigrate bool
+
+	// Seed writes the demo client/user/scope fixtures during startup.
+	// Disable in production (AUTH_SEED=false); the `authserver migrate`
+	// command seeds explicitly.
+	Seed bool
+
 	CookieName  string
 	CookieHMAC  []byte
 	CookieBlock []byte
@@ -57,6 +69,8 @@ func Load() (*Config, error) {
 		RequireHTTPS:                 getbool("AUTH_REQUIRE_HTTPS", true),
 		DBDriver:                     getenv("AUTH_DB_DRIVER", "sqlite"),
 		DBDSN:                        getenv("AUTH_DB_DSN", "file::memory:?cache=shared"),
+		AutoMigrate:                  getbool("AUTH_AUTO_MIGRATE", true),
+		Seed:                         getbool("AUTH_SEED", true),
 		CookieName:                   getenv("AUTH_COOKIE_NAME", ".auth.session"),
 		LoginPath:                    getenv("AUTH_LOGIN_PATH", "/login"),
 		LogoutPath:                   getenv("AUTH_LOGOUT_PATH", "/logout"),
