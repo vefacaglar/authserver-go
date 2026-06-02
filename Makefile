@@ -14,7 +14,7 @@ PKG       := ./cmd/authserver
 PORT      ?= 5175
 DEMO_PORT ?= 8090
 
-.PHONY: help dev run build start stop start-all stop-all test smoke vet check tidy clean db-reset
+.PHONY: help dev run build start stop start-all stop-all logs test smoke vet check tidy clean db-reset
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -59,6 +59,10 @@ stop-all: ## Stop both the auth server and the demo client
 	@pids=$$(lsof -ti tcp:$(DEMO_PORT) 2>/dev/null); \
 	if [ -n "$$pids" ]; then kill $$pids 2>/dev/null || true; echo "freed port $(DEMO_PORT) (killed: $$pids)"; \
 	else echo "port $(DEMO_PORT) already free"; fi
+
+logs: ## Tail the logs of both background services in real time (Ctrl-C to stop)
+	@tail -f /tmp/authserver.log -f /tmp/democlient.log
+
 
 test: ## Run the full test suite
 	go test ./...
