@@ -119,9 +119,9 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 6. Session resolve.
 	sess, err := h.resolveSession(r)
 	if err != nil && !errors.Is(err, session.ErrNoSession) {
-		h.Logger.Error("session resolve failed", "err", err)
-		redirectErr(ErrServerError, "session lookup failed")
-		return
+		h.Logger.Warn("session resolve failed, clearing cookie", "err", err)
+		h.Cookies.ClearCookie(w)
+		sess = nil
 	}
 
 	if prompt == "none" {
