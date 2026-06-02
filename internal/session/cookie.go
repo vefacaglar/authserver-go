@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"time"
 
+	"go-authserver/internal/clock"
+
 	"github.com/google/uuid"
 	"github.com/gorilla/securecookie"
 )
@@ -33,12 +35,14 @@ type CookieConfig struct {
 type CookieManager struct {
 	codec  *securecookie.SecureCookie
 	config CookieConfig
+	clock  clock.Clock
 }
 
-func NewCookieManager(hashKey, blockKey []byte, cfg CookieConfig) *CookieManager {
+func NewCookieManager(hashKey, blockKey []byte, cfg CookieConfig, clk clock.Clock) *CookieManager {
 	return &CookieManager{
 		codec:  securecookie.New(hashKey, blockKey),
 		config: cfg,
+		clock:  clk,
 	}
 }
 
@@ -82,7 +86,7 @@ func (m *CookieManager) SetCookie(w http.ResponseWriter, id uuid.UUID) error {
 	}
 	if m.config.MaxAge > 0 {
 		cookie.MaxAge = int(m.config.MaxAge.Seconds())
-		cookie.Expires = time.Now().Add(m.config.MaxAge)
+		cookie.Expires = m.clock.Now().Add(m.config.MaxAge)
 	}
 	http.SetCookie(w, cookie)
 	return nil

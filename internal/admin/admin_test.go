@@ -337,6 +337,173 @@ func TestAPI_ScopesCRUD(t *testing.T) {
 	}
 }
 
+func TestAPI_ClientGetUpdateDelete(t *testing.T) {
+	srv := newTestAPIServer(t)
+	defer srv.Close()
+
+	jwks := `{"keys":[{"kty":"RSA","kid":"test-kid","n":"abc","e":"AQAB"}]}`
+	body, _ := json.Marshal(clientView{
+		ClientID:                "jwt-client",
+		DisplayName:             "JWT Client",
+		AllowedScopes:           []string{"openid"},
+		TokenEndpointAuthMethod: string(domain.TokenEndpointAuthMethodPrivateKeyJWT),
+		JWKSJSON:                jwks,
+	})
+	resp, err := http.Post(srv.URL+"/api/clients", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := readAll(resp.Body)
+		t.Fatalf("create status = %d, want 201; body=%s", resp.StatusCode, b)
+	}
+	resp.Body.Close()
+
+	resp, err = http.Get(srv.URL + "/api/clients/jwt-client")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get status = %d, want 200", resp.StatusCode)
+	}
+	var got clientView
+	_ = json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+	if got.JWKSJSON != jwks {
+		t.Errorf("jwks_json = %q, want %q", got.JWKSJSON, jwks)
+	}
+	if !got.HasJWKS {
+		t.Error("has_jwks = false, want true")
+	}
+
+	updateBody, _ := json.Marshal(clientView{
+		ClientID:                "jwt-client",
+		DisplayName:             "Updated Name",
+		AllowedScopes:           []string{"openid", "profile"},
+		TokenEndpointAuthMethod: string(domain.TokenEndpointAuthMethodPrivateKeyJWT),
+		JWKSJSON:                jwks,
+	})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/clients/jwt-client", bytes.NewReader(updateBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := readAll(resp.Body)
+		t.Fatalf("update status = %d, want 200; body=%s", resp.StatusCode, b)
+	}
+	var updated clientView
+	_ = json.NewDecoder(resp.Body).Decode(&updated)
+	resp.Body.Close()
+	if updated.DisplayName != "Updated Name" {
+		t.Errorf("display_name = %q, want %q", updated.DisplayName, "Updated Name")
+	}
+
+	resp, _ = http.Get(srv.URL + "/api/clients")
+	var listBody struct {
+		Items []clientView `json:"items"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&listBody)
+	resp.Body.Close()
+	found := false
+	for _, c := range listBody.Items {
+		if c.ClientID == "jwt-client" && c.HasJWKS {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("list missing jwt-client with has_jwks=true")
+	}
+
+	req, _ = http.NewRequest(http.MethodDelete, srv.URL+"/api/clients/jwt-client", nil)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("delete status = %d, want 204", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp, err = http.Get(srv.URL + "/api/clients/jwt-client")
+	if err != nil {
+		t.Fatalf("get after delete: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("get after delete status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestAPI_ClientCreate_PrivateKeyJWT_RequiresJWKS(t *testing.T) {
+	srv := newTestAPIServer(t)
+	defer srv.Close()
+
+	body, _ := json.Marshal(clientView{
+		ClientID:                "no-jwks",
+		TokenEndpointAuthMethod: string(domain.TokenEndpointAuthMethodPrivateKeyJWT),
+	})
+	resp, err := http.Post(srv.URL+"/api/clients", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestAPI_ClientCreate_PrivateKeyJWT_InvalidJWKS(t *testing.T) {
+	srv := newTestAPIServer(t)
+	defer srv.Close()
+
+	body, _ := json.Marshal(clientView{
+		ClientID:                "bad-jwks",
+		TokenEndpointAuthMethod: string(domain.TokenEndpointAuthMethodPrivateKeyJWT),
+		JWKSJSON:                `{"keys":[]}`,
+	})
+	resp, err := http.Post(srv.URL+"/api/clients", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestAPI_ClientUpdate_NotFound(t *testing.T) {
+	srv := newTestAPIServer(t)
+	defer srv.Close()
+
+	body, _ := json.Marshal(clientView{DisplayName: "ghost"})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/clients/nonexistent", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestAPI_ClientGet_NotFound(t *testing.T) {
+	srv := newTestAPIServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/clients/nonexistent")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
 // --- helpers ---
 
 func readAll(r interface {

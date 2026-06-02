@@ -13,6 +13,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# --- load .env if present (values already exported win over defaults below) ---
+if [ -f .env ]; then set -a; . ./.env; set +a; fi
+
 # --- secrets: generate ephemeral 32-byte keys unless already set ---
 gen_key() { head -c 32 /dev/urandom | base64; }
 

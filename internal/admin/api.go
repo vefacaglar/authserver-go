@@ -35,6 +35,8 @@ type API struct {
 func (a *API) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clients", a.listClients)
 	mux.HandleFunc("POST /api/clients", a.createClient)
+	mux.HandleFunc("GET /api/clients/{id}", a.getClient)
+	mux.HandleFunc("PUT /api/clients/{id}", a.updateClient)
 	mux.HandleFunc("DELETE /api/clients/{id}", a.deleteClient)
 	mux.HandleFunc("GET /api/scopes", a.listScopes)
 	mux.HandleFunc("POST /api/scopes", a.createScope)
@@ -60,6 +62,7 @@ type clientView struct {
 	AllowClientCredentials              bool              `json:"allow_client_credentials"`
 	TokenEndpointAuthMethod             string            `json:"token_endpoint_auth_method"`
 	HasJWKS                             bool              `json:"has_jwks"`
+	JWKSJSON                            string            `json:"jwks_json,omitempty"`
 	AccessTokenLifetimeSeconds          int               `json:"access_token_lifetime_seconds"`
 	RefreshTokenLifetimeSeconds         int               `json:"refresh_token_lifetime_seconds"`
 	RefreshTokenAbsoluteLifetimeSeconds int               `json:"refresh_token_absolute_lifetime_seconds"`
@@ -116,6 +119,12 @@ func (a *API) createClient(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, http.StatusBadRequest, "unknown token_endpoint_auth_method", nil)
 		return
 	}
+	if method == domain.TokenEndpointAuthMethodPrivateKeyJWT {
+		if err := validateJWKS(body.JWKSJSON); err != nil {
+			a.writeError(w, http.StatusBadRequest, "jwks_json", err)
+			return
+		}
+	}
 	c := &domain.Client{
 		ClientID:                            body.ClientID,
 		DisplayName:                         body.DisplayName,
@@ -126,12 +135,12 @@ func (a *API) createClient(w http.ResponseWriter, r *http.Request) {
 		AllowRefreshTokens:                  body.AllowRefreshTokens,
 		AllowClientCredentials:              body.AllowClientCredentials,
 		TokenEndpointAuthMethod:             method,
+		JWKSJSON:                            body.JWKSJSON,
 		AccessTokenLifetimeSeconds:          body.AccessTokenLifetimeSeconds,
 		RefreshTokenLifetimeSeconds:         body.RefreshTokenLifetimeSeconds,
 		RefreshTokenAbsoluteLifetimeSeconds: body.RefreshTokenAbsoluteLifetimeSeconds,
 		Properties:                          body.Properties,
 	}
-	// Enforce the AllowRefreshTokens → offline_access constraint.
 	if c.AllowRefreshTokens && !containsString(c.AllowedScopes, "offline_access") {
 		c.AllowedScopes = append(c.AllowedScopes, "offline_access")
 	}
@@ -140,6 +149,76 @@ func (a *API) createClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.writeJSON(w, http.StatusCreated, toClientView(c))
+}
+
+func (a *API) getClient(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	c, err := a.Clients.FindByClientID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		return
+	}
+	v := toClientView(c)
+	v.JWKSJSON = c.JWKSJSON
+	a.writeJSON(w, http.StatusOK, v)
+}
+
+func (a *API) updateClient(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body clientView
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.writeError(w, http.StatusBadRequest, "invalid json", err)
+		return
+	}
+	existing, err := a.Clients.FindByClientID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		return
+	}
+	method := domain.TokenEndpointAuthMethod(body.TokenEndpointAuthMethod)
+	if method == "" {
+		method = domain.TokenEndpointAuthMethodNone
+	}
+	if !method.Valid() {
+		a.writeError(w, http.StatusBadRequest, "unknown token_endpoint_auth_method", nil)
+		return
+	}
+	if method == domain.TokenEndpointAuthMethodPrivateKeyJWT {
+		if err := validateJWKS(body.JWKSJSON); err != nil {
+			a.writeError(w, http.StatusBadRequest, "jwks_json", err)
+			return
+		}
+	}
+	existing.DisplayName = body.DisplayName
+	existing.RedirectURIs = body.RedirectURIs
+	existing.PostLogoutRedirectURIs = body.PostLogoutRedirectURIs
+	existing.AllowedScopes = body.AllowedScopes
+	existing.RequirePKCE = body.RequirePKCE
+	existing.AllowRefreshTokens = body.AllowRefreshTokens
+	existing.AllowClientCredentials = body.AllowClientCredentials
+	existing.TokenEndpointAuthMethod = method
+	existing.JWKSJSON = body.JWKSJSON
+	existing.AccessTokenLifetimeSeconds = body.AccessTokenLifetimeSeconds
+	existing.RefreshTokenLifetimeSeconds = body.RefreshTokenLifetimeSeconds
+	existing.RefreshTokenAbsoluteLifetimeSeconds = body.RefreshTokenAbsoluteLifetimeSeconds
+	existing.Properties = body.Properties
+	if existing.AllowRefreshTokens && !containsString(existing.AllowedScopes, "offline_access") {
+		existing.AllowedScopes = append(existing.AllowedScopes, "offline_access")
+	}
+	if err := a.Clients.Store(r.Context(), existing); err != nil {
+		a.writeError(w, http.StatusBadRequest, "store failed", err)
+		return
+	}
+	v := toClientView(existing)
+	a.writeJSON(w, http.StatusOK, v)
 }
 
 func (a *API) deleteClient(w http.ResponseWriter, r *http.Request) {
@@ -484,6 +563,20 @@ func containsString(xs []string, s string) bool {
 	return false
 }
 
-// keep ctx unused; the helper exists for symmetry with future
-// per-request audit writes.
+func validateJWKS(raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return errors.New("jwks_json is required for private_key_jwt")
+	}
+	var jwks struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	if err := json.Unmarshal([]byte(raw), &jwks); err != nil {
+		return fmt.Errorf("jwks_json is not valid JSON: %w", err)
+	}
+	if len(jwks.Keys) == 0 {
+		return errors.New("jwks_json must contain at least one key")
+	}
+	return nil
+}
+
 var _ = context.Background

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"go-authserver/internal/clock"
+
 	"github.com/google/uuid"
 )
 
@@ -24,7 +26,7 @@ func newTestManager(t *testing.T, requireHTTPS bool) *CookieManager {
 		RequireHTTPS: requireHTTPS,
 		Path:         "/",
 	}
-	return NewCookieManager(hash, block, cfg)
+	return NewCookieManager(hash, block, cfg, clock.SystemClock{})
 }
 
 func TestCookie_RoundTrip(t *testing.T) {

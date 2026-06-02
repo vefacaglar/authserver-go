@@ -95,7 +95,7 @@ func run(logger *slog.Logger) error {
 		RequireHTTPS: cfg.RequireHTTPS,
 		Path:         "/",
 		MaxAge:       8 * time.Hour,
-	})
+	}, clk)
 
 	loginTmpl := template.Must(template.New("login").Parse(oidc.LoginTemplate()))
 	logoutTmpl := template.Must(template.New("logout").Parse(oidc.LogoutTemplate()))
@@ -228,14 +228,15 @@ func run(logger *slog.Logger) error {
 		Clock:         clk,
 		Logger:        logger,
 	}).Mount(apiMux)
-	// Wrap the API + SPA with auth then CSRF so every admin route
-	// is covered.
-	adminHandler := authMW(csrfMW(admin.CombineMux(apiMux,
-		&admin.UI{Template: template.Must(template.New("admin").Parse(admin.IndexPage())), Logger: logger},
-	)))
+	// The API requires bearer auth; the SPA shell does not (it's
+	// public HTML — the JS sends the token on API calls).
+	apiHandler := authMW(csrfMW(apiMux))
+	uiHandler := csrfMW(http.HandlerFunc(
+		(&admin.UI{Template: template.Must(template.New("admin").Parse(admin.IndexPage())), Logger: logger}).ServeIndex,
+	))
 	adminMount := &server.AdminMount{
-		Root: adminHandler,
-		API:  adminHandler,
+		Root: uiHandler,
+		API:  apiHandler,
 	}
 
 	// EnsureActiveKey so discovery/JWKS have a key to publish on first boot.
@@ -390,8 +391,8 @@ func seedBundle(b *storeBundle) error {
 		DisplayName: "Demo Public Client",
 		// localhost:8090 is the bundled browser demo client
 		// (examples/loginflow); demo.example stays for documentation.
-		RedirectURIs:           []string{"http://localhost:8090/callback", "https://demo.example/callback"},
-		PostLogoutRedirectURIs: []string{"http://localhost:8090/", "https://demo.example/"},
+		RedirectURIs:            []string{"http://localhost:8090/callback", "https://demo.example/callback"},
+		PostLogoutRedirectURIs:  []string{"http://localhost:8090/", "https://demo.example/"},
 		AllowedScopes:           []string{"openid", "profile", "email", "offline_access"},
 		RequirePKCE:             true,
 		AllowRefreshTokens:      true,

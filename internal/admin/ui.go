@@ -40,11 +40,29 @@ const indexHTML = `<!doctype html>
   .err { color: #b00020; }
   .muted { color: #888; }
   .row { display: flex; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
-  input { padding: 0.3rem 0.5rem; }
+  input, select, textarea { padding: 0.3rem 0.5rem; font-family: inherit; font-size: 0.9rem; }
+  textarea { width: 100%; min-height: 4rem; font-family: monospace; }
+  .token-bar { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; padding: 0.5rem; background: #f7f7f7; border-radius: 4px; }
+  .token-bar input { flex: 1; }
+  .token-bar .status { font-size: 0.8rem; }
+  .token-bar .status.ok { color: #2e7d32; }
+  .token-bar .status.fail { color: #b00020; }
+  .form-grid { display: grid; grid-template-columns: 12rem 1fr; gap: 0.4rem 0.8rem; align-items: start; margin: 1rem 0; }
+  .form-grid label { font-weight: 600; padding-top: 0.3rem; }
+  .form-grid .hint { font-size: 0.8rem; color: #888; }
+  .btn-row { display: flex; gap: 0.5rem; margin: 1rem 0; }
+  button { padding: 0.4rem 0.8rem; cursor: pointer; }
+  .btn-danger { color: #b00020; }
 </style>
 </head>
 <body>
 <h1>authserver admin</h1>
+<div class="token-bar">
+  <label for="admin-token">Admin token:</label>
+  <input id="admin-token" type="password" placeholder="paste token (or leave empty in anonymous mode)">
+  <button id="token-save">Save</button>
+  <span id="token-status" class="status"></span>
+</div>
 <nav>
   <button data-tab="clients">Clients</button>
   <button data-tab="scopes">Scopes</button>
@@ -58,10 +76,32 @@ const indexHTML = `<!doctype html>
 <script>
 (() => {
   const csrf = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+  const tokenInput = document.getElementById('admin-token');
+  const tokenStatus = document.getElementById('token-status');
+  tokenInput.value = sessionStorage.getItem('admin_token') || '';
+  updateTokenStatus();
+  document.getElementById('token-save').addEventListener('click', () => {
+    sessionStorage.setItem('admin_token', tokenInput.value);
+    updateTokenStatus();
+  });
+  function updateTokenStatus() {
+    if (tokenInput.value) { tokenStatus.textContent = 'token set'; tokenStatus.className = 'status ok'; }
+    else { tokenStatus.textContent = 'no token (anonymous)'; tokenStatus.className = 'status'; }
+  }
+  function adminToken() { return tokenInput.value || ''; }
+
   async function call(method, path, body) {
     const headers = {'X-CSRF-Token': csrf};
+    const tok = adminToken();
+    if (tok) headers['Authorization'] = 'Bearer ' + tok;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const resp = await fetch(path, {method, headers, body: body !== undefined ? JSON.stringify(body) : undefined});
+    if (resp.status === 401) {
+      sessionStorage.removeItem('admin_token');
+      tokenInput.value = '';
+      updateTokenStatus();
+      throw new Error('401 Unauthorized — check your admin token');
+    }
     if (!resp.ok) {
       const text = await resp.text();
       throw new Error(method + ' ' + path + ' → ' + resp.status + ' ' + text);
@@ -69,13 +109,149 @@ const indexHTML = `<!doctype html>
     if (resp.status === 204) return null;
     return await resp.json();
   }
-  function esc(s) { return s === null || s === undefined ? '' : String(s).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'})[c]); }
+  function esc(s) { return s === null || s === undefined ? '' : String(s).replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'})[c]); }
 
   function renderClients(items) {
-    return '<table><thead><tr><th>client_id</th><th>name</th><th>auth</th><th>scopes</th><th>jti_required</th></tr></thead><tbody>' +
-      items.map(c => '<tr><td><code>' + esc(c.client_id) + '</code></td><td>' + esc(c.display_name) + '</td><td>' + esc(c.token_endpoint_auth_method) + '</td><td>' + esc((c.allowed_scopes || []).join(',')) + '</td><td>' + (c.require_pkce ? 'yes' : 'no') + '</td></tr>').join('') +
-      '</tbody></table>';
+    let h = '<div class="btn-row"><button id="btn-new-client">New client</button></div>';
+    h += '<table><thead><tr><th>client_id</th><th>name</th><th>auth</th><th>scopes</th><th>pkce</th><th>jwks</th><th></th></tr></thead><tbody>';
+    h += items.map(c => '<tr>' +
+      '<td><code>' + esc(c.client_id) + '</code></td>' +
+      '<td>' + esc(c.display_name) + '</td>' +
+      '<td>' + esc(c.token_endpoint_auth_method) + '</td>' +
+      '<td>' + esc((c.allowed_scopes || []).join(', ')) + '</td>' +
+      '<td>' + (c.require_pkce ? 'yes' : 'no') + '</td>' +
+      '<td>' + (c.has_jwks ? 'yes' : 'no') + '</td>' +
+      '<td><button class="btn-edit" data-id="' + esc(c.client_id) + '">Edit</button> ' +
+      '<button class="btn-del btn-danger" data-id="' + esc(c.client_id) + '">Delete</button></td>' +
+      '</tr>').join('');
+    h += '</tbody></table>';
+    return h;
   }
+
+  function clientForm(c, isEdit) {
+    const scopes = (c.allowed_scopes || []).join('\n');
+    const redirects = (c.redirect_uris || []).join('\n');
+    const postLogout = (c.post_logout_redirect_uris || []).join('\n');
+    const props = c.properties ? JSON.stringify(c.properties, null, 2) : '';
+    const method = c.token_endpoint_auth_method || 'none';
+    return '<h2>' + (isEdit ? 'Edit client' : 'New client') + '</h2>' +
+      '<form id="client-form">' +
+      '<div class="form-grid">' +
+      '<label for="f-client_id">client_id</label>' +
+      '<div><input id="f-client_id" value="' + esc(c.client_id || '') + '"' + (isEdit ? ' readonly' : '') + ' required></div>' +
+      '<label for="f-display_name">display_name</label>' +
+      '<div><input id="f-display_name" value="' + esc(c.display_name || '') + '"></div>' +
+      '<label for="f-redirect_uris">redirect_uris</label>' +
+      '<div><textarea id="f-redirect_uris" placeholder="one per line">' + esc(redirects) + '</textarea><span class="hint">One URI per line</span></div>' +
+      '<label for="f-post_logout_redirect_uris">post_logout_redirect_uris</label>' +
+      '<div><textarea id="f-post_logout_redirect_uris" placeholder="one per line">' + esc(postLogout) + '</textarea></div>' +
+      '<label for="f-allowed_scopes">allowed_scopes</label>' +
+      '<div><textarea id="f-allowed_scopes" placeholder="one per line">' + esc(scopes) + '</textarea></div>' +
+      '<label for="f-auth_method">token_endpoint_auth_method</label>' +
+      '<div><select id="f-auth_method"><option value="none"' + (method === 'none' ? ' selected' : '') + '>none</option><option value="private_key_jwt"' + (method === 'private_key_jwt' ? ' selected' : '') + '>private_key_jwt</option></select></div>' +
+      '<label for="f-jwks_json">jwks_json</label>' +
+      '<div><textarea id="f-jwks_json" placeholder=\'{"keys":[...]}\'' + (method !== 'private_key_jwt' ? ' style="display:none"' : '') + '>' + esc(c.jwks_json || '') + '</textarea><span class="hint">Required for private_key_jwt</span></div>' +
+      '<label for="f-require_pkce">require_pkce</label>' +
+      '<div><input id="f-require_pkce" type="checkbox"' + (c.require_pkce ? ' checked' : '') + '></div>' +
+      '<label for="f-allow_refresh_tokens">allow_refresh_tokens</label>' +
+      '<div><input id="f-allow_refresh_tokens" type="checkbox"' + (c.allow_refresh_tokens ? ' checked' : '') + '></div>' +
+      '<label for="f-allow_client_credentials">allow_client_credentials</label>' +
+      '<div><input id="f-allow_client_credentials" type="checkbox"' + (c.allow_client_credentials ? ' checked' : '') + '></div>' +
+      '<label for="f-access_lt">access_token_lifetime (s)</label>' +
+      '<div><input id="f-access_lt" type="number" min="0" value="' + (c.access_token_lifetime_seconds || '') + '"><span class="hint">0 = server default</span></div>' +
+      '<label for="f-refresh_lt">refresh_token_lifetime (s)</label>' +
+      '<div><input id="f-refresh_lt" type="number" min="0" value="' + (c.refresh_token_lifetime_seconds || '') + '"></div>' +
+      '<label for="f-refresh_abs_lt">refresh_token_abs_lifetime (s)</label>' +
+      '<div><input id="f-refresh_abs_lt" type="number" min="0" value="' + (c.refresh_token_absolute_lifetime_seconds || '') + '"></div>' +
+      '<label for="f-properties">properties</label>' +
+      '<div><textarea id="f-properties" placeholder=\'{"key":"value"}\'' + '>' + esc(props) + '</textarea><span class="hint">JSON object</span></div>' +
+      '</div>' +
+      '<div class="btn-row"><button type="submit">' + (isEdit ? 'Update' : 'Create') + '</button> <button type="button" id="btn-cancel">Cancel</button></div>' +
+      '<div id="form-error"></div>' +
+      '</form>';
+  }
+
+  function splitLines(s) { return (s || '').split(/[\n,]+/).map(x => x.trim()).filter(Boolean); }
+  function readForm() {
+    let props = {};
+    const propsRaw = document.getElementById('f-properties').value.trim();
+    if (propsRaw) { try { props = JSON.parse(propsRaw); } catch(e) { throw new Error('properties: ' + e.message); } }
+    return {
+      client_id: document.getElementById('f-client_id').value.trim(),
+      display_name: document.getElementById('f-display_name').value.trim(),
+      redirect_uris: splitLines(document.getElementById('f-redirect_uris').value),
+      post_logout_redirect_uris: splitLines(document.getElementById('f-post_logout_redirect_uris').value),
+      allowed_scopes: splitLines(document.getElementById('f-allowed_scopes').value),
+      token_endpoint_auth_method: document.getElementById('f-auth_method').value,
+      jwks_json: document.getElementById('f-jwks_json').value.trim(),
+      require_pkce: document.getElementById('f-require_pkce').checked,
+      allow_refresh_tokens: document.getElementById('f-allow_refresh_tokens').checked,
+      allow_client_credentials: document.getElementById('f-allow_client_credentials').checked,
+      access_token_lifetime_seconds: parseInt(document.getElementById('f-access_lt').value) || 0,
+      refresh_token_lifetime_seconds: parseInt(document.getElementById('f-refresh_lt').value) || 0,
+      refresh_token_absolute_lifetime_seconds: parseInt(document.getElementById('f-refresh_abs_lt').value) || 0,
+      properties: Object.keys(props).length ? props : undefined
+    };
+  }
+
+  function bindClientForm(isEdit) {
+    document.getElementById('f-auth_method').addEventListener('change', function() {
+      document.getElementById('f-jwks_json').style.display = this.value === 'private_key_jwt' ? '' : 'none';
+    });
+    document.getElementById('btn-cancel').addEventListener('click', () => showClients());
+    document.getElementById('client-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errDiv = document.getElementById('form-error');
+      errDiv.textContent = '';
+      try {
+        const body = readForm();
+        if (isEdit) {
+          await call('PUT', '/admin/api/clients/' + encodeURIComponent(body.client_id), body);
+        } else {
+          await call('POST', '/admin/api/clients', body);
+        }
+        showClients();
+      } catch (err) {
+        errDiv.innerHTML = '<p class="err">' + esc(err.message) + '</p>';
+      }
+    });
+  }
+
+  async function showClients() {
+    const out = document.getElementById('content');
+    out.innerHTML = '<p class="muted">loading…</p>';
+    try {
+      const r = await call('GET', '/admin/api/clients');
+      out.innerHTML = renderClients(r.items || []);
+      document.getElementById('btn-new-client').addEventListener('click', () => {
+        out.innerHTML = clientForm({require_pkce: true}, false);
+        bindClientForm(false);
+      });
+      out.querySelectorAll('.btn-edit').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.getAttribute('data-id');
+          try {
+            const c = await call('GET', '/admin/api/clients/' + encodeURIComponent(id));
+            out.innerHTML = clientForm(c, true);
+            bindClientForm(true);
+          } catch (e) { out.innerHTML = '<p class="err">' + esc(e.message) + '</p>'; }
+        });
+      });
+      out.querySelectorAll('.btn-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.getAttribute('data-id');
+          if (!confirm('Delete client "' + id + '"?')) return;
+          try {
+            await call('DELETE', '/admin/api/clients/' + encodeURIComponent(id));
+            showClients();
+          } catch (e) { out.innerHTML = '<p class="err">' + esc(e.message) + '</p>'; }
+        });
+      });
+    } catch (e) {
+      out.innerHTML = '<p class="err">' + esc(e.message) + '</p>';
+    }
+  }
+
   function renderScopes(items) {
     return '<table><thead><tr><th>name</th><th>display</th><th>required</th></tr></thead><tbody>' +
       items.map(s => '<tr><td><code>' + esc(s.name) + '</code></td><td>' + esc(s.display_name) + '</td><td>' + (s.required ? 'yes' : 'no') + '</td></tr>').join('') +
@@ -108,10 +284,10 @@ const indexHTML = `<!doctype html>
       const out = document.getElementById('content');
       out.innerHTML = '<p class="muted">loading…</p>';
       try {
+        if (tab === 'clients') { showClients(); return; }
         const r = await call('GET', '/admin/api/' + tab);
         const items = r.items || [];
-        if (tab === 'clients') out.innerHTML = renderClients(items);
-        else if (tab === 'scopes') out.innerHTML = renderScopes(items);
+        if (tab === 'scopes') out.innerHTML = renderScopes(items);
         else if (tab === 'sessions') out.innerHTML = renderSessions(items);
         else if (tab === 'refresh-tokens') out.innerHTML = renderTokens(items);
         else if (tab === 'keys') out.innerHTML = renderKeys(items);
