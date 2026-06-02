@@ -77,3 +77,5 @@ $RECYCLE.BIN/
 # Linux
 .fuse_hidden*
 .directory
+# Bare compiled binary (go build output at repo root)
+/authserver

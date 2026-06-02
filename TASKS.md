@@ -5,7 +5,7 @@ must be clean; run `go test ./...` where the task adds tests. Don't start the ne
 until **Done when** holds. Full spec lives in `BUILD_PROMPT.md`; this file is the checklist.
 
 ## M1 — Module + domain + memory stores
-- [ ] **T1.1 Init module** — `go.mod` (`module go-authserver`, go 1.23), `cmd/authserver/main.go` trivial main, `.gitignore`. **Done when** build succeeds and the binary runs.
+- [x] **T1.1 Init module** — `go.mod` (`module go-authserver`, go 1.23), `cmd/authserver/main.go` trivial main, `.gitignore`. **Done when** build succeeds and the binary runs.
 - [ ] **T1.2 Clock** — `internal/clock`: `Clock` interface (`Now()`), `SystemClock`, `FakeClock`. **Done when** a test advances the fake clock.
 - [ ] **T1.3 Domain models** — `internal/domain`: Client, AuthorizationCode, RefreshToken, Session, SigningKey, Scope, AuditLog, UserInfo, PagedRequest, PagedResult[T], auth-method enum (`google/uuid`). **Done when** it builds.
 - [ ] **T1.4 Store interfaces** — `internal/store/store.go`: all interfaces incl. `LoginAttemptTracker`. **Done when** it builds.
