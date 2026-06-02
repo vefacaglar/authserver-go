@@ -179,6 +179,7 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		ClientID:                testClientID,
 		DisplayName:             "Demo Public Client",
 		RedirectURIs:            []string{testRedirectURI},
+		PostLogoutRedirectURIs:  []string{"/", testIssuer + "/logged-out"},
 		AllowedScopes:           []string{"openid", "profile", "email", "offline_access"},
 		RequirePKCE:             true,
 		AllowRefreshTokens:      true,
@@ -1149,6 +1150,137 @@ func TestE2E_Logout_PostCancelDoesNotRevoke(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("refresh after cancel status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// §2.1 (plan-2.md) — logout-CSRF regression. A third-party site must
+// not be able to log the user out and bounce them to a registered
+// post_logout_redirect_uri just by including an <img> whose src is
+// /connect/logout?id_token_hint=...&post_logout_redirect_uri=...
+// Even when the hint and the target are individually valid, the GET
+// must NOT call terminateSession and must NOT redirect to the target.
+// It must go through the confirm page; the actual revocation only
+// happens on POST after CSRF is validated.
+func TestE2E_Logout_IdTokenHintGET_DoesNotRevokeAndGoesToConfirm(t *testing.T) {
+	ts := newTestServer(t)
+	tr, sessionCookie := exchangeCodeForTokens(t, ts)
+
+	// Craft a valid id_token_hint from the issued ID token. This is
+	// the same string the RP would carry into RP-initiated logout.
+	hint := tr.IDToken
+	if hint == "" {
+		t.Fatal("id_token missing from token response")
+	}
+
+	// Target is a registered post_logout_redirect_uri. validatePostLogoutURI
+	// requires an absolute URL whose host matches the issuer.
+	target := testIssuer + "/logged-out"
+
+	// The attack scenario is: attacker sets the target to a URL on
+	// their own site. The defence is: the server must not redirect
+	// here from a GET.
+	logoutURL := "/connect/logout?id_token_hint=" + url.QueryEscape(hint) +
+		"&post_logout_redirect_uri=" + url.QueryEscape(target) +
+		"&state=attacker-state"
+
+	resp, err := ts.do(t, http.MethodGet, logoutURL, nil, []*http.Cookie{sessionCookie})
+	if err != nil {
+		t.Fatalf("logout GET: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302 to confirm", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "/logout") {
+		t.Fatalf("Location = %q, want /logout (confirm page) — must NOT redirect to /logged-out", loc)
+	}
+	if strings.HasPrefix(loc, target) {
+		t.Errorf("Location = %q — CSRF vector: GET with id_token_hint should not redirect to post_logout_redirect_uri", loc)
+	}
+	if !strings.Contains(loc, "post_logout_redirect_uri=") {
+		t.Errorf("Location = %q, want it to carry post_logout_redirect_uri for the confirm form", loc)
+	}
+	if !strings.Contains(loc, "state=attacker-state") {
+		t.Errorf("Location = %q, want it to carry state for the confirm form", loc)
+	}
+
+	// Critical: the session must still be valid. The session cookie
+	// must NOT have been cleared by the GET. If it had been cleared,
+	// this is the logout-CSRF bug.
+	var cleared bool
+	for _, c := range resp.Cookies() {
+		if c.Name == ".auth.session" && c.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	if cleared {
+		t.Errorf("session cookie cleared by GET with id_token_hint — that is the logout-CSRF bug")
+	}
+
+	// Now drive the legitimate confirm flow: GET /logout, get CSRF,
+	// POST it, and confirm the session IS revoked afterwards. This
+	// proves the confirm page is reachable and functional, just not
+	// reachable as a side effect of the CSRF GET.
+	getRR, err := ts.do(t, http.MethodGet, "/logout?"+strings.TrimPrefix(loc, "/logout?"), nil, []*http.Cookie{sessionCookie})
+	if err != nil {
+		t.Fatalf("GET /logout: %v", err)
+	}
+	gb, _ := io.ReadAll(getRR.Body)
+	getRR.Body.Close()
+	csrfToken := extractInputValue(t, string(gb), `name="csrf_token"`)
+	csrfCookie := findCookie(getRR.Cookies(), "_logout_csrf")
+	if csrfCookie == nil {
+		t.Fatal("logout CSRF cookie not set on confirm page")
+	}
+	form := url.Values{}
+	form.Set("csrf_token", csrfToken)
+	form.Set("post_logout_redirect_uri", target)
+	form.Set("client_id", testClientID)
+	form.Set("state", "attacker-state")
+	form.Set("confirm", "yes")
+	post, err := ts.do(t, http.MethodPost, "/connect/logout", form, []*http.Cookie{sessionCookie, csrfCookie})
+	if err != nil {
+		t.Fatalf("POST /connect/logout: %v", err)
+	}
+	post.Body.Close()
+	if post.StatusCode != http.StatusFound {
+		t.Fatalf("confirm POST status = %d, want 302", post.StatusCode)
+	}
+	postLoc := post.Header.Get("Location")
+	if !strings.Contains(postLoc, "/logged-out") {
+		t.Errorf("POST Location = %q, want .../logged-out (valid post_logout_redirect_uri)", postLoc)
+	}
+	if !strings.Contains(postLoc, "state=attacker-state") {
+		t.Errorf("POST Location = %q, want it to carry state", postLoc)
+	}
+}
+
+// TestE2E_Logout_IdTokenHintGET_RecoversClientIDFromAud: when the
+// caller supplies id_token_hint but not client_id, the confirm-page
+// redirect must carry the client_id recovered from the hint's aud so
+// that the eventual POST has the value handleConfirm needs to validate
+// post_logout_redirect_uri. This is the only use of the hint on the
+// GET path; revocation still waits for the confirm POST.
+func TestE2E_Logout_IdTokenHintGET_RecoversClientIDFromAud(t *testing.T) {
+	ts := newTestServer(t)
+	tr, _ := exchangeCodeForTokens(t, ts)
+
+	logoutURL := "/connect/logout?id_token_hint=" + url.QueryEscape(tr.IDToken)
+	resp, err := ts.do(t, http.MethodGet, logoutURL, nil, nil)
+	if err != nil {
+		t.Fatalf("logout GET: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "/logout") {
+		t.Fatalf("Location = %q, want /logout...", loc)
+	}
+	if !strings.Contains(loc, "client_id="+url.QueryEscape(testClientID)) {
+		t.Errorf("Location = %q, want it to carry client_id=%s recovered from id_token_hint aud", loc, testClientID)
 	}
 }
 
