@@ -23,7 +23,14 @@ func csrfFromContext(ctx context.Context) (string, error) {
 // (per gorilla/csrf's requirement) and shared across instances so a
 // browser that loaded a CSRF cookie on one instance can post to
 // another.
-func CSRFMiddleware(key []byte) func(http.Handler) http.Handler {
+//
+// secure follows the same RequireHTTPS flag as the rest of the
+// server. When secure=true the CSRF cookie is marked Secure, which
+// keeps it out of plaintext requests and is required for the
+// `__Host-` prefix to be accepted. When secure=false the cookie
+// travels over HTTP as well, which is the right default for local
+// dev and tests behind httptest.
+func CSRFMiddleware(key []byte, secure bool) func(http.Handler) http.Handler {
 	if len(key) < 32 {
 		// Pad up; gorilla/csrf will panic if the key is shorter.
 		// This is a safety net for tests; production should always
@@ -32,8 +39,8 @@ func CSRFMiddleware(key []byte) func(http.Handler) http.Handler {
 		copy(padded, key)
 		key = padded
 	}
-	return csrf.Protect(key, 
-		csrf.Secure(false), 
+	return csrf.Protect(key,
+		csrf.Secure(secure),
 		csrf.Path("/admin/"),
 		csrf.TrustedOrigins([]string{
 			"localhost:5175",

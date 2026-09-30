@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -262,10 +263,33 @@ func anyAudienceMatch(tokenAud, accepted []string) bool {
 	return false
 }
 
-// equalAudience compares two aud values loosely. The spec is
-// case-sensitive on the value, but a defensive lower-case compare
-// shields us from a misconfigured client that sends the issuer in a
-// different case than the server registered.
+// equalAudience compares two aud values per RFC 3986 §6.2.2: the
+// scheme and host are case-insensitive, the rest of the URI is
+// case-sensitive. RFC 7519 §4.1.3 makes the JWT aud value itself
+// case-sensitive, so a client that sends HTTPS://auth.example.com
+// against a registered https://auth.example.com MUST be accepted
+// (host equivalence), but /connect/token against /CONNECT/TOKEN
+// MUST NOT.
+//
+// When either side is not parseable as an absolute URL, fall back
+// to a byte-for-byte compare — that's a defensive posture for the
+// unusual case where a client registers an opaque audience string
+// (e.g. an entity identifier that happens to be the aud value
+// rather than a URL).
 func equalAudience(a, b string) bool {
-	return strings.EqualFold(a, b)
+	if a == b {
+		return true
+	}
+	au, aerr := url.Parse(a)
+	bu, berr := url.Parse(b)
+	if aerr != nil || berr != nil || !au.IsAbs() || !bu.IsAbs() {
+		return false
+	}
+	if !strings.EqualFold(au.Scheme, bu.Scheme) {
+		return false
+	}
+	if !strings.EqualFold(au.Host, bu.Host) {
+		return false
+	}
+	return au.Path == bu.Path && au.RawQuery == bu.RawQuery && au.Fragment == bu.Fragment
 }

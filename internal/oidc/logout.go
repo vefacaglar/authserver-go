@@ -80,6 +80,16 @@ func (h *LogoutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleEntry is the GET /connect/logout dispatcher.
+//
+// id_token_hint is parsed and the aud is used to recover clientID, but
+// it is never used to short-circuit the confirmation step. Earlier
+// versions of this code skipped straight to terminateSession+redirect
+// when a valid hint matched a registered post_logout_redirect_uri; that
+// path was a logout-CSRF vector — a third party could trigger
+// <img src="https://auth/connect/logout?id_token_hint=...&post_logout_redirect_uri=...">
+// and the user's session would be destroyed and redirected without any
+// user interaction. We now always go through the confirm page; the
+// actual session revocation happens on POST after CSRF is validated.
 func (h *LogoutHandler) handleEntry(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	hint := q.Get("id_token_hint")
@@ -87,24 +97,19 @@ func (h *LogoutHandler) handleEntry(w http.ResponseWriter, r *http.Request) {
 	state := q.Get("state")
 	clientID := q.Get("client_id")
 
-	if hint != "" {
-		tok, err := h.Issuer.VerifyToken(r.Context(), hint)
-		if err == nil {
+	// If the RP supplied an id_token_hint, use its aud to recover
+	// clientID so the confirm form carries the right value into POST.
+	// The hint is otherwise discarded — it is not a substitute for the
+	// user explicitly clicking "Sign out".
+	if clientID == "" && hint != "" {
+		if tok, err := h.Issuer.VerifyToken(r.Context(), hint); err == nil {
 			aud := tok.Audience()
 			if len(aud) > 0 {
 				clientID = aud[0]
 			}
-			if target != "" {
-				if ok, _ := h.validatePostLogoutURI(r.Context(), clientID, target); ok {
-					h.terminateSession(w, r)
-					http.Redirect(w, r, appendState(target, state), http.StatusFound)
-					return
-				}
-			}
 		}
 	}
 
-	// No valid hint or no validated target → confirmation page.
 	q2 := url.Values{}
 	if target != "" {
 		q2.Set("post_logout_redirect_uri", target)

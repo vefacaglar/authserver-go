@@ -179,6 +179,7 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		ClientID:                testClientID,
 		DisplayName:             "Demo Public Client",
 		RedirectURIs:            []string{testRedirectURI},
+		PostLogoutRedirectURIs:  []string{"/", testIssuer + "/logged-out"},
 		AllowedScopes:           []string{"openid", "profile", "email", "offline_access"},
 		RequirePKCE:             true,
 		AllowRefreshTokens:      true,
@@ -238,6 +239,7 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		Clock:    clk,
 		Logger:   logger,
 		Template: loginTmpl,
+		ClientIP: server.ClientIP,
 	}
 	authorizeHandler := &oidc.AuthorizeHandler{
 		Cfg: oidc.AuthorizeConfig{
@@ -334,8 +336,16 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		Revoke: &oidc.RevokeHandler{
 			RefreshTokens: b.RefreshTokens,
 			Clients:       b.Clients,
-			Now:           clk.Now,
-			Logger:        logger,
+			ClientAuth: oidc.ClientAuthConfig{
+				IssuerURL:        testIssuer,
+				TokenEndpointURL: testIssuer + "/connect/token",
+				AssertionCache:   token.NewMemAssertionCache(clk.Now),
+				AssertionSkew:    time.Minute,
+				Clock:            clk,
+				Logger:           logger,
+			},
+			Now:    clk.Now,
+			Logger: logger,
 		},
 		Discovery: oidc.NewDiscoveryHandler(testIssuer, b.Scopes),
 		JWKS:      oidc.NewJWKSHandler(issuer),
@@ -1003,6 +1013,153 @@ func TestE2E_Revoke_UnknownClientReturns401(t *testing.T) {
 	}
 }
 
+// §2.2 (plan-2.md) — RFC 7009 §2.1: confidential clients MUST
+// authenticate at the revoke endpoint. A revoke request that names a
+// confidential client but does not carry a valid client_assertion
+// must fail with 401 invalid_client, regardless of which token is
+// being revoked.
+func TestE2E_Revoke_ConfidentialClient_MissingAssertionReturns401(t *testing.T) {
+	ts := newTestServer(t)
+	_ = registerConfidentialClient(t, bundleFromTestServer(ts))
+
+	form := url.Values{}
+	form.Set("token", "any-token")
+	form.Set("client_id", testConfidentialID)
+	// No client_assertion — confidential client cannot authenticate.
+
+	resp, err := ts.do(t, http.MethodPost, "/connect/revoke", form, nil)
+	if err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(resp.Header.Get("WWW-Authenticate"), `Basic`) {
+		t.Errorf("WWW-Authenticate = %q, want Basic", resp.Header.Get("WWW-Authenticate"))
+	}
+}
+
+// §2.2 (plan-2.md) — RFC 7009 §2.1: a confidential client
+// authenticates with a valid private_key_jwt assertion, then asks to
+// revoke a token issued to a DIFFERENT client. The endpoint must
+// return 200 (the spec forbids leaking token existence) and must NOT
+// revoke the foreign token. The authenticated identity is the source
+// of truth, not the form's client_id field.
+func TestE2E_Revoke_ConfidentialClient_CannotRevokeForeignToken(t *testing.T) {
+	ts := newTestServer(t)
+	ctc := registerConfidentialClient(t, bundleFromTestServer(ts))
+	tr, _ := exchangeCodeForTokens(t, ts) // tr's refresh token is for demo-public
+
+	// Sanity: demo-public is not the confidential client.
+	if testClientID == testConfidentialID {
+		t.Fatal("test setup: confidential and public clients share an id")
+	}
+
+	// Confidential client authenticates correctly with a valid
+	// assertion, then asks to revoke demo-public's refresh token.
+	now := ts.clk.Now()
+	assertion := signClientAssertion(t, ctc.Priv, testConfidentialID,
+		testIssuer+"/connect/token", uuid.NewString(), now, now.Add(time.Minute))
+
+	form := url.Values{}
+	form.Set("token", tr.RefreshToken)
+	form.Set("client_id", testConfidentialID) // truthful about who is calling
+	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form.Set("client_assertion", assertion)
+
+	resp, err := ts.do(t, http.MethodPost, "/connect/revoke", form, nil)
+	if err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (spec: 200 even on foreign token to avoid existence leak)", resp.StatusCode)
+	}
+
+	// The foreign token must STILL be usable. A successful refresh
+	// is the strongest evidence it has not been revoked.
+	rtForm := url.Values{}
+	rtForm.Set("grant_type", "refresh_token")
+	rtForm.Set("refresh_token", tr.RefreshToken)
+	rtForm.Set("client_id", testClientID)
+	rtResp, err := ts.do(t, http.MethodPost, "/connect/token", rtForm, nil)
+	if err != nil {
+		t.Fatalf("refresh after foreign revoke: %v", err)
+	}
+	rtResp.Body.Close()
+	if rtResp.StatusCode != http.StatusOK {
+		t.Errorf("refresh status = %d, want 200 — foreign token must not be revoked by a different client", rtResp.StatusCode)
+	}
+}
+
+// §2.2 (plan-2.md) — public client (TokenEndpointAuthMethod == none)
+// authenticates by client_id alone, then revokes its own refresh
+// token. This is the path §2.1 → §2.2 chain relies on: a public
+// client that can already exchange code + PKCE can also revoke.
+func TestE2E_Revoke_PublicClient_RevokesOwnToken(t *testing.T) {
+	ts := newTestServer(t)
+	tr, _ := exchangeCodeForTokens(t, ts)
+
+	form := url.Values{}
+	form.Set("token", tr.RefreshToken)
+	form.Set("client_id", testClientID)
+	resp, err := ts.do(t, http.MethodPost, "/connect/revoke", form, nil)
+	if err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	// Token must now be revoked; refresh fails with invalid_grant.
+	rtForm := url.Values{}
+	rtForm.Set("grant_type", "refresh_token")
+	rtForm.Set("refresh_token", tr.RefreshToken)
+	rtForm.Set("client_id", testClientID)
+	rtResp, err := ts.do(t, http.MethodPost, "/connect/token", rtForm, nil)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	rtResp.Body.Close()
+	if rtResp.StatusCode != http.StatusBadRequest {
+		t.Errorf("refresh status = %d, want 400 — token should be revoked", rtResp.StatusCode)
+	}
+}
+
+// §2.2 (plan-2.md) — confidential client authenticates with a valid
+// private_key_jwt assertion and asks to revoke an unknown token. The
+// spec mandates 200 OK on unknown tokens to avoid leaking whether a
+// token exists. The test pins the happy-path wiring of
+// AuthenticateClient through the revoke handler: a correctly signed
+// assertion authenticates the client, the token lookup runs, finds
+// nothing, the handler returns 200.
+func TestE2E_Revoke_ConfidentialClient_AuthSuccessReturns200(t *testing.T) {
+	ts := newTestServer(t)
+	ctc := registerConfidentialClient(t, bundleFromTestServer(ts))
+
+	now := ts.clk.Now()
+	assertion := signClientAssertion(t, ctc.Priv, testConfidentialID,
+		testIssuer+"/connect/token", uuid.NewString(), now, now.Add(time.Minute))
+
+	form := url.Values{}
+	form.Set("token", "unknown-token")
+	form.Set("client_id", testConfidentialID)
+	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form.Set("client_assertion", assertion)
+
+	resp, err := ts.do(t, http.MethodPost, "/connect/revoke", form, nil)
+	if err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (spec: always 200 on unknown token to avoid existence leak)", resp.StatusCode)
+	}
+}
+
 func TestE2E_Logout_GetRedirectsToConfirm(t *testing.T) {
 	ts := newTestServer(t)
 	tr, _ := exchangeCodeForTokens(t, ts)
@@ -1149,6 +1306,137 @@ func TestE2E_Logout_PostCancelDoesNotRevoke(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("refresh after cancel status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// §2.1 (plan-2.md) — logout-CSRF regression. A third-party site must
+// not be able to log the user out and bounce them to a registered
+// post_logout_redirect_uri just by including an <img> whose src is
+// /connect/logout?id_token_hint=...&post_logout_redirect_uri=...
+// Even when the hint and the target are individually valid, the GET
+// must NOT call terminateSession and must NOT redirect to the target.
+// It must go through the confirm page; the actual revocation only
+// happens on POST after CSRF is validated.
+func TestE2E_Logout_IdTokenHintGET_DoesNotRevokeAndGoesToConfirm(t *testing.T) {
+	ts := newTestServer(t)
+	tr, sessionCookie := exchangeCodeForTokens(t, ts)
+
+	// Craft a valid id_token_hint from the issued ID token. This is
+	// the same string the RP would carry into RP-initiated logout.
+	hint := tr.IDToken
+	if hint == "" {
+		t.Fatal("id_token missing from token response")
+	}
+
+	// Target is a registered post_logout_redirect_uri. validatePostLogoutURI
+	// requires an absolute URL whose host matches the issuer.
+	target := testIssuer + "/logged-out"
+
+	// The attack scenario is: attacker sets the target to a URL on
+	// their own site. The defence is: the server must not redirect
+	// here from a GET.
+	logoutURL := "/connect/logout?id_token_hint=" + url.QueryEscape(hint) +
+		"&post_logout_redirect_uri=" + url.QueryEscape(target) +
+		"&state=attacker-state"
+
+	resp, err := ts.do(t, http.MethodGet, logoutURL, nil, []*http.Cookie{sessionCookie})
+	if err != nil {
+		t.Fatalf("logout GET: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302 to confirm", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "/logout") {
+		t.Fatalf("Location = %q, want /logout (confirm page) — must NOT redirect to /logged-out", loc)
+	}
+	if strings.HasPrefix(loc, target) {
+		t.Errorf("Location = %q — CSRF vector: GET with id_token_hint should not redirect to post_logout_redirect_uri", loc)
+	}
+	if !strings.Contains(loc, "post_logout_redirect_uri=") {
+		t.Errorf("Location = %q, want it to carry post_logout_redirect_uri for the confirm form", loc)
+	}
+	if !strings.Contains(loc, "state=attacker-state") {
+		t.Errorf("Location = %q, want it to carry state for the confirm form", loc)
+	}
+
+	// Critical: the session must still be valid. The session cookie
+	// must NOT have been cleared by the GET. If it had been cleared,
+	// this is the logout-CSRF bug.
+	var cleared bool
+	for _, c := range resp.Cookies() {
+		if c.Name == ".auth.session" && c.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	if cleared {
+		t.Errorf("session cookie cleared by GET with id_token_hint — that is the logout-CSRF bug")
+	}
+
+	// Now drive the legitimate confirm flow: GET /logout, get CSRF,
+	// POST it, and confirm the session IS revoked afterwards. This
+	// proves the confirm page is reachable and functional, just not
+	// reachable as a side effect of the CSRF GET.
+	getRR, err := ts.do(t, http.MethodGet, "/logout?"+strings.TrimPrefix(loc, "/logout?"), nil, []*http.Cookie{sessionCookie})
+	if err != nil {
+		t.Fatalf("GET /logout: %v", err)
+	}
+	gb, _ := io.ReadAll(getRR.Body)
+	getRR.Body.Close()
+	csrfToken := extractInputValue(t, string(gb), `name="csrf_token"`)
+	csrfCookie := findCookie(getRR.Cookies(), "_logout_csrf")
+	if csrfCookie == nil {
+		t.Fatal("logout CSRF cookie not set on confirm page")
+	}
+	form := url.Values{}
+	form.Set("csrf_token", csrfToken)
+	form.Set("post_logout_redirect_uri", target)
+	form.Set("client_id", testClientID)
+	form.Set("state", "attacker-state")
+	form.Set("confirm", "yes")
+	post, err := ts.do(t, http.MethodPost, "/connect/logout", form, []*http.Cookie{sessionCookie, csrfCookie})
+	if err != nil {
+		t.Fatalf("POST /connect/logout: %v", err)
+	}
+	post.Body.Close()
+	if post.StatusCode != http.StatusFound {
+		t.Fatalf("confirm POST status = %d, want 302", post.StatusCode)
+	}
+	postLoc := post.Header.Get("Location")
+	if !strings.Contains(postLoc, "/logged-out") {
+		t.Errorf("POST Location = %q, want .../logged-out (valid post_logout_redirect_uri)", postLoc)
+	}
+	if !strings.Contains(postLoc, "state=attacker-state") {
+		t.Errorf("POST Location = %q, want it to carry state", postLoc)
+	}
+}
+
+// TestE2E_Logout_IdTokenHintGET_RecoversClientIDFromAud: when the
+// caller supplies id_token_hint but not client_id, the confirm-page
+// redirect must carry the client_id recovered from the hint's aud so
+// that the eventual POST has the value handleConfirm needs to validate
+// post_logout_redirect_uri. This is the only use of the hint on the
+// GET path; revocation still waits for the confirm POST.
+func TestE2E_Logout_IdTokenHintGET_RecoversClientIDFromAud(t *testing.T) {
+	ts := newTestServer(t)
+	tr, _ := exchangeCodeForTokens(t, ts)
+
+	logoutURL := "/connect/logout?id_token_hint=" + url.QueryEscape(tr.IDToken)
+	resp, err := ts.do(t, http.MethodGet, logoutURL, nil, nil)
+	if err != nil {
+		t.Fatalf("logout GET: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "/logout") {
+		t.Fatalf("Location = %q, want /logout...", loc)
+	}
+	if !strings.Contains(loc, "client_id="+url.QueryEscape(testClientID)) {
+		t.Errorf("Location = %q, want it to carry client_id=%s recovered from id_token_hint aud", loc, testClientID)
 	}
 }
 
@@ -2522,6 +2810,135 @@ func generateKey(t *testing.T) *rsa.PrivateKey {
 	return k
 }
 
+// --- authorize: prompt + max_age interactions (T9.1) ---
+
+// buildAuthorizeURLWithExtras lets a test append arbitrary query
+// params (prompt, max_age, ...) to the standard authorize URL.
+func buildAuthorizeURLWithExtras(clientID, redirectURI, state, nonce, challenge string, extra url.Values) string {
+	v := url.Values{}
+	v.Set("client_id", clientID)
+	v.Set("redirect_uri", redirectURI)
+	v.Set("response_type", "code")
+	v.Set("scope", "openid profile email offline_access")
+	v.Set("code_challenge", challenge)
+	v.Set("code_challenge_method", "S256")
+	if state != "" {
+		v.Set("state", state)
+	}
+	if nonce != "" {
+		v.Set("nonce", nonce)
+	}
+	for k, vs := range extra {
+		for _, val := range vs {
+			v.Add(k, val)
+		}
+	}
+	return "/connect/authorize?" + v.Encode()
+}
+
+// TestAuthorize_PromptNone_MaxAgeExceeded returns login_required even
+// when the session exists. Regression for §1.2 of plan-2.md: the
+// max_age check was nested under the else branch and was skipped
+// when prompt=none.
+func TestAuthorize_PromptNone_MaxAgeExceeded(t *testing.T) {
+	ts := newTestServer(t)
+
+	authURL := buildAuthorizeURL(testClientID, testRedirectURI, testState, testNonce, testChallenge())
+	sess := loginAs(t, ts, testUser, testPassword, authURL)
+
+	// Advance the clock past max_age=5s.
+	ts.clk.Advance(10 * time.Second)
+
+	v := url.Values{}
+	v.Set("prompt", "none")
+	v.Set("max_age", "5")
+	authURL = buildAuthorizeURLWithExtras(testClientID, testRedirectURI, testState, testNonce, testChallenge(), v)
+
+	resp, err := ts.do(t, http.MethodGet, authURL, nil, []*http.Cookie{sess})
+	if err != nil {
+		t.Fatalf("GET authorize: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, testRedirectURI) {
+		t.Fatalf("Location = %q, want redirect to %s", loc, testRedirectURI)
+	}
+	q, err := url.Parse(loc)
+	if err != nil {
+		t.Fatalf("parse redirect: %v", err)
+	}
+	if q.Query().Get("error") != "login_required" {
+		t.Errorf("error = %q, want login_required", q.Query().Get("error"))
+	}
+	if !strings.Contains(q.Query().Get("error_description"), "max_age") {
+		t.Errorf("error_description = %q, want it to mention max_age", q.Query().Get("error_description"))
+	}
+}
+
+// TestAuthorize_NoPrompt_MaxAgeExceeded still bounces to /login (the
+// non-prompt=none path was already working; lock the behaviour so a
+// future refactor doesn't regress it).
+func TestAuthorize_NoPrompt_MaxAgeExceeded(t *testing.T) {
+	ts := newTestServer(t)
+
+	authURL := buildAuthorizeURL(testClientID, testRedirectURI, testState, testNonce, testChallenge())
+	sess := loginAs(t, ts, testUser, testPassword, authURL)
+
+	ts.clk.Advance(10 * time.Second)
+
+	v := url.Values{}
+	v.Set("max_age", "5")
+	authURL = buildAuthorizeURLWithExtras(testClientID, testRedirectURI, testState, testNonce, testChallenge(), v)
+
+	resp, err := ts.do(t, http.MethodGet, authURL, nil, []*http.Cookie{sess})
+	if err != nil {
+		t.Fatalf("GET authorize: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "/login?") {
+		t.Errorf("Location = %q, want /login?returnUrl=... (session was zeroed by max_age)", loc)
+	}
+}
+
+// TestAuthorize_PromptNone_MaxAgeZero forces re-authentication
+// unconditionally per OIDC §3.1.2.1. Regression for the same §1.2
+// path: max_age=0 is valid and must be enforced.
+func TestAuthorize_PromptNone_MaxAgeZero(t *testing.T) {
+	ts := newTestServer(t)
+
+	authURL := buildAuthorizeURL(testClientID, testRedirectURI, testState, testNonce, testChallenge())
+	sess := loginAs(t, ts, testUser, testPassword, authURL)
+
+	v := url.Values{}
+	v.Set("prompt", "none")
+	v.Set("max_age", "0")
+	authURL = buildAuthorizeURLWithExtras(testClientID, testRedirectURI, testState, testNonce, testChallenge(), v)
+
+	resp, err := ts.do(t, http.MethodGet, authURL, nil, []*http.Cookie{sess})
+	if err != nil {
+		t.Fatalf("GET authorize: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, testRedirectURI) {
+		t.Fatalf("Location = %q, want redirect to %s", loc, testRedirectURI)
+	}
+	q, _ := url.Parse(loc)
+	if q.Query().Get("error") != "login_required" {
+		t.Errorf("error = %q, want login_required", q.Query().Get("error"))
+	}
+}
+
 // --- admin helpers ---
 
 // buildTestAdminMount wires the admin auth + CSRF + API + SPA for
@@ -2533,7 +2950,7 @@ func buildTestAdminMount(t *testing.T, b bundle, clk *clock.FakeClock, logger *s
 	if err != nil {
 		t.Fatalf("admin.AuthMiddleware: %v", err)
 	}
-	csrfMW := admin.CSRFMiddleware([]byte("0123456789abcdef0123456789abcdef"))
+	csrfMW := admin.CSRFMiddleware([]byte("0123456789abcdef0123456789abcdef"), false)
 	apiMux := http.NewServeMux()
 	(&admin.API{
 		Clients:       b.Clients,

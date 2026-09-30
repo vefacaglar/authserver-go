@@ -20,6 +20,80 @@ import (
 
 const testAdminToken = "test-admin-token-1234567890"
 
+// --- CSRF middleware ---
+
+// §2.5 (plan-2.md) — the admin CSRF cookie must follow the same
+// Secure flag as the rest of the server. Under RequireHTTPS=true
+// the cookie carries Secure; under RequireHTTPS=false it does not,
+// so local dev and httptest work without TLS.
+//
+// gorilla/csrf names the cookie "_gorilla_csrf" by default. The
+// library refuses to set a Secure cookie over a non-TLS request
+// (r.TLS == nil), so the two branches of the parameter must be
+// exercised differently: the false branch via httptest.NewRequest
+// (no TLS), and the true branch via httptest.NewTLSServer which
+// makes r.TLS non-nil.
+const csrfCookieName = "_gorilla_csrf"
+
+func TestCSRFMiddleware_SecureFalse_OmitsSecureFlag(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	mw := CSRFMiddleware(key, false)
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "http://localhost:5175/admin/", nil)
+	h.ServeHTTP(rr, req)
+
+	var cookie *http.Cookie
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == csrfCookieName {
+			cookie = c
+			break
+		}
+	}
+	if cookie == nil {
+		t.Fatal("_gorilla_csrf cookie not set under Secure=false")
+	}
+	if cookie.Secure {
+		t.Errorf("Secure=false: cookie.Secure = true, want false")
+	}
+}
+
+func TestCSRFMiddleware_SecureTrue_SetsCookieWithSecureFlag(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	mw := CSRFMiddleware(key, true)
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	ts := httptest.NewTLSServer(h)
+	defer ts.Close()
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/admin/", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var cookie *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == csrfCookieName {
+			cookie = c
+			break
+		}
+	}
+	if cookie == nil {
+		t.Fatal("_gorilla_csrf cookie not set")
+	}
+	if !cookie.Secure {
+		t.Errorf("Secure=true over TLS: cookie.Secure = false, want true")
+	}
+}
+
 // --- Auth middleware ---
 
 func TestAuthMiddleware_RejectsAnonymous(t *testing.T) {

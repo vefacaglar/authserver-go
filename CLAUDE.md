@@ -20,4 +20,4 @@ Claude-specific pointers; everything in `AGENTS.md` applies.
 - After each task: `go build ./...` and `go vet ./...` clean, `go test ./...` where tests are added; satisfy the task's **Done when** before moving on.
 - PKCE S256-only, exact `redirect_uri` match, atomic `MarkConsumed` CAS called before token issuance, hash-only code/refresh storage, refresh rotation + reuse detection. Never log secrets/tokens/codes/PII.
 - Inject a `Clock`; never call `time.Now()` directly in protocol code.
-- Do not commit unless explicitly asked.
+- **Never commit.** LLM agents must not run `git commit`/push/amend/rebase under any circumstances, even when explicitly asked. Leave changes in the working tree for the human author.

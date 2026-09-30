@@ -270,6 +270,7 @@ func run(logger *slog.Logger) error {
 		Clock:    clk,
 		Logger:   logger,
 		Template: loginTmpl,
+		ClientIP: server.ClientIP,
 	}
 	registerHandler := &oidc.RegisterHandler{
 		Cfg: oidc.RegisterConfig{
@@ -282,6 +283,11 @@ func run(logger *slog.Logger) error {
 		Logger:   logger,
 		Template: registerTmpl,
 	}
+	// Single assertion cache shared by /connect/token and
+	// /connect/revoke so a client_assertion JWT cannot be replayed
+	// across endpoints.
+	assertionCache := token.NewMemAssertionCache(clk.Now)
+
 	authorizeHandler := &oidc.AuthorizeHandler{
 		Cfg: oidc.AuthorizeConfig{
 			IssuerURL:        cfg.Issuer,
@@ -335,14 +341,14 @@ func run(logger *slog.Logger) error {
 			Clients: bundle.Clients,
 			Issuer:  issuer,
 			Clock:   clk,
-			Cfg: grants.ClientCredentialsConfig{
-				AccessTokenLifetime: cfg.AccessTokenLifetime,
-			},
+		Cfg: grants.ClientCredentialsConfig{
+			AccessTokenLifetime: cfg.AccessTokenLifetime,
+		},
 		},
 		ClientAuth: oidc.ClientAuthConfig{
 			IssuerURL:        cfg.Issuer,
 			TokenEndpointURL: cfg.Issuer + "/connect/token",
-			AssertionCache:   token.NewMemAssertionCache(clk.Now),
+			AssertionCache:   assertionCache,
 			AssertionSkew:    cfg.ClientAssertionClockSkew,
 			Clock:            clk,
 			Logger:           logger,
@@ -355,8 +361,16 @@ func run(logger *slog.Logger) error {
 	revokeHandler := &oidc.RevokeHandler{
 		RefreshTokens: bundle.RefreshTokens,
 		Clients:       bundle.Clients,
-		Now:           clk.Now,
-		Logger:        logger,
+		ClientAuth: oidc.ClientAuthConfig{
+			IssuerURL:        cfg.Issuer,
+			TokenEndpointURL: cfg.Issuer + "/connect/token",
+			AssertionCache:   assertionCache,
+			AssertionSkew:    cfg.ClientAssertionClockSkew,
+			Clock:            clk,
+			Logger:           logger,
+		},
+		Now:    clk.Now,
+		Logger: logger,
 	}
 	logoutHandler := &oidc.LogoutHandler{
 		Cfg: oidc.LogoutConfig{
@@ -383,7 +397,7 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	csrfMW := admin.CSRFMiddleware(dpActive.CSRFKey)
+	csrfMW := admin.CSRFMiddleware(dpActive.CSRFKey, cfg.RequireHTTPS)
 	apiMux := http.NewServeMux()
 	(&admin.API{
 		Clients:       bundle.Clients,

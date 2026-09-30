@@ -1,3 +1,22 @@
+// RevokeHandler serves POST /connect/revoke (RFC 7009). The endpoint is
+// intentionally quiet: it always returns 200 OK regardless of whether
+// the token existed, was already revoked, or was foreign to this
+// client. Information-leak prevention is the dominant concern here.
+//
+// Only refresh tokens are stored locally and can be acted on. Access
+// tokens are JWTs the resource server already validated; there is
+// nothing to delete server-side. The handler still returns 200 for
+// them so the client cannot probe the server for which token type it
+// knows about.
+//
+// Client authentication (RFC 7009 §2.1): confidential clients MUST
+// authenticate. Public clients authenticate by presenting their
+// client_id. The same AuthenticateClient used by the token endpoint
+// runs here, so the same set of client auth methods (none,
+// private_key_jwt) is enforced consistently. The authenticated
+// client's identity is the source of truth; the form's client_id is
+// only used to find the registered client record before
+// authentication, never trusted on its own.
 package oidc
 
 import (
@@ -9,21 +28,16 @@ import (
 	"go-authserver/internal/token"
 )
 
-// RevokeHandler serves POST /connect/revoke (RFC 7009). The endpoint is
-// intentionally quiet: it always returns 200 OK regardless of whether
-// the token existed, was already revoked, or was foreign to this
-// client. Information-leak prevention is the dominant concern here.
-//
-// Only refresh tokens are stored locally and can be acted on. Access
-// tokens are JWTs the resource server already validated; there is
-// nothing to delete server-side. The handler still returns 200 for
-// them so the client cannot probe the server for which token type it
-// knows about.
 type RevokeHandler struct {
 	RefreshTokens store.RefreshTokenStore
 	Clients       store.ClientStore
-	Now           func() time.Time
-	Logger        *slog.Logger
+	// ClientAuth is the same configuration passed to the token
+	// endpoint's AuthenticateClient. We share the assertion cache,
+	// skew, and audience set so confidential clients authenticate
+	// identically at both endpoints.
+	ClientAuth ClientAuthConfig
+	Now        func() time.Time
+	Logger     *slog.Logger
 }
 
 // ServeHTTP processes a single revocation request.
@@ -40,17 +54,23 @@ func (h *RevokeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	raw := r.PostForm.Get("token")
-	clientID := r.PostForm.Get("client_id")
-	if raw == "" || clientID == "" {
-		writeJSONError(w, http.StatusBadRequest, ErrInvalidRequest, "token and client_id are required")
+	if raw == "" {
+		writeJSONError(w, http.StatusBadRequest, ErrInvalidRequest, "token is required")
 		return
 	}
 
-	client, err := h.Clients.FindByClientID(r.Context(), clientID)
+	// Authenticate the client. Confidential clients must present
+	// their credentials (e.g. private_key_jwt assertion); public
+	// clients identify themselves by client_id. The same opaque
+	// invalid_client error is returned on any failure so we don't
+	// leak the specific reason.
+	client, err := AuthenticateClient(r.Context(), h.ClientAuth, h.Clients, r.PostForm)
 	if err != nil {
-		// Unknown client is a usage error, not a token-state question.
-		w.Header().Set("WWW-Authenticate", `Basic realm="auth-server"`)
-		writeJSONError(w, http.StatusUnauthorized, ErrInvalidClient, "unknown client")
+		cae := asClientAuthError(err)
+		if h.Logger != nil && cae.Cause != nil {
+			h.Logger.Warn("revoke: client auth failed", "err", cae.Cause)
+		}
+		writeClientAuthError(w, cae)
 		return
 	}
 

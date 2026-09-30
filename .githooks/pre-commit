@@ -1,0 +1,25 @@
+#!/bin/sh
+# Backstop enforcing the "LLM agents must never commit" rule (see AGENTS.md).
+#
+# Any commit is blocked unless the human author explicitly opts in for THIS
+# commit by setting ALLOW_HUMAN_COMMIT=1, e.g.:
+#
+#     ALLOW_HUMAN_COMMIT=1 git commit -m "..."
+#
+# This is intentionally a per-command env var, not a stored config, so an agent
+# that ignores the documented rule still hits a hard stop here.
+
+if [ "$ALLOW_HUMAN_COMMIT" = "1" ]; then
+	exit 0
+fi
+
+cat >&2 <<'EOF'
+✋ Commit blocked by .githooks/pre-commit
+
+Per AGENTS.md, LLM agents must never commit. If you are the human author and
+intend this commit, re-run with:
+
+    ALLOW_HUMAN_COMMIT=1 git commit ...
+
+EOF
+exit 1
