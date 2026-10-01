@@ -83,3 +83,35 @@ const errorBanner = `{{ define "errorBanner" }}{{ if .Error }}
       error: {{ .ErrorLabel }}
     </div>
     {{ end }}{{ end }}`
+
+// appPage is authPage's wide sibling for signed-in pages (home, profile).
+// It shares the styles and error banner but swaps the 400px card for a
+// wider column with a top bar, since these pages show tables.
+func appPage(content string) string {
+	return appLayout + sharedStyles + errorBanner + content + `{{ template "base" . }}`
+}
+
+// appLayout is the HTML shell for signed-in pages. The page supplies
+// "heading" (the document title), "nav" (top-bar links) and "content".
+const appLayout = `{{ define "base" }}<!doctype html>
+<html lang="en" class="h-full bg-[#121212]">
+<head>
+<meta charset="utf-8">
+<title>{{ template "heading" . }}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://cdn.tailwindcss.com"></script>
+{{ template "styles" . }}
+</head>
+<body class="min-h-full bg-[#121212] text-zinc-400 font-mono antialiased">
+  <header class="border-b border-zinc-800/60">
+    <div class="mx-auto flex max-w-3xl items-center justify-between px-4 py-4 sm:px-6">
+      <span class="text-sm font-bold text-zinc-300 lowercase tracking-tight">go-authserver</span>
+      <nav class="flex items-center gap-6">{{ template "nav" . }}</nav>
+    </div>
+  </header>
+  <main class="mx-auto max-w-3xl space-y-8 px-4 py-10 sm:px-6">
+    {{ template "errorBanner" . }}
+    {{ template "content" . }}
+  </main>
+</body>
+</html>{{ end }}`

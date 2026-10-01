@@ -107,6 +107,12 @@ type LoginHandler struct {
 	// username-keyed and IP-keyed enforcement share a view of
 	// "who is this request from".
 	ClientIP func(*http.Request) string
+	// AuditLogs records successful sign-ins for the home page's recent
+	// activity list. Optional; a write failure never blocks a login.
+	AuditLogs store.AuditLogStore
+	// Resolver lets GET skip the form for users who are already signed
+	// in and did not arrive through a redirect. Optional.
+	Resolver *SessionResolver
 }
 
 func (h *LoginHandler) render(w http.ResponseWriter, r *http.Request, errorCode, returnURL string) {
@@ -142,13 +148,61 @@ func (h *LoginHandler) render(w http.ResponseWriter, r *http.Request, errorCode,
 func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		h.render(w, r, r.URL.Query().Get("error"), r.URL.Query().Get("returnUrl"))
+		q := r.URL.Query()
+		if h.alreadySignedIn(r) && q.Get("error") == "" && q.Get("returnUrl") == "" {
+			http.Redirect(w, r, homePath, http.StatusSeeOther)
+			return
+		}
+		h.render(w, r, q.Get("error"), q.Get("returnUrl"))
 	case http.MethodPost:
 		h.handlePost(w, r)
 	default:
 		w.Header().Set("Allow", "GET, POST")
 		writeJSONError(w, http.StatusMethodNotAllowed, ErrInvalidRequest, "method not allowed")
 	}
+}
+
+func (h *LoginHandler) alreadySignedIn(r *http.Request) bool {
+	if h.Resolver == nil {
+		return false
+	}
+	sess, err := h.Resolver.Resolve(r)
+	return err == nil && sess != nil
+}
+
+// recordLogin appends a login_succeeded audit entry. Failures are logged
+// and swallowed: history is informational, not part of authentication.
+func (h *LoginHandler) recordLogin(r *http.Request, userID string, now time.Time) {
+	if h.AuditLogs == nil {
+		return
+	}
+	ip := ""
+	if h.ClientIP != nil {
+		ip = h.ClientIP(r)
+	}
+	if ip == "" {
+		ip = r.RemoteAddr
+	}
+	err := h.AuditLogs.Store(r.Context(), &domain.AuditLog{
+		ID:          uuid.New(),
+		Action:      domain.AuditLoginSucceeded,
+		ActorUserID: userID,
+		TargetType:  "User",
+		TargetID:    userID,
+		Timestamp:   now,
+		IPAddress:   truncate(ip, 64),
+		UserAgent:   truncate(r.UserAgent(), 512),
+	})
+	if err != nil {
+		h.Logger.Warn("login audit write failed", "err", err)
+	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 func (h *LoginHandler) handlePost(w http.ResponseWriter, r *http.Request) {
@@ -213,16 +267,16 @@ func (h *LoginHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.recordLogin(r, info.UserID, now)
+
 	target, err := validateReturnURL(returnURL, h.Cfg.IssuerURL, h.Cfg.AuthorizePath)
 	if err != nil {
 		h.respondWithError(w, r, LoginErrInvalidReturn, "")
 		return
 	}
 	if target == "" {
-		// No returnUrl supplied (or it was empty after validation);
-		// send the user to the issuer root rather than dumping them
-		// back on the login page after a successful credential check.
-		target = strings.TrimRight(h.Cfg.IssuerURL, "/") + "/"
+		// No redirect brought the user here: land on the home page.
+		target = strings.TrimRight(h.Cfg.IssuerURL, "/") + homePath
 	}
 	http.Redirect(w, r, target, http.StatusFound)
 }
@@ -262,6 +316,9 @@ func validateReturnURL(raw, issuerURL, authorizePath string) (string, error) {
 	// Reject protocol-relative and other tricks.
 	if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") {
 		return "", errors.New("return url not a path")
+	}
+	if raw == homePath {
+		return raw, nil
 	}
 	// Pin to known paths so a login redirect can never be used to bounce
 	// the user into an unrelated internal route.

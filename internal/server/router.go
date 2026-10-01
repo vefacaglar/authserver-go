@@ -53,6 +53,9 @@ type Handlers struct {
 	Discovery http.Handler
 	JWKS      http.Handler
 	Health    http.Handler
+	// Home is the signed-in landing page served at exactly "/". The
+	// caller wraps it in the session guard.
+	Home http.Handler
 
 	// Admin is the bundle of admin API + SPA. Mounted under /admin/
 	// as a separate chi group so the middleware (auth + CSRF) only
@@ -94,6 +97,10 @@ func NewRouter(cfg RouterConfig, opts RouterOptions, h Handlers) http.Handler {
 		limiter := NewLoginRateLimiter(cfg.LoginRateLimitRPS, cfg.LoginRateBurst)
 		registerChain := limiter.Middleware(h.Register)
 		r.Handle(cfg.RegisterPath, registerChain)
+	}
+	if h.Home != nil {
+		r.Method(http.MethodGet, "/", h.Home)
+		r.Method(http.MethodHead, "/", h.Home)
 	}
 	if h.Logout != nil {
 		// Logout owns both /connect/logout and the confirm page at

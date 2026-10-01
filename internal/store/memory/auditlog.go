@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"go-authserver/internal/domain"
@@ -48,4 +49,23 @@ func (s *AuditLogStore) GetPaged(_ context.Context, req domain.PagedRequest) (do
 		Page:       req.Page,
 		PageSize:   req.PageSize,
 	}, nil
+}
+
+func (s *AuditLogStore) ListByActor(_ context.Context, actorUserID, action string, limit int) ([]domain.AuditLog, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []domain.AuditLog
+	for _, l := range s.items {
+		if l.ActorUserID == actorUserID && l.Action == action {
+			out = append(out, l)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Timestamp.After(out[j].Timestamp) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }

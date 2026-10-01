@@ -225,6 +225,15 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 	loginTmpl := template.Must(template.New("login").Parse(oidc.LoginTemplate()))
 	logoutTmpl := template.Must(template.New("logout").Parse(oidc.LogoutTemplate()))
 
+	sessionResolver := &oidc.SessionResolver{Cookies: cookieMgr, Sessions: b.Sessions, Clock: clk}
+	homeHandler := sessionResolver.RequireSession("/login", &oidc.HomeHandler{
+		Cfg:       oidc.HomeConfig{LogoutPath: "/logout"},
+		Users:     b.Users,
+		AuditLogs: b.AuditLogs,
+		Logger:    logger,
+		Template:  template.Must(template.New("home").Parse(oidc.HomeTemplate())),
+	})
+
 	loginHandler := &oidc.LoginHandler{
 		Cfg: oidc.LoginConfig{
 			IssuerURL:       testIssuer,
@@ -232,14 +241,16 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 			AuthorizePath:   "/connect/authorize",
 			SessionLifetime: time.Hour,
 		},
-		Users:    b.Users,
-		Sessions: b.Sessions,
-		Cookies:  cookieMgr,
-		Tracker:  b.Tracker,
-		Clock:    clk,
-		Logger:   logger,
-		Template: loginTmpl,
-		ClientIP: server.ClientIP,
+		Users:     b.Users,
+		Sessions:  b.Sessions,
+		Cookies:   cookieMgr,
+		Tracker:   b.Tracker,
+		Clock:     clk,
+		Logger:    logger,
+		Template:  loginTmpl,
+		ClientIP:  server.ClientIP,
+		AuditLogs: b.AuditLogs,
+		Resolver:  sessionResolver,
 	}
 	authorizeHandler := &oidc.AuthorizeHandler{
 		Cfg: oidc.AuthorizeConfig{
@@ -350,6 +361,7 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		Discovery: oidc.NewDiscoveryHandler(testIssuer, b.Scopes),
 		JWKS:      oidc.NewJWKSHandler(issuer),
 		Health:    server.NewHealth(),
+		Home:      homeHandler,
 		Admin:     buildTestAdminMount(t, b, clk, logger),
 	}
 	router := server.NewRouter(
@@ -852,12 +864,7 @@ func TestE2E_RefreshGrant_ReuseRevokesChain(t *testing.T) {
 		t.Errorf("error_description = %q, want it to mention reuse", er.ErrorDescription)
 	}
 
-	logs, _ := ts.auditLogs.GetPaged(context.Background(), domain.PagedRequest{Page: 1, PageSize: 10})
-	if logs.TotalCount < 1 {
-		t.Errorf("expected at least 1 audit log entry, got %d", logs.TotalCount)
-	} else if logs.Items[0].Action != grants.RefreshTokenReuseAudit {
-		t.Errorf("audit action = %q, want %q", logs.Items[0].Action, grants.RefreshTokenReuseAudit)
-	}
+	assertAuditAction(t, ts, grants.RefreshTokenReuseAudit)
 }
 
 func TestE2E_UserInfo_BearerGET(t *testing.T) {
@@ -2021,10 +2028,24 @@ func testE2ERefreshReuseRevokes(t *testing.T, ts *testServer) {
 	if er.Error != "invalid_grant" {
 		t.Errorf("error = %q, want invalid_grant", er.Error)
 	}
-	logs, _ := ts.auditLogs.GetPaged(context.Background(), domain.PagedRequest{Page: 1, PageSize: 10})
-	if logs.TotalCount < 1 {
-		t.Errorf("expected audit log entry, got 0")
+	assertAuditAction(t, ts, grants.RefreshTokenReuseAudit)
+}
+
+// assertAuditAction fails unless some audit entry carries the action.
+// Other flows (e.g. login_succeeded) also write entries, so the check
+// must not assume the newest or first entry is the one under test.
+func assertAuditAction(t *testing.T, ts *testServer, action string) {
+	t.Helper()
+	logs, err := ts.auditLogs.GetPaged(context.Background(), domain.PagedRequest{Page: 1, PageSize: 100})
+	if err != nil {
+		t.Fatalf("audit GetPaged: %v", err)
 	}
+	for _, l := range logs.Items {
+		if l.Action == action {
+			return
+		}
+	}
+	t.Errorf("no audit entry with action %q among %d entries", action, logs.TotalCount)
 }
 
 func testE2EUserInfo(t *testing.T, ts *testServer) {

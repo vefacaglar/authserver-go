@@ -51,3 +51,25 @@ func (s *AuditLogStore) GetPaged(ctx context.Context, req domain.PagedRequest) (
 		PageSize:   req.PageSize,
 	}, nil
 }
+
+func (s *AuditLogStore) ListByActor(ctx context.Context, actorUserID, action string, limit int) ([]domain.AuditLog, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	var ents []auditLogEntity
+	err := s.db.WithContext(ctx).
+		Where("actor_user_id = ? AND action = ?", actorUserID, action).
+		Order("timestamp DESC").Limit(limit).Find(&ents).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.AuditLog, 0, len(ents))
+	for i := range ents {
+		l, err := ents[i].toDomain()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *l)
+	}
+	return out, nil
+}

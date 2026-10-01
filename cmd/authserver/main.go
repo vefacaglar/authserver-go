@@ -255,6 +255,16 @@ func run(logger *slog.Logger) error {
 	registerTmpl := template.Must(template.New("register").Parse(oidc.RegisterTemplate()))
 	logoutTmpl := template.Must(template.New("logout").Parse(oidc.LogoutTemplate()))
 
+	sessionResolver := &oidc.SessionResolver{Cookies: cookieMgr, Sessions: bundle.Sessions, Clock: clk}
+	homeTmpl := template.Must(template.New("home").Parse(oidc.HomeTemplate()))
+	homeHandler := sessionResolver.RequireSession(cfg.LoginPath, &oidc.HomeHandler{
+		Cfg:       oidc.HomeConfig{LogoutPath: cfg.LogoutPath},
+		Users:     bundle.Users,
+		AuditLogs: bundle.AuditLogs,
+		Logger:    logger,
+		Template:  homeTmpl,
+	})
+
 	loginHandler := &oidc.LoginHandler{
 		Cfg: oidc.LoginConfig{
 			IssuerURL:       cfg.Issuer,
@@ -263,14 +273,16 @@ func run(logger *slog.Logger) error {
 			AuthorizePath:   "/connect/authorize",
 			SessionLifetime: 8 * time.Hour,
 		},
-		Users:    bundle.Users,
-		Sessions: bundle.Sessions,
-		Cookies:  cookieMgr,
-		Tracker:  bundle.Tracker,
-		Clock:    clk,
-		Logger:   logger,
-		Template: loginTmpl,
-		ClientIP: server.ClientIP,
+		Users:     bundle.Users,
+		Sessions:  bundle.Sessions,
+		Cookies:   cookieMgr,
+		Tracker:   bundle.Tracker,
+		Clock:     clk,
+		Logger:    logger,
+		Template:  loginTmpl,
+		ClientIP:  server.ClientIP,
+		AuditLogs: bundle.AuditLogs,
+		Resolver:  sessionResolver,
 	}
 	registerHandler := &oidc.RegisterHandler{
 		Cfg: oidc.RegisterConfig{
@@ -441,6 +453,7 @@ func run(logger *slog.Logger) error {
 		Discovery: oidc.NewDiscoveryHandler(cfg.Issuer, bundle.Scopes),
 		JWKS:      oidc.NewJWKSHandler(issuer),
 		Health:    server.NewHealth(),
+		Home:      homeHandler,
 		Admin:     adminMount,
 	}
 	router := server.NewRouter(
