@@ -6,6 +6,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/mail"
 	"net/url"
 	"os"
 	"strconv"
@@ -38,7 +39,32 @@ type Config struct {
 	LoginPath             string
 	LogoutPath            string
 	RegisterPath          string
+	ProfilePath           string
+	ForgotPasswordPath    string
+	ResetPasswordPath     string
 	PostLogoutRedirectURI string
+
+	// PublicURL is the origin used to build links inside emails. It
+	// defaults to Issuer; set it when the server is reachable somewhere
+	// else (for example http://localhost:5175 in development) so a reset
+	// link never points at the wrong host. It is never derived from the
+	// request, which would allow Host-header injection.
+	PublicURL string
+
+	// PasswordResetLifetime is how long a reset link stays valid.
+	PasswordResetLifetime time.Duration
+
+	// SMTP delivers password-reset email. Leave SMTPHost empty to fall back
+	// to the log mailer (development only).
+	SMTPHost     string
+	SMTPPort     string
+	SMTPUsername string
+	SMTPPassword string
+	SMTPFrom     string
+
+	// DevLogEmails makes the log mailer print full email bodies, including
+	// live reset links. Development only.
+	DevLogEmails bool
 
 	AuthCodeLifetime             time.Duration
 	AccessTokenLifetime          time.Duration
@@ -70,6 +96,16 @@ func Load() (*Config, error) {
 		LoginPath:                    getenv("AUTH_LOGIN_PATH", "/login"),
 		LogoutPath:                   getenv("AUTH_LOGOUT_PATH", "/logout"),
 		RegisterPath:                 getenv("AUTH_REGISTER_PATH", "/register"),
+		ProfilePath:                  getenv("AUTH_PROFILE_PATH", "/profile"),
+		ForgotPasswordPath:           getenv("AUTH_FORGOT_PASSWORD_PATH", "/forgot-password"),
+		ResetPasswordPath:            getenv("AUTH_RESET_PASSWORD_PATH", "/reset-password"),
+		PasswordResetLifetime:        getdur("AUTH_PASSWORD_RESET_LIFETIME", 30*time.Minute),
+		SMTPHost:                     getenv("AUTH_SMTP_HOST", ""),
+		SMTPPort:                     getenv("AUTH_SMTP_PORT", "587"),
+		SMTPUsername:                 getenv("AUTH_SMTP_USERNAME", ""),
+		SMTPPassword:                 getenv("AUTH_SMTP_PASSWORD", ""),
+		SMTPFrom:                     getenv("AUTH_SMTP_FROM", ""),
+		DevLogEmails:                 getbool("AUTH_DEV_LOG_EMAILS", false),
 		PostLogoutRedirectURI:        getenv("AUTH_POST_LOGOUT_REDIRECT_URI", "/"),
 		AuthCodeLifetime:             getdur("AUTH_AUTH_CODE_LIFETIME", 60*time.Second),
 		AccessTokenLifetime:          getdur("AUTH_ACCESS_TOKEN_LIFETIME", time.Hour),
@@ -87,6 +123,7 @@ func Load() (*Config, error) {
 	// in the data-protection key ring (data_protection_keys table),
 	// generated server-side and shared across instances.
 	c.AdminToken = getenv("AUTH_ADMIN_TOKEN", "")
+	c.PublicURL = strings.TrimRight(getenv("AUTH_PUBLIC_URL", c.Issuer), "/")
 
 	if err := c.validate(); err != nil {
 		return nil, err
@@ -129,6 +166,12 @@ func (c *Config) validate() error {
 	if c.RegisterPath == "" || !strings.HasPrefix(c.RegisterPath, "/") {
 		return errors.New("AUTH_REGISTER_PATH must be an absolute path")
 	}
+	if c.ProfilePath == "" || !strings.HasPrefix(c.ProfilePath, "/") || c.ProfilePath == "/" || strings.HasSuffix(c.ProfilePath, "/") {
+		return errors.New("AUTH_PROFILE_PATH must be an absolute path other than \"/\" and without a trailing slash")
+	}
+	if err := c.validatePasswordReset(); err != nil {
+		return err
+	}
 	if c.LoginRateLimit < 1 {
 		return errors.New("AUTH_LOGIN_RATE_LIMIT must be >= 1")
 	}
@@ -145,6 +188,39 @@ func (c *Config) validate() error {
 	}
 	if strings.TrimSpace(c.DBDSN) == "" {
 		return errors.New("AUTH_DB_DSN is required (a PostgreSQL DSN)")
+	}
+	return nil
+}
+
+func (c *Config) validatePasswordReset() error {
+	for name, p := range map[string]string{
+		"AUTH_FORGOT_PASSWORD_PATH": c.ForgotPasswordPath,
+		"AUTH_RESET_PASSWORD_PATH":  c.ResetPasswordPath,
+	} {
+		if p == "" || !strings.HasPrefix(p, "/") || p == "/" || strings.HasSuffix(p, "/") {
+			return fmt.Errorf("%s must be an absolute path other than \"/\" and without a trailing slash", name)
+		}
+	}
+	if c.ForgotPasswordPath == c.ResetPasswordPath {
+		return errors.New("AUTH_FORGOT_PASSWORD_PATH and AUTH_RESET_PASSWORD_PATH must differ")
+	}
+	if c.PasswordResetLifetime <= 0 || c.PasswordResetLifetime > 24*time.Hour {
+		return errors.New("AUTH_PASSWORD_RESET_LIFETIME must be > 0 and <= 24h")
+	}
+	pu, err := url.Parse(c.PublicURL)
+	if err != nil || !pu.IsAbs() || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" {
+		return errors.New("AUTH_PUBLIC_URL must be an absolute http(s) URL")
+	}
+	if c.RequireHTTPS && pu.Scheme != "https" {
+		return errors.New("AUTH_PUBLIC_URL must use https when AUTH_REQUIRE_HTTPS=true")
+	}
+	if c.SMTPHost != "" {
+		if _, err := mail.ParseAddress(c.SMTPFrom); err != nil {
+			return errors.New("AUTH_SMTP_FROM must be a valid email address when AUTH_SMTP_HOST is set")
+		}
+		if p, err := strconv.Atoi(c.SMTPPort); err != nil || p < 1 || p > 65535 {
+			return errors.New("AUTH_SMTP_PORT must be a port number")
+		}
 	}
 	return nil
 }

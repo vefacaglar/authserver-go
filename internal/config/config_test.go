@@ -146,3 +146,78 @@ func TestLoad_AdminAnonymousAccepted(t *testing.T) {
 		t.Fatalf("Load with anonymous admin: %v", err)
 	}
 }
+
+func TestLoad_ProfilePath(t *testing.T) {
+	base := func(extra map[string]string) {
+		m := map[string]string{
+			"AUTH_ISSUER":           "https://auth.example.com",
+			"AUTH_COOKIE_HASH_KEY":  b64(make([]byte, 32)),
+			"AUTH_COOKIE_BLOCK_KEY": b64(make([]byte, 32)),
+			"AUTH_CSRF_KEY":         b64(make([]byte, 32)),
+		}
+		for k, v := range extra {
+			m[k] = v
+		}
+		env(t, m)
+	}
+
+	base(nil)
+	cfg, err := Load()
+	if err != nil || cfg.ProfilePath != "/profile" {
+		t.Fatalf("default: ProfilePath=%v err=%v, want /profile", cfg, err)
+	}
+
+	for _, bad := range []string{"profile", "/", "/me/"} {
+		base(map[string]string{"AUTH_PROFILE_PATH": bad})
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "AUTH_PROFILE_PATH") {
+			t.Errorf("AUTH_PROFILE_PATH=%q: Load = %v, want profile path error", bad, err)
+		}
+	}
+}
+
+func TestLoad_PasswordResetConfig(t *testing.T) {
+	load := func(extra map[string]string) (*Config, error) {
+		m := map[string]string{
+			"AUTH_ISSUER":           "https://auth.example.com",
+			"AUTH_COOKIE_HASH_KEY":  b64(make([]byte, 32)),
+			"AUTH_COOKIE_BLOCK_KEY": b64(make([]byte, 32)),
+			"AUTH_CSRF_KEY":         b64(make([]byte, 32)),
+		}
+		for k, v := range extra {
+			m[k] = v
+		}
+		env(t, m)
+		return Load()
+	}
+
+	cfg, err := load(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ForgotPasswordPath != "/forgot-password" || cfg.ResetPasswordPath != "/reset-password" ||
+		cfg.PasswordResetLifetime != 30*time.Minute || cfg.PublicURL != "https://auth.example.com" || cfg.SMTPHost != "" {
+		t.Errorf("unexpected defaults: %+v", cfg)
+	}
+
+	cfg, err = load(map[string]string{"AUTH_PUBLIC_URL": "https://app.example.com/", "AUTH_SMTP_HOST": "smtp.example.com", "AUTH_SMTP_FROM": "Auth <no-reply@example.com>"})
+	if err != nil || cfg.PublicURL != "https://app.example.com" {
+		t.Fatalf("explicit values: PublicURL=%q err=%v (trailing slash must be trimmed)", cfg.PublicURL, err)
+	}
+
+	for name, extra := range map[string]map[string]string{
+		"forgot path":       {"AUTH_FORGOT_PASSWORD_PATH": "forgot"},
+		"reset path":        {"AUTH_RESET_PASSWORD_PATH": "/reset/"},
+		"same paths":        {"AUTH_FORGOT_PASSWORD_PATH": "/x", "AUTH_RESET_PASSWORD_PATH": "/x"},
+		"zero lifetime":     {"AUTH_PASSWORD_RESET_LIFETIME": "0s"},
+		"too long lifetime": {"AUTH_PASSWORD_RESET_LIFETIME": "25h"},
+		"relative public":   {"AUTH_PUBLIC_URL": "/just/a/path"},
+		"http public":       {"AUTH_PUBLIC_URL": "http://app.example.com"},
+		"smtp without from": {"AUTH_SMTP_HOST": "smtp.example.com"},
+		"smtp bad from":     {"AUTH_SMTP_HOST": "smtp.example.com", "AUTH_SMTP_FROM": "nope"},
+		"smtp bad port":     {"AUTH_SMTP_HOST": "smtp.example.com", "AUTH_SMTP_FROM": "a@example.com", "AUTH_SMTP_PORT": "99999"},
+	} {
+		if _, err := load(extra); err == nil {
+			t.Errorf("%s: Load accepted an invalid configuration", name)
+		}
+	}
+}

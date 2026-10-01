@@ -68,15 +68,16 @@ type storeBuilder struct {
 // All fields are interface types so the test server is identical no
 // matter which builder produced it.
 type bundle struct {
-	Clients       store.ClientStore
-	AuthCodes     store.AuthorizationCodeStore
-	RefreshTokens store.RefreshTokenStore
-	Sessions      store.SessionStore
-	SigningKeys   store.SigningKeyStore
-	Scopes        store.ScopeStore
-	AuditLogs     store.AuditLogStore
-	Users         store.UserStore
-	Tracker       store.LoginAttemptTracker
+	Clients        store.ClientStore
+	AuthCodes      store.AuthorizationCodeStore
+	RefreshTokens  store.RefreshTokenStore
+	Sessions       store.SessionStore
+	SigningKeys    store.SigningKeyStore
+	Scopes         store.ScopeStore
+	AuditLogs      store.AuditLogStore
+	Users          store.UserStore
+	Tracker        store.LoginAttemptTracker
+	PasswordResets store.PasswordResetStore
 }
 
 // memoryBuilder returns a fully in-memory store bundle. The closer is
@@ -85,15 +86,16 @@ func memoryBuilder() storeBuilder {
 	return storeBuilder{
 		Build: func(t *testing.T) (bundle, func()) {
 			return bundle{
-				Clients:       memory.NewClientStore(),
-				AuthCodes:     memory.NewAuthorizationCodeStore(),
-				RefreshTokens: memory.NewRefreshTokenStore(),
-				Sessions:      memory.NewSessionStore(),
-				SigningKeys:   memory.NewSigningKeyStore(),
-				Scopes:        memory.NewScopeStore(),
-				AuditLogs:     memory.NewAuditLogStore(),
-				Users:         memory.NewUserStore(),
-				Tracker:       memory.NewLoginAttemptTracker(time.Now),
+				Clients:        memory.NewClientStore(),
+				AuthCodes:      memory.NewAuthorizationCodeStore(),
+				RefreshTokens:  memory.NewRefreshTokenStore(),
+				Sessions:       memory.NewSessionStore(),
+				SigningKeys:    memory.NewSigningKeyStore(),
+				Scopes:         memory.NewScopeStore(),
+				AuditLogs:      memory.NewAuditLogStore(),
+				Users:          memory.NewUserStore(),
+				Tracker:        memory.NewLoginAttemptTracker(time.Now),
+				PasswordResets: memory.NewPasswordResetStore(),
 			}, func() {}
 		},
 	}
@@ -122,15 +124,16 @@ func gormBuilder() storeBuilder {
 				_ = sqlDB.Close()
 			}
 			return bundle{
-				Clients:       gormstore.NewClientStore(db),
-				AuthCodes:     gormstore.NewAuthorizationCodeStore(db),
-				RefreshTokens: gormstore.NewRefreshTokenStore(db),
-				Sessions:      gormstore.NewSessionStore(db),
-				SigningKeys:   gormstore.NewSigningKeyStore(db),
-				Scopes:        gormstore.NewScopeStore(db),
-				AuditLogs:     gormstore.NewAuditLogStore(db),
-				Users:         gormstore.NewUserStore(db),
-				Tracker:       memory.NewLoginAttemptTracker(time.Now),
+				Clients:        gormstore.NewClientStore(db),
+				AuthCodes:      gormstore.NewAuthorizationCodeStore(db),
+				RefreshTokens:  gormstore.NewRefreshTokenStore(db),
+				Sessions:       gormstore.NewSessionStore(db),
+				SigningKeys:    gormstore.NewSigningKeyStore(db),
+				Scopes:         gormstore.NewScopeStore(db),
+				AuditLogs:      gormstore.NewAuditLogStore(db),
+				Users:          gormstore.NewUserStore(db),
+				Tracker:        memory.NewLoginAttemptTracker(time.Now),
+				PasswordResets: gormstore.NewPasswordResetStore(db),
 			}, closer
 		},
 	}
@@ -144,6 +147,10 @@ type testServer struct {
 	clients       store.ClientStore
 	refreshTokens store.RefreshTokenStore
 	auditLogs     store.AuditLogStore
+	users         store.UserStore
+	sessions      store.SessionStore
+	resets        store.PasswordResetStore
+	mail          *captureMailer
 	issuer        *token.Issuer
 	client        *http.Client
 }
@@ -227,19 +234,71 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 
 	sessionResolver := &oidc.SessionResolver{Cookies: cookieMgr, Sessions: b.Sessions, Clock: clk}
 	homeHandler := sessionResolver.RequireSession("/login", &oidc.HomeHandler{
-		Cfg:       oidc.HomeConfig{LogoutPath: "/logout"},
+		Cfg:       oidc.HomeConfig{ProfilePath: "/profile", LogoutPath: "/logout"},
 		Users:     b.Users,
 		AuditLogs: b.AuditLogs,
 		Logger:    logger,
 		Template:  template.Must(template.New("home").Parse(oidc.HomeTemplate())),
 	})
 
+	profileHandler := sessionResolver.RequireSession("/login", &oidc.ProfileHandler{
+		Cfg:           oidc.ProfileConfig{ProfilePath: "/profile", LogoutPath: "/logout"},
+		Users:         b.Users,
+		Sessions:      b.Sessions,
+		RefreshTokens: b.RefreshTokens,
+		AuditLogs:     b.AuditLogs,
+		Tracker:       b.Tracker,
+		Clock:         clk,
+		Logger:        logger,
+		Template:      template.Must(template.New("profile").Parse(oidc.ProfileTemplate())),
+		ClientIP:      server.ClientIP,
+	})
+
+	mailer := &captureMailer{}
+	forgotHandler := &oidc.ForgotPasswordHandler{
+		Cfg: oidc.ForgotPasswordConfig{
+			ForgotPath:    "/forgot-password",
+			ResetPath:     "/reset-password",
+			LoginPath:     "/login",
+			PublicURL:     "https://app.example.test",
+			TokenLifetime: 30 * time.Minute,
+		},
+		Users:     b.Users,
+		Resets:    b.PasswordResets,
+		Mailer:    mailer,
+		Tracker:   b.Tracker,
+		AuditLogs: b.AuditLogs,
+		Clock:     clk,
+		Logger:    logger,
+		Template:  template.Must(template.New("forgot").Parse(oidc.ForgotPasswordTemplate())),
+		ClientIP:  server.ClientIP,
+		Spawn:     func(f func()) { f() },
+	}
+	resetHandler := &oidc.ResetPasswordHandler{
+		Cfg: oidc.ResetPasswordConfig{
+			ResetPath:  "/reset-password",
+			ForgotPath: "/forgot-password",
+			LoginPath:  "/login",
+		},
+		Users:         b.Users,
+		Resets:        b.PasswordResets,
+		Sessions:      b.Sessions,
+		RefreshTokens: b.RefreshTokens,
+		AuditLogs:     b.AuditLogs,
+		Clock:         clk,
+		Logger:        logger,
+		Template:      template.Must(template.New("reset").Parse(oidc.ResetPasswordTemplate())),
+		ClientIP:      server.ClientIP,
+	}
+
 	loginHandler := &oidc.LoginHandler{
 		Cfg: oidc.LoginConfig{
-			IssuerURL:       testIssuer,
-			LoginPath:       "/login",
-			AuthorizePath:   "/connect/authorize",
-			SessionLifetime: time.Hour,
+			IssuerURL:          testIssuer,
+			LoginPath:          "/login",
+			ProfilePath:        "/profile",
+			ForgotPasswordPath: "/forgot-password",
+			AuthorizePath:      "/connect/authorize",
+			SessionLifetime:    time.Hour,
 		},
 		Users:     b.Users,
 		Sessions:  b.Sessions,
@@ -358,27 +417,33 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 			Now:    clk.Now,
 			Logger: logger,
 		},
-		Discovery: oidc.NewDiscoveryHandler(testIssuer, b.Scopes),
-		JWKS:      oidc.NewJWKSHandler(issuer),
-		Health:    server.NewHealth(),
-		Home:      homeHandler,
-		Admin:     buildTestAdminMount(t, b, clk, logger),
+		Discovery:      oidc.NewDiscoveryHandler(testIssuer, b.Scopes),
+		JWKS:           oidc.NewJWKSHandler(issuer),
+		Health:         server.NewHealth(),
+		Home:           homeHandler,
+		Profile:        profileHandler,
+		ForgotPassword: forgotHandler,
+		ResetPassword:  resetHandler,
+		Admin:          buildTestAdminMount(t, b, clk, logger),
 	}
 	router := server.NewRouter(
 		server.RouterConfig{
-			IssuerURL:         testIssuer,
-			RequireHTTPS:      false,
-			LoginPath:         "/login",
-			LogoutPath:        "/logout",
-			AuthorizePath:     "/connect/authorize",
-			TokenPath:         "/connect/token",
-			UserInfoPath:      "/connect/userinfo",
-			RevokePath:        "/connect/revoke",
-			JWKSPath:          "/.well-known/jwks.json",
-			DiscoveryPath:     "/.well-known/openid-configuration",
-			HealthPath:        "/healthz",
-			LoginRateLimitRPS: testServerRateLimitRPS(t),
-			LoginRateBurst:    testServerRateLimitBurst(t),
+			IssuerURL:          testIssuer,
+			RequireHTTPS:       false,
+			LoginPath:          "/login",
+			LogoutPath:         "/logout",
+			ProfilePath:        "/profile",
+			ForgotPasswordPath: "/forgot-password",
+			ResetPasswordPath:  "/reset-password",
+			AuthorizePath:      "/connect/authorize",
+			TokenPath:          "/connect/token",
+			UserInfoPath:       "/connect/userinfo",
+			RevokePath:         "/connect/revoke",
+			JWKSPath:           "/.well-known/jwks.json",
+			DiscoveryPath:      "/.well-known/openid-configuration",
+			HealthPath:         "/healthz",
+			LoginRateLimitRPS:  testServerRateLimitRPS(t),
+			LoginRateBurst:     testServerRateLimitBurst(t),
 		},
 		server.RouterOptions{Logger: logger},
 		handlers,
@@ -399,6 +464,10 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		clients:       b.Clients,
 		refreshTokens: b.RefreshTokens,
 		auditLogs:     b.AuditLogs,
+		users:         b.Users,
+		sessions:      b.Sessions,
+		resets:        b.PasswordResets,
+		mail:          mailer,
 		issuer:        issuer,
 		client:        client,
 	}

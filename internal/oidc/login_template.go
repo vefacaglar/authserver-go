@@ -10,6 +10,11 @@ func LoginTemplate() string { return authPage(loginContent) }
 // the form. The CSRF token and returnUrl are rendered as hidden inputs.
 const loginContent = `{{ define "heading" }}sign in{{ end }}
 {{ define "content" }}
+    {{ if .Notice }}
+    <div class="rounded-none bg-emerald-950/20 px-4 py-3 mb-6 border-l-2 border-emerald-500 text-emerald-400 font-mono text-xs lowercase">
+      {{ .Notice }}
+    </div>
+    {{ end }}
     <form class="space-y-6" method="post" action="{{ .Action }}" onsubmit="var btn = this.querySelector('button'); btn.innerText = 'logging in...'; btn.style.pointerEvents = 'none'; btn.style.opacity = '0.75';">
       <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
       <input type="hidden" name="returnUrl" value="{{ .ReturnURL }}">
@@ -22,6 +27,7 @@ const loginContent = `{{ define "heading" }}sign in{{ end }}
       <div>
         <label for="password" class="auth-label">password</label>
         <input id="password" name="password" type="password" autocomplete="current-password" required class="auth-input">
+        {{ if .ForgotPath }}<a href="{{ .ForgotPath }}" class="auth-link mt-2 inline-block">forgot password?</a>{{ end }}
       </div>
 
       <div>

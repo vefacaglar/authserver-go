@@ -200,6 +200,8 @@ type LoginAttemptTracker interface { // brute-force lockout extension point
 }
 ```
 
+`PasswordResetStore` (`Create`, `FindByHash`, `Consume`, `InvalidateForUser`, `DeleteExpired`) follows the same rules: only token hashes are stored, and `Consume` is one conditional write (`WHERE id = ? AND consumed_at IS NULL AND expires_at > now`).
+
 ### Atomicity requirements (security-critical)
 `MarkConsumed` for both auth codes and refresh tokens **must** be a single conditional write — `UPDATE ... SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL`, returning true only when one row changed. In GORM use `db.Model(&X{}).Where("id = ? AND consumed_at IS NULL", id).Update("consumed_at", t)` and check `RowsAffected == 1`. In the memory store, guard with a per-entity mutex. This is what makes auth-code single-use and refresh-token reuse detection race-safe — do not implement it as read-then-write.
 
@@ -245,6 +247,15 @@ POST form: `token`, optional `token_type_hint`. Authenticate the client. Find re
 ### `GET+POST /login`
 - **GET**: render `login.html` with a CSRF token, surfacing an `?error=` code if present (`invalid_credentials`, `missing_credentials`, `account_locked`, `antiforgery_failed`), and carrying `returnUrl`.
 - **POST**: validate CSRF; check `LoginAttemptTracker.IsLockedOut`; `UserStore.ValidateCredentials` (constant-time / bcrypt). On success: create a `Session`, set the encrypted session cookie, `Reset` the attempt tracker, 302 to a **validated** `returnUrl` (must be a local/relative path or a known authorize URL — reject open redirects). On failure: `RecordFailure`, 302 back to `/login?error=...&returnUrl=...`.
+
+### Account pages (M9)
+Server-rendered browser pages. Everything except forgot/reset sits behind `SessionResolver.RequireSession` (anonymous → `/login?returnUrl=…`, `returnUrl` allow-list matches `/` and the profile path exactly). All POSTs use the double-submit `CSRFGuard` (cookie scoped to the page's path).
+- **`GET /`** (home): account summary + the last 10 `login_succeeded` and `login_failed` audit entries (time, device, IP). Login without a `returnUrl` lands here via a *relative* redirect. Failed attempts are recorded only for existing accounts and never store the typed identifier.
+- **`GET+POST /profile`**: edit the display name (`name` claim; remove-then-add), list active sessions; `POST /profile/sessions/revoke` (owner-only, 404 otherwise; the current session is sent to logout) and `POST /profile/sessions/revoke-others`.
+- **`POST /profile/password`**: current password verified (own lockout bucket `pwchange:<user>|<ip>`, per-IP rate limit), `ValidatePassword` (8–72 bytes, no edge whitespace), new ≠ current; then `SetPassword`, rotate `SecurityStamp`, revoke every other session and its refresh tokens, audit `password_changed`.
+- **`GET+POST /forgot-password`**: always answers identically (no account enumeration). For an account with an email: per-account throttle (lockout tracker key `pwreset:<user>`, 5 per window), invalidate older tokens, store only the SHA-256 of a 256-bit token (`PasswordResetStore`, default 30 min), email the link (`AUTH_PUBLIC_URL` + reset path) in the background. Registration never confirms emails, so `EmailConfirmed` is intentionally not required.
+- **`GET+POST /reset-password?token=`**: invalid/used/expired/unknown tokens all show one generic page. POST validates the new password *first* (a typo must not burn the link), then `PasswordResetStore.Consume` (atomic CAS, must win **before** `SetPassword`), rotates `SecurityStamp`, invalidates the user's other tokens, revokes **all** sessions + refresh tokens, audits `password_reset_completed`, and redirects to `/login?notice=password_reset`. Responses carry `Referrer-Policy: no-referrer` and `no-store`.
+- **Mail** (`internal/mail`): `Mailer` interface; `SMTPMailer` (`net/smtp`, STARTTLS or implicit TLS on 465, credentials only over TLS, header-injection checks) when `AUTH_SMTP_HOST` is set, otherwise `LogMailer` (delivers nothing; `AUTH_DEV_LOG_EMAILS=true` prints bodies, dev only).
 
 ### `GET+POST /connect/logout` (RP-initiated)
 - **GET**: if a cryptographically valid `id_token_hint` is present, proceed; otherwise 302 to `LogoutPath` (logout confirmation page), forwarding `post_logout_redirect_uri`/`state`/`client_id`.
@@ -300,6 +311,14 @@ AUTH_COOKIE_HASH_KEY              (base64, securecookie HMAC key)
 AUTH_COOKIE_BLOCK_KEY             (base64, securecookie AES key)
 AUTH_LOGIN_PATH                   (default /login)
 AUTH_LOGOUT_PATH                  (default /logout)
+AUTH_PROFILE_PATH                 (default /profile)
+AUTH_FORGOT_PASSWORD_PATH         (default /forgot-password)
+AUTH_RESET_PASSWORD_PATH          (default /reset-password)
+AUTH_PUBLIC_URL                   (origin for links in emails; default AUTH_ISSUER)
+AUTH_PASSWORD_RESET_LIFETIME      (default 30m, max 24h)
+AUTH_SMTP_HOST / _PORT / _USERNAME / _PASSWORD / _FROM
+                                  (empty host = log mailer, nothing delivered)
+AUTH_DEV_LOG_EMAILS               (default false; DEV ONLY: log email bodies)
 AUTH_POST_LOGOUT_REDIRECT_URI     (default /)
 AUTH_AUTH_CODE_LIFETIME           (default 60s)
 AUTH_ACCESS_TOKEN_LIFETIME        (default 1h)

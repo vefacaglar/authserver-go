@@ -18,7 +18,8 @@ const recentLoginsLimit = 10
 
 // HomeConfig bundles the paths the home page links to.
 type HomeConfig struct {
-	LogoutPath string
+	ProfilePath string
+	LogoutPath  string
 }
 
 // HomeHandler renders the signed-in landing page: who you are and your
@@ -39,13 +40,17 @@ type homeLogin struct {
 }
 
 type homeData struct {
-	Username   string
-	Name       string
-	Email      string
-	LogoutPath string
-	Logins     []homeLogin
-	Error      string
-	ErrorLabel string
+	Nav          appNav
+	ProfilePath  string
+	Username     string
+	Name         string
+	Email        string
+	Logins       []homeLogin
+	FailedLogins []homeLogin
+	Status       string
+	StatusLabel  string
+	Error        string
+	ErrorLabel   string
 }
 
 func (h *HomeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +72,12 @@ func (h *HomeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	data := homeData{Username: user.Username, Email: user.Email, LogoutPath: h.Cfg.LogoutPath}
+	data := homeData{
+		Nav:         appNav{HomePath: homePath, ProfilePath: h.Cfg.ProfilePath, LogoutPath: h.Cfg.LogoutPath, Active: "home"},
+		ProfilePath: h.Cfg.ProfilePath,
+		Username:    user.Username,
+		Email:       user.Email,
+	}
 
 	claims, err := h.Users.GetUserClaims(ctx, sess.UserID)
 	if err != nil {
@@ -80,26 +90,37 @@ func (h *HomeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.AuditLogs != nil {
-		logs, err := h.AuditLogs.ListByActor(ctx, sess.UserID, domain.AuditLoginSucceeded, recentLoginsLimit)
-		if err != nil {
-			h.Logger.Warn("home: login history lookup failed", "err", err)
-		}
-		for i, l := range logs {
-			data.Logins = append(data.Logins, homeLogin{
-				When:    l.Timestamp.UTC().Format("2006-01-02 15:04 UTC"),
-				IP:      l.IPAddress,
-				Device:  describeUserAgent(l.UserAgent),
-				Current: i == 0,
-			})
-		}
-	}
+	data.Logins = h.history(r, sess.UserID, domain.AuditLoginSucceeded, true)
+	data.FailedLogins = h.history(r, sess.UserID, domain.AuditLoginFailed, false)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	if err := h.Template.Execute(w, data); err != nil {
 		h.Logger.Error("home render failed", "err", err)
 	}
+}
+
+// history loads the user's recent entries for one audit action. markFirst
+// flags the newest entry as the current sign-in.
+func (h *HomeHandler) history(r *http.Request, userID, action string, markFirst bool) []homeLogin {
+	if h.AuditLogs == nil {
+		return nil
+	}
+	logs, err := h.AuditLogs.ListByActor(r.Context(), userID, action, recentLoginsLimit)
+	if err != nil {
+		h.Logger.Warn("home: history lookup failed", "action", action, "err", err)
+		return nil
+	}
+	out := make([]homeLogin, 0, len(logs))
+	for i, l := range logs {
+		out = append(out, homeLogin{
+			When:    l.Timestamp.UTC().Format("2006-01-02 15:04 UTC"),
+			IP:      l.IPAddress,
+			Device:  describeUserAgent(l.UserAgent),
+			Current: markFirst && i == 0,
+		})
+	}
+	return out
 }
 
 // describeUserAgent reduces a User-Agent string to "Browser on OS". It is

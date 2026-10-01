@@ -197,8 +197,9 @@ func TestLogin_POST_RejectsOpenRedirect(t *testing.T) {
 // §1.3 of plan-2.md. A successful login with no returnUrl used to
 // land the user back on /login with an error=invalid_return banner,
 // because validateReturnURL returns ("", nil) for empty input.
-// The handler must now redirect to the issuer root.
-func TestLogin_POST_EmptyReturnUrl_RedirectsToIssuerRoot(t *testing.T) {
+// The handler must now redirect to the home page ("/"), as a relative
+// path so the user stays on the host that served the login form.
+func TestLogin_POST_EmptyReturnUrl_RedirectsToHome(t *testing.T) {
 	h, _, _ := newTestLoginHandler(t)
 	getRR := httptest.NewRecorder()
 	h.ServeHTTP(getRR, httptest.NewRequest(http.MethodGet, "/login", nil))
@@ -216,7 +217,7 @@ func TestLogin_POST_EmptyReturnUrl_RedirectsToIssuerRoot(t *testing.T) {
 		t.Fatalf("status = %d, want 302", postRR.Code)
 	}
 	loc := postRR.Header().Get("Location")
-	want := "https://auth.example.com/"
+	want := "/"
 	if loc != want {
 		t.Errorf("Location = %q, want %q", loc, want)
 	}

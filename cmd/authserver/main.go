@@ -20,6 +20,7 @@ import (
 	"go-authserver/internal/clock"
 	"go-authserver/internal/config"
 	"go-authserver/internal/domain"
+	"go-authserver/internal/mail"
 	"go-authserver/internal/oidc"
 	"go-authserver/internal/oidc/grants"
 	"go-authserver/internal/server"
@@ -193,6 +194,7 @@ type storeBundle struct {
 	Users          store.UserStore
 	Roles          store.RoleStore
 	Tracker        store.LoginAttemptTracker
+	PasswordResets store.PasswordResetStore
 }
 
 func run(logger *slog.Logger) error {
@@ -258,20 +260,80 @@ func run(logger *slog.Logger) error {
 	sessionResolver := &oidc.SessionResolver{Cookies: cookieMgr, Sessions: bundle.Sessions, Clock: clk}
 	homeTmpl := template.Must(template.New("home").Parse(oidc.HomeTemplate()))
 	homeHandler := sessionResolver.RequireSession(cfg.LoginPath, &oidc.HomeHandler{
-		Cfg:       oidc.HomeConfig{LogoutPath: cfg.LogoutPath},
+		Cfg:       oidc.HomeConfig{ProfilePath: cfg.ProfilePath, LogoutPath: cfg.LogoutPath},
 		Users:     bundle.Users,
 		AuditLogs: bundle.AuditLogs,
 		Logger:    logger,
 		Template:  homeTmpl,
 	})
 
+	profileHandler := sessionResolver.RequireSession(cfg.LoginPath, &oidc.ProfileHandler{
+		Cfg: oidc.ProfileConfig{
+			ProfilePath:  cfg.ProfilePath,
+			LogoutPath:   cfg.LogoutPath,
+			RequireHTTPS: cfg.RequireHTTPS,
+		},
+		Users:         bundle.Users,
+		Sessions:      bundle.Sessions,
+		RefreshTokens: bundle.RefreshTokens,
+		AuditLogs:     bundle.AuditLogs,
+		Tracker:       bundle.Tracker,
+		Clock:         clk,
+		Logger:        logger,
+		Template:      template.Must(template.New("profile").Parse(oidc.ProfileTemplate())),
+		ClientIP:      server.ClientIP,
+	})
+
+	mailer, err := buildMailer(cfg, clk, logger)
+	if err != nil {
+		return err
+	}
+	forgotHandler := &oidc.ForgotPasswordHandler{
+		Cfg: oidc.ForgotPasswordConfig{
+			ForgotPath:    cfg.ForgotPasswordPath,
+			ResetPath:     cfg.ResetPasswordPath,
+			LoginPath:     cfg.LoginPath,
+			PublicURL:     cfg.PublicURL,
+			TokenLifetime: cfg.PasswordResetLifetime,
+			RequireHTTPS:  cfg.RequireHTTPS,
+		},
+		Users:     bundle.Users,
+		Resets:    bundle.PasswordResets,
+		Mailer:    mailer,
+		Tracker:   bundle.Tracker,
+		AuditLogs: bundle.AuditLogs,
+		Clock:     clk,
+		Logger:    logger,
+		Template:  template.Must(template.New("forgot").Parse(oidc.ForgotPasswordTemplate())),
+		ClientIP:  server.ClientIP,
+	}
+	resetHandler := &oidc.ResetPasswordHandler{
+		Cfg: oidc.ResetPasswordConfig{
+			ResetPath:    cfg.ResetPasswordPath,
+			ForgotPath:   cfg.ForgotPasswordPath,
+			LoginPath:    cfg.LoginPath,
+			RequireHTTPS: cfg.RequireHTTPS,
+		},
+		Users:         bundle.Users,
+		Resets:        bundle.PasswordResets,
+		Sessions:      bundle.Sessions,
+		RefreshTokens: bundle.RefreshTokens,
+		AuditLogs:     bundle.AuditLogs,
+		Clock:         clk,
+		Logger:        logger,
+		Template:      template.Must(template.New("reset").Parse(oidc.ResetPasswordTemplate())),
+		ClientIP:      server.ClientIP,
+	}
+
 	loginHandler := &oidc.LoginHandler{
 		Cfg: oidc.LoginConfig{
-			IssuerURL:       cfg.Issuer,
-			LoginPath:       cfg.LoginPath,
-			RegisterPath:    cfg.RegisterPath,
-			AuthorizePath:   "/connect/authorize",
-			SessionLifetime: 8 * time.Hour,
+			IssuerURL:          cfg.Issuer,
+			LoginPath:          cfg.LoginPath,
+			RegisterPath:       cfg.RegisterPath,
+			ProfilePath:        cfg.ProfilePath,
+			ForgotPasswordPath: cfg.ForgotPasswordPath,
+			AuthorizePath:      "/connect/authorize",
+			SessionLifetime:    8 * time.Hour,
 		},
 		Users:     bundle.Users,
 		Sessions:  bundle.Sessions,
@@ -443,35 +505,41 @@ func run(logger *slog.Logger) error {
 	cancel()
 
 	handlers := server.Handlers{
-		Login:     loginHandler,
-		Register:  registerHandler,
-		Logout:    logoutHandler,
-		Authorize: authorizeHandler,
-		Token:     tokenHandler,
-		UserInfo:  userInfoHandler,
-		Revoke:    revokeHandler,
-		Discovery: oidc.NewDiscoveryHandler(cfg.Issuer, bundle.Scopes),
-		JWKS:      oidc.NewJWKSHandler(issuer),
-		Health:    server.NewHealth(),
-		Home:      homeHandler,
-		Admin:     adminMount,
+		Login:          loginHandler,
+		Register:       registerHandler,
+		Logout:         logoutHandler,
+		Authorize:      authorizeHandler,
+		Token:          tokenHandler,
+		UserInfo:       userInfoHandler,
+		Revoke:         revokeHandler,
+		Discovery:      oidc.NewDiscoveryHandler(cfg.Issuer, bundle.Scopes),
+		JWKS:           oidc.NewJWKSHandler(issuer),
+		Health:         server.NewHealth(),
+		Home:           homeHandler,
+		Profile:        profileHandler,
+		ForgotPassword: forgotHandler,
+		ResetPassword:  resetHandler,
+		Admin:          adminMount,
 	}
 	router := server.NewRouter(
 		server.RouterConfig{
-			IssuerURL:         cfg.Issuer,
-			RequireHTTPS:      cfg.RequireHTTPS,
-			LoginPath:         cfg.LoginPath,
-			RegisterPath:      cfg.RegisterPath,
-			LogoutPath:        cfg.LogoutPath,
-			AuthorizePath:     "/connect/authorize",
-			TokenPath:         "/connect/token",
-			UserInfoPath:      "/connect/userinfo",
-			RevokePath:        "/connect/revoke",
-			JWKSPath:          "/.well-known/jwks.json",
-			DiscoveryPath:     "/.well-known/openid-configuration",
-			HealthPath:        "/healthz",
-			LoginRateLimitRPS: cfg.LoginRateLimit,
-			LoginRateBurst:    cfg.LoginRateLimit, // burst == rps for the default config
+			IssuerURL:          cfg.Issuer,
+			RequireHTTPS:       cfg.RequireHTTPS,
+			LoginPath:          cfg.LoginPath,
+			RegisterPath:       cfg.RegisterPath,
+			LogoutPath:         cfg.LogoutPath,
+			ProfilePath:        cfg.ProfilePath,
+			ForgotPasswordPath: cfg.ForgotPasswordPath,
+			ResetPasswordPath:  cfg.ResetPasswordPath,
+			AuthorizePath:      "/connect/authorize",
+			TokenPath:          "/connect/token",
+			UserInfoPath:       "/connect/userinfo",
+			RevokePath:         "/connect/revoke",
+			JWKSPath:           "/.well-known/jwks.json",
+			DiscoveryPath:      "/.well-known/openid-configuration",
+			HealthPath:         "/healthz",
+			LoginRateLimitRPS:  cfg.LoginRateLimit,
+			LoginRateBurst:     cfg.LoginRateLimit, // burst == rps for the default config
 		},
 		server.RouterOptions{Logger: logger},
 		handlers,
@@ -556,7 +624,8 @@ func newGormBundle(db *gorm.DB, now func() time.Time) *storeBundle {
 		Roles:          gormstore.NewRoleStore(db),
 		// Persistent, cross-instance lockout tracker so brute-force limits
 		// hold globally behind a load balancer.
-		Tracker: gormstore.NewLoginAttemptTracker(db, now),
+		Tracker:        gormstore.NewLoginAttemptTracker(db, now),
+		PasswordResets: gormstore.NewPasswordResetStore(db),
 	}
 }
 
@@ -667,4 +736,25 @@ func newSeededConfidentialClient() (*domain.Client, error) {
 		AllowClientCredentials:  true,
 		JWKSJSON:                string(raw),
 	}, nil
+}
+
+// buildMailer returns the SMTP mailer when AUTH_SMTP_HOST is set, and the
+// log mailer otherwise. The log mailer never delivers anything, so it is
+// announced loudly: without SMTP, password-reset emails go nowhere.
+func buildMailer(cfg *config.Config, clk clock.Clock, logger *slog.Logger) (mail.Mailer, error) {
+	if cfg.SMTPHost == "" {
+		if cfg.DevLogEmails {
+			logger.Warn("SMTP not configured: emails (including reset links) are written to the log; AUTH_DEV_LOG_EMAILS must stay off in production")
+		} else {
+			logger.Warn("SMTP not configured: password-reset emails are NOT delivered; set AUTH_SMTP_HOST or, for development only, AUTH_DEV_LOG_EMAILS=true")
+		}
+		return &mail.LogMailer{Logger: logger, LogBodies: cfg.DevLogEmails}, nil
+	}
+	return mail.NewSMTPMailer(mail.SMTPConfig{
+		Host:     cfg.SMTPHost,
+		Port:     cfg.SMTPPort,
+		Username: cfg.SMTPUsername,
+		Password: cfg.SMTPPassword,
+		From:     cfg.SMTPFrom,
+	}, clk.Now)
 }

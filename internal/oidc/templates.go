@@ -72,6 +72,8 @@ const sharedStyles = `{{ define "styles" }}<style>
     .auth-label { @apply block text-xs text-zinc-500 lowercase tracking-wide mb-2; }
     .auth-input { @apply block w-full rounded-none border-0 py-3 px-4 bg-[#cbd5e1] text-zinc-950 placeholder:text-zinc-500 focus:bg-[#cbd5e1] focus:ring-0 sm:text-sm font-mono outline-none; }
     .auth-btn { @apply flex w-full justify-center rounded-none bg-zinc-300 px-3 py-3 text-sm font-bold text-zinc-950 shadow-sm hover:bg-zinc-400 transition-colors lowercase tracking-wide font-mono; }
+    .nav-link { @apply text-xs lowercase tracking-wide text-zinc-500 hover:text-zinc-300 transition-colors font-mono; }
+    .nav-link-active { @apply text-zinc-200 underline decoration-1 underline-offset-8; }
     .auth-link { @apply text-zinc-500 hover:text-zinc-300 transition-colors underline decoration-1 underline-offset-4 font-mono text-xs lowercase; }
   }
 </style>{{ end }}`
@@ -88,11 +90,28 @@ const errorBanner = `{{ define "errorBanner" }}{{ if .Error }}
 // It shares the styles and error banner but swaps the 400px card for a
 // wider column with a top bar, since these pages show tables.
 func appPage(content string) string {
-	return appLayout + sharedStyles + errorBanner + content + `{{ template "base" . }}`
+	return appLayout + sharedStyles + errorBanner + statusBanner + content + `{{ template "base" . }}`
 }
 
+// appNav is the navigation model every signed-in page embeds as .Nav.
+// Active names the current page ("home" or "profile").
+type appNav struct {
+	HomePath    string
+	ProfilePath string
+	LogoutPath  string
+	Active      string
+}
+
+// statusBanner renders the green confirmation box when .Status is set.
+const statusBanner = `{{ define "statusBanner" }}{{ if .Status }}
+    <div class="rounded-none bg-emerald-950/20 px-4 py-3 border-l-2 border-emerald-500 text-emerald-400 font-mono text-xs lowercase">
+      {{ .StatusLabel }}
+    </div>
+    {{ end }}{{ end }}`
+
 // appLayout is the HTML shell for signed-in pages. The page supplies
-// "heading" (the document title), "nav" (top-bar links) and "content".
+// "heading" (the document title) and "content"; the navigation bar is
+// built from .Nav (an appNav), so every page links to the same places.
 const appLayout = `{{ define "base" }}<!doctype html>
 <html lang="en" class="h-full bg-[#121212]">
 <head>
@@ -106,10 +125,15 @@ const appLayout = `{{ define "base" }}<!doctype html>
   <header class="border-b border-zinc-800/60">
     <div class="mx-auto flex max-w-3xl items-center justify-between px-4 py-4 sm:px-6">
       <span class="text-sm font-bold text-zinc-300 lowercase tracking-tight">go-authserver</span>
-      <nav class="flex items-center gap-6">{{ template "nav" . }}</nav>
+      <nav class="flex items-center gap-6">
+        <a href="{{ .Nav.HomePath }}" class="nav-link{{ if eq .Nav.Active "home" }} nav-link-active{{ end }}">home</a>
+        <a href="{{ .Nav.ProfilePath }}" class="nav-link{{ if eq .Nav.Active "profile" }} nav-link-active{{ end }}">my profile</a>
+        <a href="{{ .Nav.LogoutPath }}" class="nav-link">sign out</a>
+      </nav>
     </div>
   </header>
   <main class="mx-auto max-w-3xl space-y-8 px-4 py-10 sm:px-6">
+    {{ template "statusBanner" . }}
     {{ template "errorBanner" . }}
     {{ template "content" . }}
   </main>

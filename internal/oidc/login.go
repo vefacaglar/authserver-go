@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -9,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -79,11 +81,16 @@ func (h *LoginHandler) verifyCSRFToken(r *http.Request) bool {
 
 // LoginConfig bundles the policy inputs the login handler reads.
 type LoginConfig struct {
-	IssuerURL       string
-	LoginPath       string
-	RegisterPath    string
-	AuthorizePath   string
-	SessionLifetime time.Duration
+	IssuerURL     string
+	LoginPath     string
+	RegisterPath  string
+	AuthorizePath string
+	// ProfilePath is an allowed post-login target so the profile page
+	// can send anonymous visitors through login and back.
+	ProfilePath string
+	// ForgotPasswordPath, when set, adds a "forgot password?" link.
+	ForgotPasswordPath string
+	SessionLifetime    time.Duration
 }
 
 // LoginHandler implements GET (render) and POST (validate) for /login.
@@ -128,6 +135,8 @@ func (h *LoginHandler) render(w http.ResponseWriter, r *http.Request, errorCode,
 		Action       string
 		ReturnURL    string
 		RegisterPath string
+		ForgotPath   string
+		Notice       string
 		Error        string
 		ErrorLabel   string
 	}{
@@ -135,7 +144,11 @@ func (h *LoginHandler) render(w http.ResponseWriter, r *http.Request, errorCode,
 		Action:       h.Cfg.LoginPath,
 		ReturnURL:    returnURL,
 		RegisterPath: registerPath,
+		ForgotPath:   h.Cfg.ForgotPasswordPath,
 		Error:        errorCode,
+	}
+	if r.URL.Query().Get("notice") == loginNoticePasswordReset {
+		data.Notice = "your password was updated. sign in with the new password."
 	}
 	if errorCode != "" {
 		data.ErrorLabel = loginErrorLabel(errorCode)
@@ -170,9 +183,43 @@ func (h *LoginHandler) alreadySignedIn(r *http.Request) bool {
 	return err == nil && sess != nil
 }
 
-// recordLogin appends a login_succeeded audit entry. Failures are logged
-// and swallowed: history is informational, not part of authentication.
+// recordLogin appends a login_succeeded audit entry.
 func (h *LoginHandler) recordLogin(r *http.Request, userID string, now time.Time) {
+	h.recordAuth(r, userID, domain.AuditLoginSucceeded, "", now)
+}
+
+// recordFailedLogin appends a login_failed entry for the account the
+// typed identifier belongs to, so the owner sees it on the home page.
+// Attempts against unknown identifiers are not recorded: they have no
+// owner to show them to, and the typed text is never stored because it
+// can be a password typed into the wrong field. Rate limiting and the
+// lockout tracker already bound how many of these a client can write.
+func (h *LoginHandler) recordFailedLogin(r *http.Request, identifier string, now time.Time) {
+	if h.AuditLogs == nil {
+		return
+	}
+	userID := h.lookupUserID(r.Context(), identifier)
+	if userID == "" {
+		return
+	}
+	h.recordAuth(r, userID, domain.AuditLoginFailed, `{"reason":"invalid_credentials"}`, now)
+}
+
+// lookupUserID resolves a username or email to a user id, or "" when
+// there is no such account (or the lookup fails).
+func (h *LoginHandler) lookupUserID(ctx context.Context, identifier string) string {
+	if u, err := h.Users.FindUserByUsername(ctx, identifier); err == nil {
+		return u.ID
+	}
+	if u, err := h.Users.FindUserByEmail(ctx, identifier); err == nil {
+		return u.ID
+	}
+	return ""
+}
+
+// recordAuth appends an audit entry. History is informational, not part
+// of authentication, so a write failure is logged and swallowed.
+func (h *LoginHandler) recordAuth(r *http.Request, userID, action, metadata string, now time.Time) {
 	if h.AuditLogs == nil {
 		return
 	}
@@ -185,16 +232,17 @@ func (h *LoginHandler) recordLogin(r *http.Request, userID string, now time.Time
 	}
 	err := h.AuditLogs.Store(r.Context(), &domain.AuditLog{
 		ID:          uuid.New(),
-		Action:      domain.AuditLoginSucceeded,
+		Action:      action,
 		ActorUserID: userID,
 		TargetType:  "User",
 		TargetID:    userID,
 		Timestamp:   now,
 		IPAddress:   truncate(ip, 64),
 		UserAgent:   truncate(r.UserAgent(), 512),
+		Metadata:    metadata,
 	})
 	if err != nil {
-		h.Logger.Warn("login audit write failed", "err", err)
+		h.Logger.Warn("login audit write failed", "action", action, "err", err)
 	}
 }
 
@@ -241,6 +289,7 @@ func (h *LoginHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 	}
 	if info == nil {
 		_ = h.Tracker.RecordFailure(ctx, trackerKey)
+		h.recordFailedLogin(r, username, h.Clock.Now().UTC())
 		h.respondWithError(w, r, LoginErrInvalidCredentials, returnURL)
 		return
 	}
@@ -269,14 +318,16 @@ func (h *LoginHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 
 	h.recordLogin(r, info.UserID, now)
 
-	target, err := validateReturnURL(returnURL, h.Cfg.IssuerURL, h.Cfg.AuthorizePath)
+	target, err := validateReturnURL(returnURL, h.Cfg.IssuerURL, h.Cfg.AuthorizePath, h.Cfg.ProfilePath)
 	if err != nil {
 		h.respondWithError(w, r, LoginErrInvalidReturn, "")
 		return
 	}
 	if target == "" {
-		// No redirect brought the user here: land on the home page.
-		target = strings.TrimRight(h.Cfg.IssuerURL, "/") + homePath
+		// No redirect brought the user here: land on the home page. The
+		// path is relative on purpose: it stays on whatever host served the
+		// login form instead of bouncing to the configured issuer origin.
+		target = homePath
 	}
 	http.Redirect(w, r, target, http.StatusFound)
 }
@@ -295,7 +346,7 @@ func (h *LoginHandler) respondWithError(w http.ResponseWriter, r *http.Request, 
 // either a relative path beginning with "/" (and not "//", which some
 // browsers treat as a protocol-relative URL) or an absolute URL whose
 // origin matches the issuer's.
-func validateReturnURL(raw, issuerURL, authorizePath string) (string, error) {
+func validateReturnURL(raw, issuerURL, authorizePath string, accountPaths ...string) (string, error) {
 	if raw == "" {
 		return "", nil
 	}
@@ -317,7 +368,9 @@ func validateReturnURL(raw, issuerURL, authorizePath string) (string, error) {
 	if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") {
 		return "", errors.New("return url not a path")
 	}
-	if raw == homePath {
+	// The account pages are matched on the exact path (any query is fine),
+	// never as a prefix.
+	if u.Path == homePath || (u.Path != "" && slices.Contains(accountPaths, u.Path)) {
 		return raw, nil
 	}
 	// Pin to known paths so a login redirect can never be used to bounce

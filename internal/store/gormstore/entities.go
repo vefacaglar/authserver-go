@@ -653,8 +653,48 @@ func allEntities() []any {
 		&userTokenEntity{},
 		&auditLogEntity{},
 		&loginAttemptEntity{},
+		&passwordResetEntity{},
 		&dataProtectionKeyEntity{},
 	}
+}
+
+// --- Password reset token ---
+
+type passwordResetEntity struct {
+	ID         string `gorm:"primaryKey;size:36"`
+	UserID     string `gorm:"index;size:128"`
+	TokenHash  string `gorm:"uniqueIndex;size:128"`
+	CreatedAt  time.Time
+	ExpiresAt  time.Time `gorm:"index"`
+	ConsumedAt *time.Time
+}
+
+func (passwordResetEntity) TableName() string { return "oauth_password_reset_tokens" }
+
+func toPasswordResetEntity(t *domain.PasswordResetToken) *passwordResetEntity {
+	return &passwordResetEntity{
+		ID:         t.ID.String(),
+		UserID:     t.UserID,
+		TokenHash:  t.TokenHash,
+		CreatedAt:  t.CreatedAt,
+		ExpiresAt:  t.ExpiresAt,
+		ConsumedAt: t.ConsumedAt,
+	}
+}
+
+func (e *passwordResetEntity) toDomain() (*domain.PasswordResetToken, error) {
+	id, err := uuid.Parse(e.ID)
+	if err != nil {
+		return nil, fmt.Errorf("password reset token %q: parse id: %w", e.ID, err)
+	}
+	return &domain.PasswordResetToken{
+		ID:         id,
+		UserID:     e.UserID,
+		TokenHash:  e.TokenHash,
+		CreatedAt:  e.CreatedAt,
+		ExpiresAt:  e.ExpiresAt,
+		ConsumedAt: e.ConsumedAt,
+	}, nil
 }
 
 // --- Data protection key ring ---

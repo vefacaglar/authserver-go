@@ -47,8 +47,8 @@ func TestHome_LoginWithoutReturnURLLandsOnHome(t *testing.T) {
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("login status = %d, want 302", resp.StatusCode)
 	}
-	if loc := resp.Header.Get("Location"); loc != testIssuer+"/" {
-		t.Fatalf("Location = %q, want issuer root", loc)
+	if loc := resp.Header.Get("Location"); loc != "/" {
+		t.Fatalf("Location = %q, want the relative home path", loc)
 	}
 }
 

@@ -43,6 +43,7 @@ func TestMigrate_CreatesAllTables(t *testing.T) {
 		"oauth_scopes",
 		"oauth_users",
 		"oauth_audit_logs",
+		"oauth_password_reset_tokens",
 	} {
 		if !db.Migrator().HasTable(name) {
 			t.Errorf("table %q not created", name)
@@ -657,5 +658,83 @@ func TestAuditLog_ListByActor(t *testing.T) {
 	}
 	if len(got) != 2 || !got[0].Timestamp.Equal(base.Add(2*time.Minute)) || !got[1].Timestamp.Equal(base.Add(time.Minute)) {
 		t.Fatalf("ListByActor = %+v, want the two newest u-1 logins, newest first", got)
+	}
+}
+
+func TestPasswordReset_GORM(t *testing.T) {
+	ctx := context.Background()
+	s := NewPasswordResetStore(openTestDB(t))
+	now := time.Unix(1700000000, 0).UTC()
+	mk := func(user, hash string, at time.Time, ttl time.Duration) *domain.PasswordResetToken {
+		tk := &domain.PasswordResetToken{ID: uuid.New(), UserID: user, TokenHash: hash, CreatedAt: at, ExpiresAt: at.Add(ttl)}
+		if err := s.Create(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+		return tk
+	}
+
+	tok := mk("u-1", "hash-1", now, time.Hour)
+	got, err := s.FindByHash(ctx, "hash-1")
+	if err != nil || got.ID != tok.ID || got.ConsumedAt != nil {
+		t.Fatalf("FindByHash = %+v, %v", got, err)
+	}
+	if _, err := s.FindByHash(ctx, "missing"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("missing err = %v, want ErrNotFound", err)
+	}
+	if err := s.Create(ctx, &domain.PasswordResetToken{ID: uuid.New(), UserID: "u-2", TokenHash: "hash-1", ExpiresAt: now.Add(time.Hour)}); !errors.Is(err, store.ErrDuplicate) {
+		t.Errorf("duplicate hash err = %v, want ErrDuplicate", err)
+	}
+
+	// Concurrent consumers: exactly one wins.
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		wins int
+	)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := s.Consume(ctx, tok.ID, now)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if ok {
+				mu.Lock()
+				wins++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if wins != 1 {
+		t.Fatalf("winners = %d, want exactly 1", wins)
+	}
+
+	expiring := mk("u-3", "hash-exp", now, time.Minute)
+	if ok, _ := s.Consume(ctx, expiring.ID, now.Add(time.Minute)); ok {
+		t.Error("expired token consumed")
+	}
+
+	a := mk("u-4", "hash-a", now, time.Hour)
+	other := mk("u-5", "hash-o", now, time.Hour)
+	if err := s.InvalidateForUser(ctx, "u-4", now); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := s.Consume(ctx, a.ID, now); ok {
+		t.Error("token consumable after InvalidateForUser")
+	}
+	if ok, _ := s.Consume(ctx, other.ID, now); !ok {
+		t.Error("another user's token was invalidated")
+	}
+
+	old := mk("u-6", "hash-old", now.Add(-48*time.Hour), time.Hour)
+	n, err := s.DeleteExpired(ctx, now.Add(-24*time.Hour))
+	if err != nil || n != 1 {
+		t.Fatalf("DeleteExpired = %d, %v; want 1", n, err)
+	}
+	if _, err := s.FindByHash(ctx, old.TokenHash); !errors.Is(err, store.ErrNotFound) {
+		t.Error("expired token not deleted")
 	}
 }

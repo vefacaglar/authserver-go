@@ -20,18 +20,23 @@ import (
 // smallest surface the cmd binary needs to provide; all the lower-level
 // dependencies (stores, issuer) are plumbed through the handler structs.
 type RouterConfig struct {
-	IssuerURL     string
-	RequireHTTPS  bool
-	LoginPath     string
-	RegisterPath  string
-	LogoutPath    string
-	AuthorizePath string
-	TokenPath     string
-	UserInfoPath  string
-	RevokePath    string
-	JWKSPath      string
-	DiscoveryPath string
-	HealthPath    string
+	IssuerURL    string
+	RequireHTTPS bool
+	LoginPath    string
+	RegisterPath string
+	LogoutPath   string
+	ProfilePath  string
+	// ForgotPasswordPath and ResetPasswordPath are the anonymous
+	// password-recovery pages.
+	ForgotPasswordPath string
+	ResetPasswordPath  string
+	AuthorizePath      string
+	TokenPath          string
+	UserInfoPath       string
+	RevokePath         string
+	JWKSPath           string
+	DiscoveryPath      string
+	HealthPath         string
 
 	// LoginRateLimitRPS is the per-IP rate applied to the login
 	// POST. 0 disables the limiter.
@@ -56,6 +61,13 @@ type Handlers struct {
 	// Home is the signed-in landing page served at exactly "/". The
 	// caller wraps it in the session guard.
 	Home http.Handler
+	// Profile serves ProfilePath and its /password and /sessions/* subpaths; the
+	// caller wraps it in the session guard.
+	Profile http.Handler
+	// ForgotPassword and ResetPassword are anonymous pages; both are
+	// rate limited per IP here.
+	ForgotPassword http.Handler
+	ResetPassword  http.Handler
 
 	// Admin is the bundle of admin API + SPA. Mounted under /admin/
 	// as a separate chi group so the middleware (auth + CSRF) only
@@ -101,6 +113,23 @@ func NewRouter(cfg RouterConfig, opts RouterOptions, h Handlers) http.Handler {
 	if h.Home != nil {
 		r.Method(http.MethodGet, "/", h.Home)
 		r.Method(http.MethodHead, "/", h.Home)
+	}
+	if h.ForgotPassword != nil && cfg.ForgotPasswordPath != "" {
+		limiter := NewLoginRateLimiter(cfg.LoginRateLimitRPS, cfg.LoginRateBurst)
+		r.Handle(cfg.ForgotPasswordPath, limiter.Middleware(h.ForgotPassword))
+	}
+	if h.ResetPassword != nil && cfg.ResetPasswordPath != "" {
+		limiter := NewLoginRateLimiter(cfg.LoginRateLimitRPS, cfg.LoginRateBurst)
+		r.Handle(cfg.ResetPasswordPath, limiter.Middleware(h.ResetPassword))
+	}
+	if h.Profile != nil && cfg.ProfilePath != "" {
+		r.Handle(cfg.ProfilePath, h.Profile)
+		r.Handle(cfg.ProfilePath+"/sessions/revoke", h.Profile)
+		r.Handle(cfg.ProfilePath+"/sessions/revoke-others", h.Profile)
+		// Password changes are throttled per IP like the login form: the
+		// current-password check is a credential oracle.
+		pwLimiter := NewLoginRateLimiter(cfg.LoginRateLimitRPS, cfg.LoginRateBurst)
+		r.Handle(cfg.ProfilePath+"/password", pwLimiter.Middleware(h.Profile))
 	}
 	if h.Logout != nil {
 		// Logout owns both /connect/logout and the confirm page at

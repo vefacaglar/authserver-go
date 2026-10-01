@@ -8,7 +8,13 @@ import (
 
 // Audit actions written by the browser-facing account flows.
 const (
-	AuditLoginSucceeded = "login_succeeded"
+	AuditLoginSucceeded  = "login_succeeded"
+	AuditLoginFailed     = "login_failed"
+	AuditProfileUpdated  = "profile_updated"
+	AuditSessionRevoked  = "session_revoked"
+	AuditPasswordChanged = "password_changed"
+	AuditResetRequested  = "password_reset_requested"
+	AuditResetCompleted  = "password_reset_completed"
 )
 
 type AuditLog struct {
