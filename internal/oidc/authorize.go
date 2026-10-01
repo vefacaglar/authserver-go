@@ -182,18 +182,8 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthorizeHandler) resolveSession(r *http.Request) (*domain.Session, error) {
-	id, err := h.Cookies.FromRequest(r)
-	if err != nil {
-		return nil, err
-	}
-	sess, err := h.Sessions.Find(r.Context(), id)
-	if err != nil {
-		return nil, err
-	}
-	if sess.RevokedAt != nil || h.Clock.Now().After(sess.ExpiresAt) {
-		return nil, nil
-	}
-	return sess, nil
+	res := SessionResolver{Cookies: h.Cookies, Sessions: h.Sessions, Clock: h.Clock}
+	return res.Resolve(r)
 }
 
 func (h *AuthorizeHandler) mintCode(

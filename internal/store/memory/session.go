@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -80,4 +81,33 @@ func (s *SessionStore) Revoke(_ context.Context, id uuid.UUID, revokedAt time.Ti
 	sess.RevokedAt = &t
 	s.sessions[id] = sess
 	return nil
+}
+
+func (s *SessionStore) ListByUserID(_ context.Context, userID string, now time.Time) ([]domain.Session, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []domain.Session
+	for _, sess := range s.sessions {
+		if sess.UserID == userID && sess.RevokedAt == nil && now.Before(sess.ExpiresAt) {
+			out = append(out, sess)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (s *SessionStore) RevokeByUserIDExcept(_ context.Context, userID string, keep uuid.UUID, revokedAt time.Time) ([]uuid.UUID, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var revoked []uuid.UUID
+	for id, sess := range s.sessions {
+		if sess.UserID != userID || id == keep || sess.RevokedAt != nil || !revokedAt.Before(sess.ExpiresAt) {
+			continue
+		}
+		t := revokedAt
+		sess.RevokedAt = &t
+		s.sessions[id] = sess
+		revoked = append(revoked, id)
+	}
+	return revoked, nil
 }

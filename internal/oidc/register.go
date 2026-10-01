@@ -20,11 +20,12 @@ import (
 
 // Register flow error codes.
 const (
-	RegisterErrMissingFields      = "missing_fields"
-	RegisterErrPasswordMismatch   = "password_mismatch"
-	RegisterErrDuplicateUser      = "duplicate_user"
-	RegisterErrAntiforgeryFailed  = "antiforgery_failed"
-	RegisterErrServerError        = "server_error"
+	RegisterErrMissingFields     = "missing_fields"
+	RegisterErrPasswordMismatch  = "password_mismatch"
+	RegisterErrDuplicateUser     = "duplicate_user"
+	RegisterErrWeakPassword      = "weak_password"
+	RegisterErrAntiforgeryFailed = "antiforgery_failed"
+	RegisterErrServerError       = "server_error"
 )
 
 type RegisterConfig struct {
@@ -141,6 +142,11 @@ func (h *RegisterHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := ValidatePassword(password); err != nil {
+		h.respondWithError(w, r, RegisterErrWeakPassword, returnURL)
+		return
+	}
+
 	now := h.Clock.Now().UTC()
 	user := &domain.User{
 		ID:             uuid.New().String(),
@@ -186,6 +192,8 @@ func registerErrorLabel(code string) string {
 		return "Please fill out all fields."
 	case RegisterErrPasswordMismatch:
 		return "Passwords do not match."
+	case RegisterErrWeakPassword:
+		return "Password must be 8-72 characters and must not start or end with whitespace."
 	case RegisterErrDuplicateUser:
 		return "Username or email is already taken."
 	case RegisterErrAntiforgeryFailed:

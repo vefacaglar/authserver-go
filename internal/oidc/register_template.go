@@ -23,12 +23,12 @@ const registerContent = `{{ define "heading" }}create account{{ end }}
 
       <div>
         <label for="password" class="auth-label">password</label>
-        <input id="password" name="password" type="password" autocomplete="new-password" required minlength="6" class="auth-input">
+        <input id="password" name="password" type="password" autocomplete="new-password" required minlength="8" maxlength="72" class="auth-input">
       </div>
 
       <div>
         <label for="password_confirm" class="auth-label">confirm password</label>
-        <input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" required minlength="6" class="auth-input">
+        <input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" required minlength="8" maxlength="72" class="auth-input">
       </div>
 
       <div>

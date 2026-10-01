@@ -588,3 +588,50 @@ func TestAuditLog_StoreAndPage(t *testing.T) {
 		t.Errorf("page items = %d, want 3", len(res.Items))
 	}
 }
+
+func TestSession_ListAndRevokeByUserID(t *testing.T) {
+	ctx := context.Background()
+	s := NewSessionStore(openTestDB(t))
+	now := time.Unix(1700000000, 0).UTC()
+
+	mk := func(userID string, created time.Time, ttl time.Duration) uuid.UUID {
+		id := uuid.New()
+		if err := s.Store(ctx, &domain.Session{ID: id, UserID: userID, CreatedAt: created, ExpiresAt: created.Add(ttl)}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	keep := mk("u-1", now.Add(-time.Hour), 8*time.Hour)
+	other := mk("u-1", now.Add(-2*time.Hour), 8*time.Hour)
+	mk("u-1", now.Add(-10*time.Hour), time.Hour) // expired
+	foreign := mk("u-2", now, time.Hour)
+
+	list, err := s.ListByUserID(ctx, "u-1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 || list[0].ID != keep || list[1].ID != other {
+		t.Fatalf("ListByUserID = %+v, want [keep, other]", list)
+	}
+
+	revoked, err := s.RevokeByUserIDExcept(ctx, "u-1", keep, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(revoked) != 1 || revoked[0] != other {
+		t.Fatalf("revoked = %v, want [%s]", revoked, other)
+	}
+	for id, want := range map[uuid.UUID]bool{keep: false, other: true, foreign: false} {
+		sess, err := s.Find(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (sess.RevokedAt != nil) != want {
+			t.Errorf("session %s revoked=%v, want %v", id, sess.RevokedAt != nil, want)
+		}
+	}
+	again, err := s.RevokeByUserIDExcept(ctx, "u-1", keep, now)
+	if err != nil || len(again) != 0 {
+		t.Fatalf("second call = %v, %v; want empty", again, err)
+	}
+}
