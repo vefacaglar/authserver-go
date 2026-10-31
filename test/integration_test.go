@@ -204,7 +204,6 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 	}
 	if err := b.Users.AddUserClaims(context.Background(), "u-demo", []domain.UserClaim{
 		{Type: "preferred_username", Value: testUser},
-		{Type: "name", Value: "Demo User"},
 		{Type: "email", Value: "demo@example.com"},
 		{Type: "email_verified", Value: "true"},
 	}); err != nil {
@@ -964,8 +963,8 @@ func TestE2E_UserInfo_BearerGET(t *testing.T) {
 	if _, ok := claims["email"]; !ok {
 		t.Errorf("email claim missing")
 	}
-	if _, ok := claims["name"]; !ok {
-		t.Errorf("name claim missing")
+	if _, ok := claims["name"]; ok {
+		t.Errorf("name claim present; only username and email are kept")
 	}
 }
 

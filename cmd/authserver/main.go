@@ -687,11 +687,6 @@ func seedBundle(b *storeBundle) error {
 			return err
 		}
 	}
-	if err := b.Users.AddUserClaims(ctx, "u-demo", []domain.UserClaim{
-		{Type: "name", Value: "Demo User"},
-	}); err != nil {
-		return err
-	}
 	if err := b.Users.AddToRoles(ctx, "u-demo", []string{"admin"}); err != nil {
 		return err
 	}

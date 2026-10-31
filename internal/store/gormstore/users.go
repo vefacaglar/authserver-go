@@ -168,10 +168,6 @@ func (s *UserStore) ValidateCredentials(ctx context.Context, username, password 
 		claims["email"] = ent.Email
 		claims["email_verified"] = ent.EmailConfirmed
 	}
-	if ent.PhoneNumber != "" {
-		claims["phone_number"] = ent.PhoneNumber
-		claims["phone_number_verified"] = ent.PhoneNumberConfirmed
-	}
 	return &domain.UserInfo{UserID: ent.ID, Claims: claims}, nil
 }
 
@@ -191,10 +187,6 @@ func (s *UserStore) FindByID(ctx context.Context, userID string) (*domain.UserIn
 	if ent.Email != "" {
 		claims["email"] = ent.Email
 		claims["email_verified"] = ent.EmailConfirmed
-	}
-	if ent.PhoneNumber != "" {
-		claims["phone_number"] = ent.PhoneNumber
-		claims["phone_number_verified"] = ent.PhoneNumberConfirmed
 	}
 	return &domain.UserInfo{UserID: ent.ID, Claims: claims}, nil
 }

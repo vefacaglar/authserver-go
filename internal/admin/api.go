@@ -635,34 +635,30 @@ func validateJWKS(raw string) error {
 // --- Users ---
 
 type userView struct {
-	ID                   string     `json:"id"`
-	Username             string     `json:"username"`
-	Email                string     `json:"email"`
-	EmailConfirmed       bool       `json:"email_confirmed"`
-	PhoneNumber          string     `json:"phone_number"`
-	PhoneNumberConfirmed bool       `json:"phone_number_confirmed"`
-	TwoFactorEnabled     bool       `json:"two_factor_enabled"`
-	LockoutEnd           *time.Time `json:"lockout_end,omitempty"`
-	LockoutEnabled       bool       `json:"lockout_enabled"`
-	AccessFailedCount    int        `json:"access_failed_count"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	ID                string     `json:"id"`
+	Username          string     `json:"username"`
+	Email             string     `json:"email"`
+	EmailConfirmed    bool       `json:"email_confirmed"`
+	TwoFactorEnabled  bool       `json:"two_factor_enabled"`
+	LockoutEnd        *time.Time `json:"lockout_end,omitempty"`
+	LockoutEnabled    bool       `json:"lockout_enabled"`
+	AccessFailedCount int        `json:"access_failed_count"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 func toUserView(u *domain.User) userView {
 	return userView{
-		ID:                   u.ID,
-		Username:             u.Username,
-		Email:                u.Email,
-		EmailConfirmed:       u.EmailConfirmed,
-		PhoneNumber:          u.PhoneNumber,
-		PhoneNumberConfirmed: u.PhoneNumberConfirmed,
-		TwoFactorEnabled:     u.TwoFactorEnabled,
-		LockoutEnd:           u.LockoutEnd,
-		LockoutEnabled:       u.LockoutEnabled,
-		AccessFailedCount:    u.AccessFailedCount,
-		CreatedAt:            u.CreatedAt,
-		UpdatedAt:            u.UpdatedAt,
+		ID:                u.ID,
+		Username:          u.Username,
+		Email:             u.Email,
+		EmailConfirmed:    u.EmailConfirmed,
+		TwoFactorEnabled:  u.TwoFactorEnabled,
+		LockoutEnd:        u.LockoutEnd,
+		LockoutEnabled:    u.LockoutEnabled,
+		AccessFailedCount: u.AccessFailedCount,
+		CreatedAt:         u.CreatedAt,
+		UpdatedAt:         u.UpdatedAt,
 	}
 }
 
@@ -726,15 +722,13 @@ func (a *API) getUser(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateUserRequest struct {
-	Username             string     `json:"username"`
-	Email                string     `json:"email"`
-	EmailConfirmed       bool       `json:"email_confirmed"`
-	PhoneNumber          string     `json:"phone_number"`
-	PhoneNumberConfirmed bool       `json:"phone_number_confirmed"`
-	TwoFactorEnabled     bool       `json:"two_factor_enabled"`
-	LockoutEnd           *time.Time `json:"lockout_end,omitempty"`
-	LockoutEnabled       bool       `json:"lockout_enabled"`
-	AccessFailedCount    int        `json:"access_failed_count"`
+	Username          string     `json:"username"`
+	Email             string     `json:"email"`
+	EmailConfirmed    bool       `json:"email_confirmed"`
+	TwoFactorEnabled  bool       `json:"two_factor_enabled"`
+	LockoutEnd        *time.Time `json:"lockout_end,omitempty"`
+	LockoutEnabled    bool       `json:"lockout_enabled"`
+	AccessFailedCount int        `json:"access_failed_count"`
 }
 
 func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
@@ -756,8 +750,6 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 	existing.Username = body.Username
 	existing.Email = body.Email
 	existing.EmailConfirmed = body.EmailConfirmed
-	existing.PhoneNumber = body.PhoneNumber
-	existing.PhoneNumberConfirmed = body.PhoneNumberConfirmed
 	existing.TwoFactorEnabled = body.TwoFactorEnabled
 	existing.LockoutEnd = body.LockoutEnd
 	existing.LockoutEnabled = body.LockoutEnabled

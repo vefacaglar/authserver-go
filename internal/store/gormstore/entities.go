@@ -26,6 +26,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // All entities live in this file as a single package-private surface.
@@ -407,63 +408,57 @@ func (e *scopeEntity) toDomain() (*domain.Scope, error) {
 // --- User ---
 
 type userEntity struct {
-	ID                   string `gorm:"primaryKey;size:128"`
-	Username             string `gorm:"uniqueIndex;size:256"`
-	NormalizedUsername   string `gorm:"uniqueIndex;size:256"`
-	Email                string `gorm:"index;size:256"`
-	NormalizedEmail      string `gorm:"index;size:256"`
-	EmailConfirmed       bool
-	PhoneNumber          string `gorm:"size:64"`
-	PhoneNumberConfirmed bool
-	PasswordHash         string `gorm:"type:text"`
-	SecurityStamp        string `gorm:"size:128"`
-	TwoFactorEnabled     bool
-	LockoutEnd           *time.Time
-	LockoutEnabled       bool
-	AccessFailedCount    int
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+	ID                 string `gorm:"primaryKey;size:128"`
+	Username           string `gorm:"uniqueIndex;size:256"`
+	NormalizedUsername string `gorm:"uniqueIndex;size:256"`
+	Email              string `gorm:"index;size:256"`
+	NormalizedEmail    string `gorm:"index;size:256"`
+	EmailConfirmed     bool
+	PasswordHash       string `gorm:"type:text"`
+	SecurityStamp      string `gorm:"size:128"`
+	TwoFactorEnabled   bool
+	LockoutEnd         *time.Time
+	LockoutEnabled     bool
+	AccessFailedCount  int
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 func (userEntity) TableName() string { return "oauth_users" }
 
 func (e *userEntity) toDomain() *domain.User {
 	return &domain.User{
-		ID:                   e.ID,
-		Username:             e.Username,
-		Email:                e.Email,
-		EmailConfirmed:       e.EmailConfirmed,
-		PhoneNumber:          e.PhoneNumber,
-		PhoneNumberConfirmed: e.PhoneNumberConfirmed,
-		PasswordHash:         e.PasswordHash,
-		SecurityStamp:        e.SecurityStamp,
-		TwoFactorEnabled:     e.TwoFactorEnabled,
-		LockoutEnd:           e.LockoutEnd,
-		LockoutEnabled:       e.LockoutEnabled,
-		AccessFailedCount:    e.AccessFailedCount,
-		CreatedAt:            e.CreatedAt,
-		UpdatedAt:            e.UpdatedAt,
+		ID:                e.ID,
+		Username:          e.Username,
+		Email:             e.Email,
+		EmailConfirmed:    e.EmailConfirmed,
+		PasswordHash:      e.PasswordHash,
+		SecurityStamp:     e.SecurityStamp,
+		TwoFactorEnabled:  e.TwoFactorEnabled,
+		LockoutEnd:        e.LockoutEnd,
+		LockoutEnabled:    e.LockoutEnabled,
+		AccessFailedCount: e.AccessFailedCount,
+		CreatedAt:         e.CreatedAt,
+		UpdatedAt:         e.UpdatedAt,
 	}
 }
 
 func toUserEntity(u *domain.User) *userEntity {
 	return &userEntity{
-		ID:                   u.ID,
-		Username:             u.Username,
-		NormalizedUsername:   strings.ToUpper(u.Username),
-		Email:                u.Email,
-		NormalizedEmail:      strings.ToUpper(u.Email),
-		EmailConfirmed:       u.EmailConfirmed,
-		PhoneNumber:          u.PhoneNumber,
-		PhoneNumberConfirmed: u.PhoneNumberConfirmed,
-		PasswordHash:         u.PasswordHash,
-		SecurityStamp:        u.SecurityStamp,
-		TwoFactorEnabled:     u.TwoFactorEnabled,
-		LockoutEnd:           u.LockoutEnd,
-		LockoutEnabled:       u.LockoutEnabled,
-		AccessFailedCount:    u.AccessFailedCount,
-		CreatedAt:            u.CreatedAt,
-		UpdatedAt:            u.UpdatedAt,
+		ID:                 u.ID,
+		Username:           u.Username,
+		NormalizedUsername: strings.ToUpper(u.Username),
+		Email:              u.Email,
+		NormalizedEmail:    strings.ToUpper(u.Email),
+		EmailConfirmed:     u.EmailConfirmed,
+		PasswordHash:       u.PasswordHash,
+		SecurityStamp:      u.SecurityStamp,
+		TwoFactorEnabled:   u.TwoFactorEnabled,
+		LockoutEnd:         u.LockoutEnd,
+		LockoutEnabled:     u.LockoutEnabled,
+		AccessFailedCount:  u.AccessFailedCount,
+		CreatedAt:          u.CreatedAt,
+		UpdatedAt:          u.UpdatedAt,
 	}
 }
 
@@ -753,11 +748,43 @@ type loginAttemptEntity struct {
 
 func (loginAttemptEntity) TableName() string { return "login_attempts" }
 
-// Migrate runs AutoMigrate for every entity in this package. It is
-// idempotent: existing tables are not modified beyond additive
-// column/index changes.
+// removedUserColumns are oauth_users columns the server no longer keeps.
+// Only the username and email are stored as personal data; older
+// databases may still hold phone numbers.
+var removedUserColumns = []string{"phone_number", "phone_number_confirmed"}
+
+// removedClaimTypes are user claim types the server no longer keeps
+// (personal names). Rows of these types are deleted on migrate.
+var removedClaimTypes = []string{"name", "given_name", "family_name", "middle_name", "nickname"}
+
+// Migrate runs AutoMigrate for every entity in this package, then drops
+// personal-data columns and claims the server no longer stores. It is
+// idempotent.
 func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(allEntities()...)
+	if err := db.AutoMigrate(allEntities()...); err != nil {
+		return err
+	}
+	return purgeRemovedPersonalData(db)
+}
+
+func purgeRemovedPersonalData(db *gorm.DB) error {
+	m := db.Migrator()
+	for _, col := range removedUserColumns {
+		if m.HasColumn(&userEntity{}, col) {
+			// Plain ALTER TABLE rather than Migrator.DropColumn: the SQLite
+			// migrator rebuilds the table from parsed DDL and silently
+			// misses columns it cannot match. SQLite 3.35+ and Postgres
+			// both support DROP COLUMN.
+			err := db.Exec("ALTER TABLE ? DROP COLUMN ?", clause.Table{Name: userEntity{}.TableName()}, clause.Column{Name: col}).Error
+			if err != nil {
+				return fmt.Errorf("drop oauth_users.%s: %w", col, err)
+			}
+		}
+	}
+	if err := db.Where("type IN ?", removedClaimTypes).Delete(&userClaimEntity{}).Error; err != nil {
+		return fmt.Errorf("delete removed user claims: %w", err)
+	}
+	return nil
 }
 
 // uuidPtrString converts a *uuid.UUID to a *string in 36-char form.

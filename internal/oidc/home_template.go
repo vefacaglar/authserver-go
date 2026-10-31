@@ -6,23 +6,22 @@ func HomeTemplate() string { return appPage(homeContent) }
 
 // homeContent shows the account summary and the recent sign-in history.
 // All values are rendered through html/template, so user-controlled
-// strings (name, user agent) are escaped.
+// strings (username, user agent) are escaped.
 const homeContent = `{{ define "heading" }}home{{ end }}
 {{ define "content" }}
     <section>
       <h1 class="text-lg font-bold text-zinc-300 tracking-tight lowercase">
-        welcome{{ if .Name }}, {{ .Name }}{{ else }}, {{ .Username }}{{ end }}
+        welcome, {{ .Username }}
       </h1>
     </section>
 
     <section class="bg-[#1a1a1a] border border-zinc-800/60 p-6">
       <div class="mb-4 flex items-center justify-between">
         <h2 class="text-xs text-zinc-500 lowercase tracking-wide">profile</h2>
-        <a href="{{ .ProfilePath }}" class="auth-link">edit profile</a>
+        <a href="{{ .ProfilePath }}" class="auth-link">my profile</a>
       </div>
       <dl class="grid grid-cols-[8rem_1fr] gap-y-3 text-sm">
         <dt class="text-zinc-500 lowercase">username</dt><dd class="text-zinc-300 break-all">{{ .Username }}</dd>
-        <dt class="text-zinc-500 lowercase">name</dt><dd class="text-zinc-300 break-all">{{ if .Name }}{{ .Name }}{{ else }}&mdash;{{ end }}</dd>
         <dt class="text-zinc-500 lowercase">email</dt><dd class="text-zinc-300 break-all">{{ if .Email }}{{ .Email }}{{ else }}&mdash;{{ end }}</dd>
       </dl>
     </section>

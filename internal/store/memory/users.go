@@ -187,10 +187,6 @@ func (s *UserStore) FindByID(_ context.Context, userID string) (*domain.UserInfo
 		claims["email"] = u.Email
 		claims["email_verified"] = u.EmailConfirmed
 	}
-	if u.PhoneNumber != "" {
-		claims["phone_number"] = u.PhoneNumber
-		claims["phone_number_verified"] = u.PhoneNumberConfirmed
-	}
 	return &domain.UserInfo{UserID: u.ID, Claims: claims}, nil
 }
 

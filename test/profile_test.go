@@ -76,100 +76,35 @@ func TestProfile_ShowsFormAndNavigation(t *testing.T) {
 		}
 	}
 	_, body := getWithSession(t, ts, "/profile", sess)
-	for _, want := range []string{`value="Demo User"`, "demo@example.com", "this device", "active sessions"} {
+	for _, want := range []string{testUser, "demo@example.com", "this device", "active sessions"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("profile body missing %q", want)
 		}
 	}
 }
 
-func TestProfile_UpdateName(t *testing.T) {
+// The profile page no longer collects a personal name: only the username
+// and email are kept, so a POST that tries to set one is rejected and
+// nothing is stored.
+func TestProfile_NameIsNotCollected(t *testing.T) {
 	ts := newTestServer(t)
 	sess := loginAs(t, ts, testUser, testPassword, "/connect/authorize")
 	csrfCookie, token := profileCSRF(t, ts, sess)
 
-	resp := postProfile(t, ts, "/profile", url.Values{"csrf_token": {token}, "name": {"  Ada <b>Lovelace</b>  "}}, sess, csrfCookie)
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/profile?status=name_updated" {
-		t.Fatalf("status=%d Location=%q", resp.StatusCode, resp.Header.Get("Location"))
+	_, body := getWithSession(t, ts, "/profile", sess)
+	if strings.Contains(body, `name="name"`) {
+		t.Error("profile page still renders a name field")
 	}
 
-	claims, err := ts.users.GetUserClaims(context.Background(), "u-demo")
-	if err != nil {
-		t.Fatal(err)
-	}
-	names, others := 0, 0
-	for _, c := range claims {
-		if c.Type == "name" {
-			names++
-			if c.Value != "Ada <b>Lovelace</b>" {
-				t.Errorf("name claim = %q (should be trimmed, stored verbatim)", c.Value)
-			}
-		} else {
-			others++
-		}
-	}
-	if names != 1 || others == 0 {
-		t.Errorf("name claims = %d, other claims = %d; want exactly one name and the rest untouched", names, others)
-	}
-
-	_, body := getWithSession(t, ts, "/profile?status=name_updated", sess)
-	if !strings.Contains(body, "Your name was updated.") {
-		t.Error("status banner missing")
-	}
-	if strings.Contains(body, "<b>Lovelace</b>") {
-		t.Error("name rendered unescaped")
-	}
-	_, home := getWithSession(t, ts, "/", sess)
-	if !strings.Contains(home, "Ada &lt;b&gt;Lovelace&lt;/b&gt;") {
-		t.Error("home page does not show the new name")
-	}
-	assertAuditAction(t, ts, domain.AuditProfileUpdated)
-
-	// Submitting the same value again is a no-op and writes no second entry.
-	before, _ := ts.auditLogs.ListByActor(context.Background(), "u-demo", domain.AuditProfileUpdated, 10)
-	resp = postProfile(t, ts, "/profile", url.Values{"csrf_token": {token}, "name": {"Ada <b>Lovelace</b>"}}, sess, csrfCookie)
-	if resp.Header.Get("Location") != "/profile?status=name_unchanged" {
-		t.Errorf("repeat Location = %q", resp.Header.Get("Location"))
-	}
-	after, _ := ts.auditLogs.ListByActor(context.Background(), "u-demo", domain.AuditProfileUpdated, 10)
-	if len(after) != len(before) {
-		t.Errorf("audit entries %d -> %d on unchanged name", len(before), len(after))
-	}
-}
-
-func TestProfile_UpdateNameValidationAndCSRF(t *testing.T) {
-	ts := newTestServer(t)
-	sess := loginAs(t, ts, testUser, testPassword, "/connect/authorize")
-	csrfCookie, token := profileCSRF(t, ts, sess)
-
-	tests := []struct {
-		name, csrf, value, want string
-	}{
-		{"missing csrf", "", "Ok Name", "error=antiforgery_failed"},
-		{"wrong csrf", "nope", "Ok Name", "error=antiforgery_failed"},
-		{"blank", token, "   ", "error=name_required"},
-		{"too long", token, strings.Repeat("a", 101), "error=name_too_long"},
-		{"control char", token, "bad\x00name", "error=name_invalid"},
-		{"newline", token, "bad\nname", "error=name_invalid"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			resp := postProfile(t, ts, "/profile", url.Values{"csrf_token": {tc.csrf}, "name": {tc.value}}, sess, csrfCookie)
-			if resp.StatusCode != http.StatusSeeOther || !strings.HasSuffix(resp.Header.Get("Location"), tc.want) {
-				t.Fatalf("status=%d Location=%q, want suffix %q", resp.StatusCode, resp.Header.Get("Location"), tc.want)
-			}
-		})
+	resp := postProfile(t, ts, "/profile", url.Values{"csrf_token": {token}, "name": {"Ada Lovelace"}}, sess, csrfCookie)
+	if resp.StatusCode != http.StatusMethodNotAllowed || resp.Header.Get("Allow") != "GET" {
+		t.Errorf("POST /profile: status=%d Allow=%q", resp.StatusCode, resp.Header.Get("Allow"))
 	}
 	claims, _ := ts.users.GetUserClaims(context.Background(), "u-demo")
 	for _, c := range claims {
-		if c.Type == "name" && c.Value != "Demo User" {
-			t.Errorf("rejected input changed the name to %q", c.Value)
+		if c.Type == "name" {
+			t.Errorf("name claim stored: %q", c.Value)
 		}
-	}
-	// Anonymous POSTs never reach the handler.
-	resp := postProfile(t, ts, "/profile", url.Values{"csrf_token": {token}, "name": {"x"}}, csrfCookie)
-	if !strings.HasPrefix(resp.Header.Get("Location"), "/login") {
-		t.Errorf("anonymous POST Location = %q, want /login", resp.Header.Get("Location"))
 	}
 }
 

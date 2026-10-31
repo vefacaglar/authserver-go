@@ -51,6 +51,35 @@ func TestMigrate_CreatesAllTables(t *testing.T) {
 	}
 }
 
+func TestMigrate_PurgesRemovedPersonalData(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.Exec("ALTER TABLE oauth_users ADD COLUMN phone_number varchar(64)").Error; err != nil {
+		t.Fatalf("add legacy column: %v", err)
+	}
+	claims := []userClaimEntity{
+		{UserID: "u1", Type: "name", Value: "Ada Lovelace"},
+		{UserID: "u1", Type: "given_name", Value: "Ada"},
+		{UserID: "u1", Type: "email", Value: "ada@example.com"},
+	}
+	if err := db.Create(&claims).Error; err != nil {
+		t.Fatalf("seed claims: %v", err)
+	}
+
+	if err := Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if db.Migrator().HasColumn(&userEntity{}, "phone_number") {
+		t.Error("phone_number column still present")
+	}
+	var left []userClaimEntity
+	if err := db.Find(&left).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 || left[0].Type != "email" {
+		t.Errorf("claims after migrate = %+v, want only the email claim", left)
+	}
+}
+
 func TestMigrate_Idempotent(t *testing.T) {
 	db := openTestDB(t)
 	if err := Migrate(db); err != nil {

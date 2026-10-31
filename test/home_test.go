@@ -84,7 +84,7 @@ func homeShowsProfileAndLogins(t *testing.T, ts *testServer) {
 	if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store", cc)
 	}
-	for _, want := range []string{"Demo User", "demo@example.com", testUser, "recent sign-ins", "this sign-in"} {
+	for _, want := range []string{"welcome, " + testUser, "demo@example.com", "recent sign-ins", "this sign-in"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q", want)
 		}

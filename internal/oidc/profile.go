@@ -7,9 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"go-authserver/internal/clock"
 	"go-authserver/internal/domain"
@@ -20,17 +17,12 @@ import (
 
 // Profile page status/error codes, surfaced through ?status= / ?error=.
 const (
-	profileStatusNameUpdated   = "name_updated"
-	profileStatusNameUnchanged = "name_unchanged"
-	profileStatusSessionOut    = "session_revoked"
-	profileStatusOthersOut     = "other_sessions_revoked"
-	profileStatusPasswordSet   = "password_changed"
+	profileStatusSessionOut  = "session_revoked"
+	profileStatusOthersOut   = "other_sessions_revoked"
+	profileStatusPasswordSet = "password_changed"
 
-	profileErrAntiforgery  = "antiforgery_failed"
-	profileErrNameRequired = "name_required"
-	profileErrNameTooLong  = "name_too_long"
-	profileErrNameInvalid  = "name_invalid"
-	profileErrServer       = "server_error"
+	profileErrAntiforgery = "antiforgery_failed"
+	profileErrServer      = "server_error"
 
 	profileErrPasswordMissing  = "password_missing"
 	profileErrPasswordMismatch = "password_mismatch"
@@ -40,13 +32,6 @@ const (
 	profileErrLocked           = "account_locked"
 )
 
-// profileNameMaxRunes bounds the display name.
-const profileNameMaxRunes = 100
-
-// profileNameClaim is the claim that carries the display name into ID
-// tokens and userinfo (scope "profile").
-const profileNameClaim = "name"
-
 // ProfileConfig bundles the paths and flags the profile page needs.
 type ProfileConfig struct {
 	ProfilePath  string
@@ -54,10 +39,10 @@ type ProfileConfig struct {
 	RequireHTTPS bool
 }
 
-// ProfileHandler serves the signed-in user's profile page: view and edit
-// the display name, and list/revoke their own active sessions. It must be
+// ProfileHandler serves the signed-in user's profile page: view the
+// account fields, change the password, and list/revoke their own active sessions. It must be
 // mounted behind SessionResolver.RequireSession and serves both
-// ProfilePath (GET, POST) and ProfilePath+"/sessions/revoke" (POST).
+// ProfilePath (GET) and the POST endpoints under it.
 type ProfileHandler struct {
 	Cfg           ProfileConfig
 	Users         store.UserStore
@@ -84,13 +69,11 @@ type profileSession struct {
 type profileData struct {
 	Nav                appNav
 	CSRFToken          string
-	Action             string
 	RevokeAction       string
 	RevokeOthersAction string
 	PasswordAction     string
 	HasOtherSessions   bool
 	Username           string
-	Name               string
 	Email              string
 	Sessions           []profileSession
 	Status             string
@@ -118,8 +101,6 @@ func (h *ProfileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == h.Cfg.ProfilePath && r.Method == http.MethodGet:
 		h.render(w, r, sess)
-	case r.URL.Path == h.Cfg.ProfilePath && r.Method == http.MethodPost:
-		h.updateName(w, r, sess)
 	case r.URL.Path == h.revokePath() && r.Method == http.MethodPost:
 		h.revokeSession(w, r, sess)
 	case r.URL.Path == h.revokeOthersPath() && r.Method == http.MethodPost:
@@ -130,7 +111,7 @@ func (h *ProfileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == h.revokePath() || r.URL.Path == h.revokeOthersPath() || r.URL.Path == h.passwordPath() {
 			w.Header().Set("Allow", "POST")
 		} else {
-			w.Header().Set("Allow", "GET, POST")
+			w.Header().Set("Allow", "GET")
 		}
 		writeJSONError(w, http.StatusMethodNotAllowed, ErrInvalidRequest, "method not allowed")
 	}
@@ -154,24 +135,12 @@ func (h *ProfileHandler) render(w http.ResponseWriter, r *http.Request, sess *do
 	data := profileData{
 		Nav:                appNav{HomePath: homePath, ProfilePath: h.Cfg.ProfilePath, LogoutPath: h.Cfg.LogoutPath, Active: "profile"},
 		CSRFToken:          token,
-		Action:             h.Cfg.ProfilePath,
 		RevokeAction:       h.revokePath(),
 		RevokeOthersAction: h.revokeOthersPath(),
 		PasswordAction:     h.passwordPath(),
 		Username:           user.Username,
 		Email:              user.Email,
 	}
-	claims, err := h.Users.GetUserClaims(ctx, sess.UserID)
-	if err != nil {
-		h.Logger.Warn("profile: claims lookup failed", "err", err)
-	}
-	for _, c := range claims {
-		if c.Type == profileNameClaim {
-			data.Name = c.Value
-			break
-		}
-	}
-
 	active, err := h.Sessions.ListByUserID(ctx, sess.UserID, h.Clock.Now())
 	if err != nil {
 		h.Logger.Warn("profile: session list failed", "err", err)
@@ -201,52 +170,6 @@ func (h *ProfileHandler) render(w http.ResponseWriter, r *http.Request, sess *do
 	if err := h.Template.Execute(w, data); err != nil {
 		h.Logger.Error("profile render failed", "err", err)
 	}
-}
-
-func (h *ProfileHandler) updateName(w http.ResponseWriter, r *http.Request, sess *domain.Session) {
-	if err := r.ParseForm(); err != nil || !h.csrf().Verify(r) {
-		h.redirect(w, r, "error", profileErrAntiforgery)
-		return
-	}
-	name, errCode := normalizeDisplayName(r.FormValue("name"))
-	if errCode != "" {
-		h.redirect(w, r, "error", errCode)
-		return
-	}
-
-	ctx := r.Context()
-	claims, err := h.Users.GetUserClaims(ctx, sess.UserID)
-	if err != nil {
-		h.Logger.Error("profile: claims lookup failed", "err", err)
-		h.redirect(w, r, "error", profileErrServer)
-		return
-	}
-	var old []domain.UserClaim
-	for _, c := range claims {
-		if c.Type == profileNameClaim {
-			old = append(old, c)
-		}
-	}
-	if len(old) == 1 && old[0].Value == name {
-		h.redirect(w, r, "status", profileStatusNameUnchanged)
-		return
-	}
-	// Remove-then-add rather than ReplaceUserClaims: that call rewrites
-	// every claim, so a failure midway could wipe unrelated ones.
-	if len(old) > 0 {
-		if err := h.Users.RemoveUserClaims(ctx, sess.UserID, old); err != nil {
-			h.Logger.Error("profile: remove name claim failed", "err", err)
-			h.redirect(w, r, "error", profileErrServer)
-			return
-		}
-	}
-	if err := h.Users.AddUserClaims(ctx, sess.UserID, []domain.UserClaim{{Type: profileNameClaim, Value: name}}); err != nil {
-		h.Logger.Error("profile: add name claim failed", "err", err)
-		h.redirect(w, r, "error", profileErrServer)
-		return
-	}
-	h.audit(r, sess.UserID, domain.AuditProfileUpdated, "User", sess.UserID, `{"field":"name"}`)
-	h.redirect(w, r, "status", profileStatusNameUpdated)
 }
 
 func (h *ProfileHandler) revokeSession(w http.ResponseWriter, r *http.Request, sess *domain.Session) {
@@ -332,33 +255,8 @@ func (h *ProfileHandler) audit(r *http.Request, userID, action, targetType, targ
 	}
 }
 
-// normalizeDisplayName trims and validates a display name, returning the
-// cleaned name or an error code.
-func normalizeDisplayName(raw string) (string, string) {
-	name := strings.TrimSpace(raw)
-	if name == "" {
-		return "", profileErrNameRequired
-	}
-	if !utf8.ValidString(name) {
-		return "", profileErrNameInvalid
-	}
-	if utf8.RuneCountInString(name) > profileNameMaxRunes {
-		return "", profileErrNameTooLong
-	}
-	for _, r := range name {
-		if unicode.IsControl(r) {
-			return "", profileErrNameInvalid
-		}
-	}
-	return name, ""
-}
-
 func profileStatusLabel(code string) string {
 	switch code {
-	case profileStatusNameUpdated:
-		return "Your name was updated."
-	case profileStatusNameUnchanged:
-		return "Your name is already set to that."
 	case profileStatusSessionOut:
 		return "The session was signed out."
 	case profileStatusOthersOut:
@@ -374,12 +272,6 @@ func profileErrorLabel(code string) string {
 	switch code {
 	case profileErrAntiforgery:
 		return "Your page expired. Please reload and try again."
-	case profileErrNameRequired:
-		return "Please enter a name."
-	case profileErrNameTooLong:
-		return "The name must be at most 100 characters."
-	case profileErrNameInvalid:
-		return "The name contains characters that are not allowed."
 	case profileErrPasswordMissing:
 		return "Please fill out all password fields."
 	case profileErrPasswordMismatch:

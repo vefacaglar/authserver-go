@@ -111,7 +111,6 @@ func buildTestServerForIssuer(t *testing.T, issuer string) *testServer {
 	}, testPassword)
 	_ = users.AddUserClaims(context.Background(), "u-demo", []domain.UserClaim{
 		{Type: "preferred_username", Value: testUser},
-		{Type: "name", Value: "Demo User"},
 		{Type: "email", Value: "demo@example.com"},
 		{Type: "email_verified", Value: "true"},
 	})

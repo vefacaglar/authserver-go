@@ -4,8 +4,8 @@ package oidc
 // composition root and the integration tests share one definition.
 func ProfileTemplate() string { return appPage(profileContent) }
 
-// profileContent holds the editable name form, the read-only account
-// fields and the active-session list with per-session sign-out.
+// profileContent holds the read-only account fields, the change-password
+// form and the active-session list with per-session sign-out.
 const profileContent = `{{ define "heading" }}my profile{{ end }}
 {{ define "content" }}
     <section>
@@ -14,20 +14,10 @@ const profileContent = `{{ define "heading" }}my profile{{ end }}
 
     <section class="bg-[#1a1a1a] border border-zinc-800/60 p-6">
       <h2 class="text-xs text-zinc-500 lowercase tracking-wide mb-4">account</h2>
-      <form class="space-y-6" method="post" action="{{ .Action }}">
-        <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
-        <div>
-          <label for="name" class="auth-label">name</label>
-          <input id="name" name="name" type="text" value="{{ .Name }}" maxlength="100" autocomplete="name" required class="auth-input">
-        </div>
-        <dl class="grid grid-cols-[8rem_1fr] gap-y-3 text-sm">
-          <dt class="text-zinc-500 lowercase">username</dt><dd class="text-zinc-300 break-all">{{ .Username }}</dd>
-          <dt class="text-zinc-500 lowercase">email</dt><dd class="text-zinc-300 break-all">{{ if .Email }}{{ .Email }}{{ else }}&mdash;{{ end }}</dd>
-        </dl>
-        <div class="sm:w-40">
-          <button type="submit" class="auth-btn">save</button>
-        </div>
-      </form>
+      <dl class="grid grid-cols-[8rem_1fr] gap-y-3 text-sm">
+        <dt class="text-zinc-500 lowercase">username</dt><dd class="text-zinc-300 break-all">{{ .Username }}</dd>
+        <dt class="text-zinc-500 lowercase">email</dt><dd class="text-zinc-300 break-all">{{ if .Email }}{{ .Email }}{{ else }}&mdash;{{ end }}</dd>
+      </dl>
     </section>
 
     <section class="bg-[#1a1a1a] border border-zinc-800/60 p-6">

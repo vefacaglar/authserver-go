@@ -43,7 +43,6 @@ type homeData struct {
 	Nav          appNav
 	ProfilePath  string
 	Username     string
-	Name         string
 	Email        string
 	Logins       []homeLogin
 	FailedLogins []homeLogin
@@ -77,17 +76,6 @@ func (h *HomeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ProfilePath: h.Cfg.ProfilePath,
 		Username:    user.Username,
 		Email:       user.Email,
-	}
-
-	claims, err := h.Users.GetUserClaims(ctx, sess.UserID)
-	if err != nil {
-		h.Logger.Warn("home: claims lookup failed", "err", err)
-	}
-	for _, c := range claims {
-		if c.Type == "name" {
-			data.Name = c.Value
-			break
-		}
 	}
 
 	data.Logins = h.history(r, sess.UserID, domain.AuditLoginSucceeded, true)
