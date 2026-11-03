@@ -2,12 +2,13 @@
 # Exercise the actual image and production Compose configuration with disposable data.
 set -euo pipefail
 image=${1:-authserver:ci}
+web_image=${2:-authserver-web:ci}
 repo=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
 network="authserver-ci-$$"
 database="authserver-ci-db-$$"
 project="authserver-ci-$$"
-export AUTH_IMAGE="$image" AUTH_DOCKER_NETWORK="$network" AUTH_BIND_PORT=15175
+export AUTH_IMAGE="$image" AUTH_WEB_IMAGE="$web_image" AUTH_DOCKER_NETWORK="$network" AUTH_BIND_PORT=15175 AUTH_WEB_BIND_PORT=15176
 
 compose() {
   docker compose --project-name "$project" --env-file "$work/.env" -f "$work/compose.yml" "$@"
@@ -54,4 +55,5 @@ curl --fail --silent --show-error http://127.0.0.1:15175/.well-known/openid-conf
   | jq -e '.issuer == "https://auth.vefacaglar.com"' > /dev/null
 curl --fail --silent --show-error http://127.0.0.1:15175/.well-known/jwks.json \
   | jq -e '(.keys | length) > 0 and all(.keys[]; has("d") | not)' > /dev/null
+curl --fail --silent --show-error http://127.0.0.1:15176/login | grep -q '<div id="root">'
 echo "Production container and migration checks passed."

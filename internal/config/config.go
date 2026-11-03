@@ -29,9 +29,11 @@ type Config struct {
 	// `authserver migrate` once at deploy time instead.
 	AutoMigrate bool
 
-	// Seed writes the demo client/user/scope fixtures during startup.
-	// Disable in production (AUTH_SEED=false). Both serve and migrate
-	// respect this setting.
+	// Seed writes the demo client/user/scope fixtures during startup,
+	// but only into an empty database (no users, clients, scopes, or
+	// roles yet); on a populated database it is a no-op. Disable in
+	// production (AUTH_SEED=false) to skip even that first seed. Both
+	// serve and migrate respect this setting.
 	Seed bool
 
 	CookieName string

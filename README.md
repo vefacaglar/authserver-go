@@ -130,7 +130,7 @@ modified by the workflow.
 | `AUTH_DB_DRIVER` | `postgres` | Must be `postgres` — the only supported runtime driver |
 | `AUTH_DB_DSN` | _(required)_ | PostgreSQL DSN, e.g. `postgres://user:pass@host:5432/db?sslmode=require` |
 | `AUTH_AUTO_MIGRATE` | `true` | Run schema migration on startup. Set `false` in production and run `authserver migrate` at deploy time for fast cold starts |
-| `AUTH_SEED` | `true` | Seed demo client/user/scopes during `serve` and `migrate`. Set `false` in production |
+| `AUTH_SEED` | `true` | Seed demo client/user/scopes during `serve` and `migrate`, but only into an empty database (no users, clients, scopes, or roles yet); on a populated database it is a no-op. Set `false` in production to skip even the first seed |
 | `AUTH_ADMIN_TOKEN` | _(required\*)_ | Admin API bearer; \*not required if `AUTH_ADMIN_ALLOW_ANONYMOUS=true` |
 | `AUTH_ADMIN_ALLOW_ANONYMOUS` | `false` | Dev-only: open the admin API without a token |
 | `AUTH_AUTH_CODE_LIFETIME` | `60s` | Must be ≤ 2m |

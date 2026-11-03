@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -603,11 +604,22 @@ func newGormBundle(db *gorm.DB, now func() time.Time) *storeBundle {
 // immediately without any admin UI: the four standard OIDC scopes, a
 // public demo client, a confidential demo client (private_key_jwt
 // with a freshly generated keypair), and a demo user.
+//
+// It only runs on an empty database: if any user, client, scope, or
+// role already exists, the seed is skipped entirely so restarts never
+// overwrite operator edits or resurrect deleted demo fixtures.
 func seedBundle(b *storeBundle, enabled bool) error {
 	if !enabled {
 		return nil
 	}
 	ctx := context.Background()
+	hasData, err := bundleHasData(ctx, b)
+	if err != nil {
+		return err
+	}
+	if hasData {
+		return nil
+	}
 	for _, s := range []domain.Scope{
 		{Name: "openid", DisplayName: "OpenID", Description: "Verify your identity", Required: true, Emphasize: true},
 		{Name: "profile", DisplayName: "Profile", Description: "Your basic profile information"},
@@ -664,6 +676,38 @@ func seedBundle(b *storeBundle, enabled bool) error {
 		return err
 	}
 	return nil
+}
+
+// bundleHasData reports whether any of the stores the seed writes to
+// already holds a row. Each probe reads at most one page/entry, so the
+// check stays cheap on populated databases.
+func bundleHasData(ctx context.Context, b *storeBundle) (bool, error) {
+	users, err := b.Users.GetPagedUsers(ctx, domain.PagedRequest{Page: 1, PageSize: 1})
+	if err != nil {
+		return false, fmt.Errorf("seed: probe users: %w", err)
+	}
+	if users.TotalCount > 0 {
+		return true, nil
+	}
+	clients, err := b.Clients.GetPaged(ctx, domain.PagedRequest{Page: 1, PageSize: 1})
+	if err != nil {
+		return false, fmt.Errorf("seed: probe clients: %w", err)
+	}
+	if clients.TotalCount > 0 {
+		return true, nil
+	}
+	scopes, err := b.Scopes.GetAll(ctx)
+	if err != nil {
+		return false, fmt.Errorf("seed: probe scopes: %w", err)
+	}
+	if len(scopes) > 0 {
+		return true, nil
+	}
+	roles, err := b.Roles.GetAllRoles(ctx)
+	if err != nil {
+		return false, fmt.Errorf("seed: probe roles: %w", err)
+	}
+	return len(roles) > 0, nil
 }
 
 // newSeededConfidentialClient generates a fresh RSA-2048 keypair,

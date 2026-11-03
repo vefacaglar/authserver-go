@@ -83,8 +83,6 @@ jobs:
           tags: authserver:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Verify PostgreSQL migration and production container
-        run: bash scripts/ci-container-smoke.sh authserver:ci
       - name: Build web image for runtime checks
         uses: docker/build-push-action@v7
         with:
@@ -94,6 +92,8 @@ jobs:
           tags: authserver-web:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Verify PostgreSQL migration and production container
+        run: bash scripts/ci-container-smoke.sh authserver:ci authserver-web:ci
       - name: Verify web container serves the SPA
         run: |
           docker run -d --name authserver-web-ci -p 127.0.0.1:8080:8080 authserver-web:ci
