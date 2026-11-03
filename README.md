@@ -100,8 +100,10 @@ step, container health checks and image rollback. See
 `AUTH_DEPLOY_ENABLED` switch. CD creates the application directory and sends the
 runtime configuration from individual `AUTH_DB_DSN` / `AUTH_ADMIN_TOKEN` secrets
 and optional `AUTH_ENV` settings on every deployment; no manual copying, server env
-editing or registry login is needed. Existing Docker, SSH access and reverse proxy
-configuration are prerequisites. DNS is not modified by the workflow.
+editing or registry login is needed. CD also adds the auth route to an existing
+persistent Caddyfile, validates and reloads Caddy, then checks HTTPS directly on
+the VPS. Existing Docker, SSH access and Caddy are prerequisites. DNS is not
+modified by the workflow.
 
 ### Configuration reference
 

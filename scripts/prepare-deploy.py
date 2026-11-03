@@ -2,6 +2,7 @@
 """Build a private deployment bundle from GitHub secrets without shell evaluation."""
 
 import os
+import json
 from pathlib import Path
 import re
 import shutil
@@ -52,7 +53,7 @@ def prepare(destination: Path) -> None:
 
     destination.mkdir(mode=0o700, parents=True, exist_ok=False)
     source = Path(__file__).resolve().parent.parent / "deploy"
-    for name in ("compose.yml", "deploy.sh", "receive.sh"):
+    for name in ("compose.yml", "deploy.sh", "receive.sh", "configure-caddy.py"):
         shutil.copyfile(source / name, destination / name)
         (destination / name).chmod(0o600)
     for name, content in {
@@ -60,6 +61,10 @@ def prepare(destination: Path) -> None:
         ".env": f"AUTH_DOCKER_NETWORK={network}\nAUTH_BIND_PORT={port}\n",
         "image": image + "\n",
         "registry-user": actor + "\n",
+        "proxy.json": json.dumps({
+            "container": os.environ.get("AUTH_CADDY_CONTAINER", ""),
+            "config_path": os.environ.get("AUTH_CADDY_CONFIG_PATH", ""),
+        }) + "\n",
     }.items():
         path = destination / name
         path.write_text(content, encoding="utf-8")

@@ -397,8 +397,17 @@ settings come from repository variables. Use the job-scoped, package-read
 `GITHUB_TOKEN` for temporary registry login on the host and remove its credential
 directory after the deployment. Serialize configuration installation with the
 deployment lock and restore the previous environment when a deployment fails.
-An existing Docker/Compose host, authorized SSH access, database and reverse proxy
-remain prerequisites; provisioning them and changing DNS are separate operations.
+An existing Docker/Compose host, authorized SSH access, database and Caddy
+installation remain prerequisites. After the application is healthy, CD discovers
+the existing Caddy container or host service, adds only the managed auth domain
+block to its persistent Caddyfile, validates and reloads it. Preserve other sites
+and restore the original file on validation/reload failure. Refuse ambiguous
+containers, ephemeral/generated configuration and unmanaged duplicate auth routes.
+Connect containerized Caddy to the existing application network when necessary.
+Probe HTTPS directly against the VPS, retaining the auth domain's TLS SNI, so an
+old Render DNS response cannot pass the deployment check. DNS changes remain
+external; public A/AAAA records and ports 80/443 must reach Caddy for certificate
+issuance. Do not report HTTPS ready before the direct probe succeeds.
 Use PostgreSQL persistence, HTTPS, authenticated
 admin access, `AUTH_AUTO_MIGRATE=false`, and `AUTH_SEED=false`. Both `serve` and
 `migrate` must honor the seed setting. Apply migrations before replacing the

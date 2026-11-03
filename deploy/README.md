@@ -2,8 +2,9 @@
 
 Target: `https://auth.vefacaglar.com` on `187.126.24.87`.
 The workflow builds a Linux amd64 image. This directory assumes an existing
-Docker host, PostgreSQL database, and Caddy reverse proxy. It does not install
-them or change DNS. Use Docker Compose 2.30+ (raw environment files).
+Docker host, PostgreSQL database, and Caddy reverse proxy. It configures the auth
+route in the existing Caddyfile, but does not install these services or change DNS.
+Use Docker Compose 2.30+ (raw environment files).
 
 ## CI/CD
 
@@ -76,6 +77,8 @@ Add these **repository Actions variables**:
 | `AUTH_DEPLOY_ENABLED` | `true` to deploy after successful main-branch CI |
 | `AUTH_DOCKER_NETWORK` | Existing network shared with the reverse proxy; default `databases_default` |
 | `AUTH_BIND_PORT` | Optional loopback port; default `5175` |
+| `AUTH_CADDY_CONTAINER` | Optional Caddy container name/ID; automatically detected when exactly one running image contains `caddy` |
+| `AUTH_CADDY_CONFIG_PATH` | Optional configuration path inside the container or on the host; detected from container arguments or defaults to `/etc/caddy/Caddyfile` |
 
 Push to `main` or select **Actions → CI and deploy → Run workflow → main**.
 Updating a secret alone does not start a deployment; run the workflow to apply it.
@@ -91,17 +94,30 @@ read it (automatic for packages published by this repository's workflow).
 
 ## Existing infrastructure
 
-The host must already provide Docker, Compose 2.30+, `flock`, authorized SSH
+The host must already provide Docker, Compose 2.30+, Python 3, `flock`, authorized SSH
 access and the configured Docker network. The PostgreSQL DSN must be reachable
 from that host. This workflow does not provision a fresh VPS, create a database,
-modify another service's proxy configuration, or manage DNS.
+or manage DNS.
 
 `auth.vefacaglar.com` must resolve to `187.126.24.87`, with ports 80/443 reaching
-Caddy. The existing proxy must route to `authserver:5175` on the shared network,
-or `127.0.0.1:5175` when Caddy runs directly on the host. See `Caddyfile.example`
-for the route and forwarding-header configuration. A CDN needs an explicit
-trusted-proxy setup. Once that infrastructure is in place, routine deployments
-and all runtime configuration changes are handled from GitHub alone.
+Caddy. CD adds a marked `auth.vefacaglar.com` block to the persistent Caddyfile,
+preserving all other sites, and validates before reloading. The original file is
+restored on validation/reload errors. The deployment user must be able to read and
+write that persistent file. Containerized Caddy is connected to the application
+network if needed and forwards to `authserver:5175`; a host systemd Caddy service
+forwards to `127.0.0.1:AUTH_BIND_PORT`.
+
+Automatic detection supports a single conventional Caddy container with a mounted
+Caddyfile, or a running host `caddy` service. Multiple containers need the optional
+GitHub variable above. Generated Caddy Docker Proxy configuration, `--resume`,
+nonpersistent files and preexisting unmanaged auth routes are rejected instead
+of being overwritten. Keep the route's generated markers intact for repeat deploys.
+
+Caddy obtains the public certificate automatically when DNS and ports 80/443
+reach it. The workflow retries HTTPS for certificate issuance and connects directly
+to the VPS while checking the auth hostname, so stale Render DNS cannot pass.
+Public DNS endpoint checks follow. A CDN needs an explicit trusted-proxy setup;
+use DNS-only mode for this configuration.
 
 ## Migration from Render
 

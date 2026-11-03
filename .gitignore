@@ -101,4 +101,6 @@ plan-2.md
 /deploy/.last-good-compose.yml
 /deploy/.deploy.lock
 /deploy/.deploy-backup.*/
+/deploy/.caddy-backup-*/
+/deploy/.proxy.lock
 __pycache__/

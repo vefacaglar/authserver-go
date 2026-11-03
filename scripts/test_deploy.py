@@ -97,6 +97,9 @@ class DeployTest(unittest.TestCase):
         bindir.mkdir()
         # The real Linux deployment uses flock; tests only exercise control flow.
         (bindir / "flock").write_text("#!/bin/sh\nexit 0\n")
+        (bindir / "python3").write_text(
+            '#!/bin/sh\nprintf "configure-caddy\\n" >> "$TEST_LOG"\n'
+        )
         (bindir / "docker").write_text('''#!/usr/bin/env bash
 set -eu
 printf '%s|%s\\n' "${AUTH_IMAGE:-}" "$*" >> "$TEST_LOG"
@@ -146,6 +149,7 @@ fi
         )
         self.assertLess(calls.index("login"), calls.index("pull authserver"))
         self.assertLess(calls.index("run --rm"), calls.index("up -d"))
+        self.assertLess(calls.index("up -d"), calls.index("configure-caddy"))
 
     def setup_previous_release(self):
         (self.root / ".current-image").write_text(OLD_IMAGE + "\n")
