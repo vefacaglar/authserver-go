@@ -459,16 +459,18 @@ func run(logger *slog.Logger) error {
 	}
 	apiMux := http.NewServeMux()
 	(&admin.API{
-		Clients:       bundle.Clients,
-		Scopes:        bundle.Scopes,
-		Sessions:      bundle.Sessions,
-		RefreshTokens: bundle.RefreshTokens,
-		SigningKeys:   bundle.SigningKeys,
-		AuditLogs:     bundle.AuditLogs,
-		Users:         bundle.Users,
-		Roles:         bundle.Roles,
-		Clock:         clk,
-		Logger:        logger,
+		Clients:        bundle.Clients,
+		Scopes:         bundle.Scopes,
+		Sessions:       bundle.Sessions,
+		RefreshTokens:  bundle.RefreshTokens,
+		SigningKeys:    bundle.SigningKeys,
+		AuditLogs:      bundle.AuditLogs,
+		Users:          bundle.Users,
+		Roles:          bundle.Roles,
+		PasswordResets: bundle.PasswordResets,
+		Clock:          clk,
+		Logger:         logger,
+		ClientIP:       server.ClientIP,
 	}).Mount(apiMux)
 	adminHandler := authMW(admin.CSRFMiddleware()(apiMux))
 

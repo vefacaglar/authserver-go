@@ -157,12 +157,17 @@ export default function Users() {
         lockout_end: view.user.lockout_end ?? null,
         access_failed_count: view.user.access_failed_count,
       });
+      let revoked: number | null = null;
       if (newPassword) {
-        await apiPost(`/admin/api/users/${encodeURIComponent(view.user.id)}/password`, { password: newPassword });
+        const r = await apiPost<{ sessions_revoked: number }>(
+          `/admin/api/users/${encodeURIComponent(view.user.id)}/password`,
+          { password: newPassword },
+        );
+        revoked = r.sessions_revoked;
         setNewPassword("");
       }
       setView({ ...view, user: updated });
-      toast("user profile saved");
+      toast(revoked === null ? "user profile saved" : `user profile saved — password reset, ${revoked} session(s) signed out`);
       list.reload();
     } catch (err) {
       setFormError(errorMessage(err));
@@ -464,6 +469,9 @@ export default function Users() {
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
               />
+              <p className="text-[11px] text-zinc-500 lowercase mt-1">
+                8-72 characters. setting a password signs the user out everywhere and revokes their refresh tokens.
+              </p>
             </div>
 
             {view.logins.length > 0 && (

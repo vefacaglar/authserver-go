@@ -819,6 +819,128 @@ func TestAPI_GenerateClientJWKSAndProfile(t *testing.T) {
 	}
 }
 
+func TestAPI_SetUserPassword_EnforcesPolicyAndRevokesEverything(t *testing.T) {
+	ctx := context.Background()
+	a := newTestAPI(t)
+	resets := memory.NewPasswordResetStore()
+	a.PasswordResets = resets
+	mux := http.NewServeMux()
+	a.Mount(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	now := a.Clock.Now().UTC()
+	user := &domain.User{ID: "u-1", Username: "alice", SecurityStamp: "stamp-before", CreatedAt: now, UpdatedAt: now}
+	if err := a.Users.CreateUser(ctx, user, "OldPassword1"); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	var sessionIDs []uuid.UUID
+	for i := range 2 {
+		sid := uuid.New()
+		sessionIDs = append(sessionIDs, sid)
+		if err := a.Sessions.Store(ctx, &domain.Session{ID: sid, UserID: "u-1", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
+			t.Fatalf("store session: %v", err)
+		}
+		if err := a.RefreshTokens.Store(ctx, &domain.RefreshToken{
+			ID:                uuid.New(),
+			TokenHash:         fmt.Sprintf("rt-hash-%d", i),
+			ClientID:          "c",
+			UserID:            "u-1",
+			SessionID:         &sid,
+			ExpiresAt:         now.Add(time.Hour),
+			AbsoluteExpiresAt: now.Add(24 * time.Hour),
+			CreatedAt:         now,
+		}); err != nil {
+			t.Fatalf("store refresh token: %v", err)
+		}
+	}
+	if err := resets.Create(ctx, &domain.PasswordResetToken{ID: uuid.New(), UserID: "u-1", TokenHash: "reset-hash", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatalf("create reset token: %v", err)
+	}
+
+	post := func(pw string) *http.Response {
+		t.Helper()
+		body, _ := json.Marshal(setPasswordRequest{Password: pw})
+		resp, err := http.Post(srv.URL+"/api/users/u-1/password", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("set password: %v", err)
+		}
+		return resp
+	}
+
+	for _, weak := range []string{"short", " LeadingSpace1", strings.Repeat("a", domain.PasswordMaxBytes+1)} {
+		resp := post(weak)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("weak password %q: status = %d, want 400", weak, resp.StatusCode)
+		}
+	}
+	if s, _ := a.Sessions.Find(ctx, sessionIDs[0]); s.RevokedAt != nil {
+		t.Fatal("rejected password must not revoke sessions")
+	}
+
+	resp := post("NewPassword1")
+	var res struct {
+		SessionsRevoked int `json:"sessions_revoked"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&res)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if res.SessionsRevoked != 2 {
+		t.Errorf("sessions_revoked = %d, want 2", res.SessionsRevoked)
+	}
+
+	if info, _ := a.Users.ValidateCredentials(ctx, "alice", "NewPassword1"); info == nil {
+		t.Error("new password does not validate")
+	}
+	if info, _ := a.Users.ValidateCredentials(ctx, "alice", "OldPassword1"); info != nil {
+		t.Error("old password still validates")
+	}
+	for _, sid := range sessionIDs {
+		if s, _ := a.Sessions.Find(ctx, sid); s == nil || s.RevokedAt == nil {
+			t.Errorf("session %s not revoked", sid)
+		}
+	}
+	for i := range 2 {
+		rt, _ := a.RefreshTokens.FindByHash(ctx, fmt.Sprintf("rt-hash-%d", i))
+		if rt == nil || rt.RevokedAt == nil {
+			t.Errorf("refresh token %d not revoked", i)
+		}
+	}
+	if u, _ := a.Users.FindUserByID(ctx, "u-1"); u.SecurityStamp == "stamp-before" {
+		t.Error("security stamp not rotated")
+	}
+	if rt, _ := resets.FindByHash(ctx, "reset-hash"); rt.ConsumedAt == nil {
+		t.Error("outstanding reset token not invalidated")
+	}
+	logs, _ := a.AuditLogs.GetPaged(ctx, domain.PagedRequest{Page: 1, PageSize: 10})
+	found := false
+	for _, l := range logs.Items {
+		if l.Action == domain.AuditAdminPasswordSet && l.TargetID == "u-1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("missing admin_password_set audit entry")
+	}
+}
+
+func TestAPI_CreateUser_EnforcesPasswordPolicy(t *testing.T) {
+	srv := newTestAPIServer(t)
+	defer srv.Close()
+	body, _ := json.Marshal(createUserRequest{Username: "bob", Password: "short"})
+	resp, err := http.Post(srv.URL+"/api/users", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
 func TestAPI_ConcurrentRotateLeavesOneActiveKey(t *testing.T) {
 	a := newTestAPI(t)
 	mux := http.NewServeMux()

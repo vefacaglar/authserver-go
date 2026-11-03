@@ -1,34 +1,22 @@
 package oidc
 
-import (
-	"errors"
-	"strings"
-)
+import "go-authserver/internal/domain"
 
-// Password length bounds. The upper bound is bcrypt's 72-byte input
-// limit; longer values would be silently truncated.
+// The password policy lives in domain so the admin API enforces the same
+// rules; these names keep the oidc call sites unchanged.
 const (
-	PasswordMinLength = 8
-	PasswordMaxBytes  = 72
+	PasswordMinLength = domain.PasswordMinLength
+	PasswordMaxBytes  = domain.PasswordMaxBytes
 )
 
 var (
-	ErrPasswordTooShort   = errors.New("password must be at least 8 characters")
-	ErrPasswordTooLong    = errors.New("password must be at most 72 bytes")
-	ErrPasswordWhitespace = errors.New("password must not be blank or start/end with whitespace")
+	ErrPasswordTooShort   = domain.ErrPasswordTooShort
+	ErrPasswordTooLong    = domain.ErrPasswordTooLong
+	ErrPasswordWhitespace = domain.ErrPasswordWhitespace
 )
 
 // ValidatePassword enforces the server-side password policy shared by
 // register, change-password and reset-password.
 func ValidatePassword(pw string) error {
-	if strings.TrimSpace(pw) == "" || pw != strings.TrimSpace(pw) {
-		return ErrPasswordWhitespace
-	}
-	if len([]rune(pw)) < PasswordMinLength {
-		return ErrPasswordTooShort
-	}
-	if len(pw) > PasswordMaxBytes {
-		return ErrPasswordTooLong
-	}
-	return nil
+	return domain.ValidatePassword(pw)
 }

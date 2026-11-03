@@ -29,8 +29,14 @@ type API struct {
 	AuditLogs     store.AuditLogStore
 	Users         store.UserStore
 	Roles         store.RoleStore
-	Clock         clock.Clock
-	Logger        *slog.Logger
+	// PasswordResets is optional; when set, an admin password change also
+	// kills any reset link still in flight for the user.
+	PasswordResets store.PasswordResetStore
+	Clock          clock.Clock
+	Logger         *slog.Logger
+	// ClientIP extracts the caller IP for audit entries; RemoteAddr is
+	// used when nil.
+	ClientIP func(*http.Request) string
 
 	// rotateMu serializes signing key rotations; KeyManager.Rotate is not
 	// safe to run concurrently.
@@ -722,6 +728,10 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, http.StatusBadRequest, "username and password are required", nil)
 		return
 	}
+	if err := domain.ValidatePassword(body.Password); err != nil {
+		a.writeError(w, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
 	if body.ID == "" {
 		body.ID = uuid.NewString()
 	}
@@ -970,7 +980,12 @@ func (a *API) setUserPassword(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, http.StatusBadRequest, "password is required", nil)
 		return
 	}
-	if err := a.Users.SetPassword(r.Context(), id, body.Password); err != nil {
+	if err := domain.ValidatePassword(body.Password); err != nil {
+		a.writeError(w, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	ctx := r.Context()
+	if err := a.Users.SetPassword(ctx, id, body.Password); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
@@ -978,7 +993,89 @@ func (a *API) setUserPassword(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, http.StatusInternalServerError, "update failed", err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+
+	// An admin reset is typically incident response: whoever holds the old
+	// credentials or an existing session may be the attacker. Mirror the
+	// self-service reset flow and end everything tied to the old password.
+	// The password is already changed, so cleanup failures are logged and
+	// reported rather than rolled back.
+	now := a.Clock.Now().UTC()
+	cleanupFailed := false
+	if user, err := a.Users.FindUserByID(ctx, id); err == nil {
+		user.SecurityStamp = uuid.NewString()
+		user.UpdatedAt = now
+		if err := a.Users.UpdateUser(ctx, user); err != nil {
+			a.logError("admin password set: security stamp rotation failed", err)
+			cleanupFailed = true
+		}
+	} else {
+		a.logError("admin password set: user lookup failed", err)
+		cleanupFailed = true
+	}
+	if a.PasswordResets != nil {
+		if err := a.PasswordResets.InvalidateForUser(ctx, id, now); err != nil {
+			a.logError("admin password set: invalidating reset tokens failed", err)
+			cleanupFailed = true
+		}
+	}
+	revoked, err := a.Sessions.RevokeByUserIDExcept(ctx, id, uuid.Nil, now)
+	if err != nil {
+		a.logError("admin password set: revoking sessions failed", err)
+		cleanupFailed = true
+	}
+	for _, sid := range revoked {
+		if err := a.RefreshTokens.RevokeBySessionID(ctx, sid, now); err != nil {
+			a.logError("admin password set: revoking refresh tokens failed", err)
+			cleanupFailed = true
+		}
+	}
+	a.auditPasswordSet(r, id, len(revoked))
+	if cleanupFailed {
+		a.writeError(w, http.StatusInternalServerError,
+			"password changed, but revoking existing sessions failed; revoke them manually", nil)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, map[string]any{"sessions_revoked": len(revoked)})
+}
+
+func (a *API) auditPasswordSet(r *http.Request, userID string, revoked int) {
+	if a.AuditLogs == nil {
+		return
+	}
+	ip := ""
+	if a.ClientIP != nil {
+		ip = a.ClientIP(r)
+	}
+	if ip == "" {
+		ip = r.RemoteAddr
+	}
+	err := a.AuditLogs.Store(r.Context(), &domain.AuditLog{
+		ID:          uuid.New(),
+		Action:      domain.AuditAdminPasswordSet,
+		ActorUserID: actorFrom(r),
+		TargetType:  "User",
+		TargetID:    userID,
+		Timestamp:   a.Clock.Now().UTC(),
+		IPAddress:   truncate(ip, 64),
+		UserAgent:   truncate(r.UserAgent(), 512),
+		Metadata:    fmt.Sprintf(`{"sessions_revoked":%d}`, revoked),
+	})
+	if err != nil {
+		a.logError("admin password set: audit write failed", err)
+	}
+}
+
+func (a *API) logError(msg string, err error) {
+	if a.Logger != nil {
+		a.Logger.Error(msg, "err", err)
+	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 // --- Roles ---

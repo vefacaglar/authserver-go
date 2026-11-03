@@ -42,6 +42,19 @@ func authMethodFrom(r *http.Request) authMethod {
 	return m
 }
 
+type actorCtxKey struct{}
+
+func withActor(r *http.Request, userID string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), actorCtxKey{}, userID))
+}
+
+// actorFrom returns the user ID of the signed-in admin, or "" when the
+// request was authorized by the static token or anonymous mode.
+func actorFrom(r *http.Request) string {
+	id, _ := r.Context().Value(actorCtxKey{}).(string)
+	return id
+}
+
 // AuthConfig captures the policy inputs for the admin auth middleware.
 type AuthConfig struct {
 	// Token is the static Bearer token shared with admin scripts. The
@@ -100,7 +113,7 @@ func AuthMiddleware(cfg AuthConfig, logger *slog.Logger) (func(http.Handler) htt
 					}
 					if containsString(roles, adminRole) {
 						w.Header().Set("X-Admin-Auth", "session")
-						next.ServeHTTP(w, withAuthMethod(r, authSession))
+						next.ServeHTTP(w, withActor(withAuthMethod(r, authSession), sess.UserID))
 						return
 					}
 					if logger != nil {

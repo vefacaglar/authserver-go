@@ -3044,16 +3044,17 @@ func buildTestAdminMount(t *testing.T, b bundle, clk *clock.FakeClock, logger *s
 	}
 	apiMux := http.NewServeMux()
 	(&admin.API{
-		Clients:       b.Clients,
-		Scopes:        b.Scopes,
-		Sessions:      b.Sessions,
-		RefreshTokens: b.RefreshTokens,
-		SigningKeys:   b.SigningKeys,
-		AuditLogs:     b.AuditLogs,
-		Users:         b.Users,
-		Roles:         b.Roles,
-		Clock:         clk,
-		Logger:        logger,
+		Clients:        b.Clients,
+		Scopes:         b.Scopes,
+		Sessions:       b.Sessions,
+		RefreshTokens:  b.RefreshTokens,
+		SigningKeys:    b.SigningKeys,
+		AuditLogs:      b.AuditLogs,
+		Users:          b.Users,
+		Roles:          b.Roles,
+		PasswordResets: b.PasswordResets,
+		Clock:          clk,
+		Logger:         logger,
 	}).Mount(apiMux)
 	return authMW(admin.CSRFMiddleware()(apiMux))
 }
