@@ -14,10 +14,22 @@ compose() {
   docker compose --project-name "$project" --env-file "$work/.env" -f "$work/compose.yml" "$@"
 }
 cleanup() {
+  local status=$?
+  if ((status != 0)); then
+    echo "Container smoke check failed; collecting diagnostics before cleanup." >&2
+    compose ps --all || true
+    compose logs --no-color --tail 100 || true
+    local container
+    while IFS= read -r container; do
+      [[ -n "$container" ]] || continue
+      docker inspect --format '{{.Name}} {{json .State}}' "$container" || true
+    done < <(compose ps --all --quiet)
+  fi
   compose down --volumes || true
   docker rm -f "$database" > /dev/null 2>&1 || true
   docker network rm "$network" > /dev/null 2>&1 || true
   rm -rf "$work"
+  exit "$status"
 }
 trap cleanup EXIT
 cp "$repo/deploy/compose.yml" "$work/compose.yml"

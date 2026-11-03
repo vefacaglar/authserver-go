@@ -9,6 +9,9 @@ COPY src ./src
 RUN pnpm run build
 
 FROM caddy:2-alpine
+# Port 8080 needs no privileged-port capability. Remove the file capability
+# inherited from Caddy so it can run with Compose's cap_drop: [ALL].
+RUN setcap -r /usr/bin/caddy
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /app/dist /srv
 EXPOSE 8080
