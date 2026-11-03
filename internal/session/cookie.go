@@ -20,6 +20,11 @@ import (
 // present or the cookie is malformed.
 var ErrNoSession = errors.New("session: no session")
 
+// ErrInvalidCookie is wrapped by Decode (and so FromRequest) when a
+// session cookie is present but fails verification or parsing. Callers
+// use it to tell a bad cookie apart from a store failure.
+var ErrInvalidCookie = errors.New("session: invalid cookie")
+
 // CookieConfig captures the policy of how the session cookie is named and
 // scoped. It is produced from the server Config and is what CookieManager
 // reads on every Set/Load.
@@ -84,11 +89,11 @@ func (m *CookieManager) Encode(id uuid.UUID) (string, error) {
 func (m *CookieManager) Decode(raw string) (uuid.UUID, error) {
 	var s string
 	if err := securecookie.DecodeMulti(m.config.Name, raw, &s, m.codecs...); err != nil {
-		return uuid.Nil, fmt.Errorf("session: decode: %w", err)
+		return uuid.Nil, fmt.Errorf("%w: decode: %w", ErrInvalidCookie, err)
 	}
 	id, err := uuid.Parse(s)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("session: parse id: %w", err)
+		return uuid.Nil, fmt.Errorf("%w: parse id: %w", ErrInvalidCookie, err)
 	}
 	return id, nil
 }

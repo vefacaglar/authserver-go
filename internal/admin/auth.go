@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"go-authserver/internal/domain"
+	"go-authserver/internal/session"
 	"go-authserver/internal/store"
 )
 
@@ -102,7 +103,17 @@ func AuthMiddleware(cfg AuthConfig, logger *slog.Logger) (func(http.Handler) htt
 				return
 			}
 			if cfg.Sessions != nil && cfg.Users != nil {
-				if sess, err := cfg.Sessions.Resolve(r); err == nil && sess != nil {
+				sess, err := cfg.Sessions.Resolve(r)
+				if err != nil && !isNoSessionError(err) {
+					// A store failure is not a missing login: answering 401
+					// would hide the outage and bounce a signed-in admin.
+					if logger != nil {
+						logger.Error("admin auth: session lookup failed", "err", err)
+					}
+					writeAuthError(w, http.StatusInternalServerError, "server_error")
+					return
+				}
+				if err == nil && sess != nil {
 					roles, err := cfg.Users.GetUserRoles(r.Context(), sess.UserID)
 					if err != nil {
 						if logger != nil {
@@ -130,6 +141,15 @@ func AuthMiddleware(cfg AuthConfig, logger *slog.Logger) (func(http.Handler) htt
 			writeAuthError(w, http.StatusUnauthorized, "unauthorized")
 		})
 	}, nil
+}
+
+// isNoSessionError reports whether a Resolve error means the request
+// simply carries no usable session (missing, bad, or unknown cookie)
+// rather than a failure to look it up.
+func isNoSessionError(err error) bool {
+	return errors.Is(err, session.ErrNoSession) ||
+		errors.Is(err, session.ErrInvalidCookie) ||
+		errors.Is(err, store.ErrNotFound)
 }
 
 func writeAuthError(w http.ResponseWriter, status int, msg string) {

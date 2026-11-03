@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,8 @@ import (
 
 	"go-authserver/internal/clock"
 	"go-authserver/internal/domain"
+	"go-authserver/internal/session"
+	"go-authserver/internal/store"
 	"go-authserver/internal/store/memory"
 
 	"github.com/google/uuid"
@@ -242,6 +245,44 @@ func TestAuthMiddleware_NoSessionFallsThroughTo401(t *testing.T) {
 	})).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/admin/api/clients", nil))
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 when there is no session and no token", rr.Code)
+	}
+}
+
+func TestAuthMiddleware_UnusableSessionCookieIs401(t *testing.T) {
+	for name, resolveErr := range map[string]error{
+		"no cookie":      session.ErrNoSession,
+		"invalid cookie": fmt.Errorf("%w: decode: bad mac", session.ErrInvalidCookie),
+		"unknown id":     fmt.Errorf("session x: %w", store.ErrNotFound),
+	} {
+		t.Run(name, func(t *testing.T) {
+			mw, _ := AuthMiddleware(AuthConfig{
+				Token:    testAdminToken,
+				Sessions: stubSessionResolver{err: resolveErr},
+				Users:    memory.NewUserStore(),
+			}, nil)
+			rr := httptest.NewRecorder()
+			mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/admin/api/clients", nil))
+			if rr.Code != http.StatusUnauthorized {
+				t.Errorf("status = %d, want 401", rr.Code)
+			}
+		})
+	}
+}
+
+func TestAuthMiddleware_SessionStoreFailureIs500(t *testing.T) {
+	mw, _ := AuthMiddleware(AuthConfig{
+		Token:    testAdminToken,
+		Sessions: stubSessionResolver{err: errors.New("db: too many connections")},
+		Users:    memory.NewUserStore(),
+	}, nil)
+	rr := httptest.NewRecorder()
+	mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/admin/api/clients", nil))
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 when the session store fails", rr.Code)
 	}
 }
 
