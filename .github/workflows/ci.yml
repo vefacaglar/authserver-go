@@ -44,7 +44,7 @@ jobs:
           from pathlib import Path
           import runpy
           proxy = runpy.run_path('deploy/configure-caddy.py')
-          config = proxy['updated_config']('existing.example.test { respond ok }\n', 'authserver:5175', False)
+          config = proxy['updated_config']('existing.example.test {\n    respond ok\n}\n', 'authserver:5175', False)
           (Path(os.environ['RUNNER_TEMP']) / 'authserver-test-Caddyfile').write_text(config)
           PY
           docker run --rm --mount "type=bind,src=$RUNNER_TEMP/authserver-test-Caddyfile,dst=/etc/caddy/Caddyfile,readonly" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile

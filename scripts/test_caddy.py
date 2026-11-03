@@ -30,7 +30,7 @@ class CaddyTest(unittest.TestCase):
 
     def test_refuses_existing_unmanaged_or_imported_auth_route(self):
         for original, routed in (
-            ("auth.vefacaglar.com { respond old }", False),
+            ("auth.vefacaglar.com {\n    respond old\n}\n", False),
             ("import sites/*", True),
         ):
             with self.assertRaises(RuntimeError):
@@ -53,7 +53,7 @@ class CaddyTest(unittest.TestCase):
         for failure in ("validate", "reload"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
                 source = Path(directory) / "Caddyfile"
-                original = "other.example.test { respond ok }\n"
+                original = "other.example.test {\n    respond ok\n}\n"
                 source.write_text(original)
                 inode = source.stat().st_ino
 
@@ -102,7 +102,7 @@ class CaddyTest(unittest.TestCase):
     def test_host_service_uses_loopback_port(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "Caddyfile"
-            config.write_text("other.example.test { respond ok }\n")
+            config.write_text("other.example.test {\n    respond ok\n}\n")
             with patch.object(CADDY, "run", return_value="") as command, patch.object(CADDY.shutil, "which", return_value="/usr/bin/caddy"):
                 source, cmd, _, upstream = CADDY.target({"config_path": str(config)}, "network", "5176")
             self.assertEqual(source, config)
@@ -113,7 +113,7 @@ class CaddyTest(unittest.TestCase):
     def test_successful_apply_validates_before_reload_and_preserves_inode(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "Caddyfile"
-            source.write_text("other.example.test { respond ok }\n")
+            source.write_text("other.example.test {\n    respond ok\n}\n")
             inode = source.stat().st_ino
             with patch.object(CADDY, "run", side_effect=["{}", "", ""]) as command:
                 CADDY.apply_config(source, ["caddy"], str(source), "authserver:5175", directory)
