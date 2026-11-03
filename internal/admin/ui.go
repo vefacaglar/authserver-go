@@ -66,4 +66,3 @@ func (u *UI) ServeIndex(w http.ResponseWriter, r *http.Request) {
 	// Serve the static asset from embedded filesystem directly
 	http.FileServer(http.FS(assetsFS)).ServeHTTP(w, r)
 }
-

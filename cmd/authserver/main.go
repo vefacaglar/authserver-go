@@ -68,7 +68,7 @@ func main() {
 }
 
 // runMigrate opens the configured PostgreSQL database, applies the GORM
-// schema migration, and seeds the demo fixtures. It is a one-shot command
+// schema migration, and optionally seeds the demo fixtures. It is a one-shot command
 // meant to run at deploy time (not on every cold start). config.Load
 // guarantees the driver is postgres.
 func runMigrate(logger *slog.Logger) error {
@@ -94,7 +94,7 @@ func runMigrate(logger *slog.Logger) error {
 	logger.Info("migration applied", "driver", drv)
 
 	bundle := newGormBundle(db, time.Now)
-	if err := seedBundle(bundle); err != nil {
+	if err := seedBundle(bundle, cfg.Seed); err != nil {
 		return err
 	}
 	// Pre-create the active signing + data-protection keys so the serve
@@ -109,7 +109,7 @@ func runMigrate(logger *slog.Logger) error {
 	if _, err := dpManager.EnsureActiveKey(ctx); err != nil {
 		return err
 	}
-	logger.Info("seed + signing/data-protection keys ready", "driver", drv)
+	logger.Info("signing/data-protection keys ready", "driver", drv, "seed_enabled", cfg.Seed)
 	return nil
 }
 
@@ -223,11 +223,9 @@ func run(logger *slog.Logger) error {
 	}
 
 	// Seed demo fixtures only when AUTH_SEED is set (default true; turn off
-	// in production once the migrate command has run).
-	if cfg.Seed {
-		if err := seedBundle(bundle); err != nil {
-			return err
-		}
+	// in production, including when running the migrate command).
+	if err := seedBundle(bundle, cfg.Seed); err != nil {
+		return err
 	}
 
 	keyManager := token.NewKeyManager(bundle.SigningKeys, clk)
@@ -415,9 +413,9 @@ func run(logger *slog.Logger) error {
 			Clients: bundle.Clients,
 			Issuer:  issuer,
 			Clock:   clk,
-		Cfg: grants.ClientCredentialsConfig{
-			AccessTokenLifetime: cfg.AccessTokenLifetime,
-		},
+			Cfg: grants.ClientCredentialsConfig{
+				AccessTokenLifetime: cfg.AccessTokenLifetime,
+			},
 		},
 		ClientAuth: oidc.ClientAuthConfig{
 			IssuerURL:        cfg.Issuer,
@@ -633,7 +631,10 @@ func newGormBundle(db *gorm.DB, now func() time.Time) *storeBundle {
 // immediately without any admin UI: the four standard OIDC scopes, a
 // public demo client, a confidential demo client (private_key_jwt
 // with a freshly generated keypair), and a demo user.
-func seedBundle(b *storeBundle) error {
+func seedBundle(b *storeBundle, enabled bool) error {
+	if !enabled {
+		return nil
+	}
 	ctx := context.Background()
 	for _, s := range []domain.Scope{
 		{Name: "openid", DisplayName: "OpenID", Description: "Verify your identity", Required: true, Emphasize: true},

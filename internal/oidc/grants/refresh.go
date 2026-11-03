@@ -194,7 +194,7 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client
 			return
 		}
 		parent := existing.ID
-		
+
 		var expiresAt time.Time
 		if client.RefreshTokenExpiration == domain.TokenExpirationAbsolute {
 			// Absolute mode: every rotation mints a token with a fresh

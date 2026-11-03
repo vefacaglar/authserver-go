@@ -325,16 +325,16 @@ func TestValidateReturnURL_AllowsLogout(t *testing.T) {
 //
 // Three behaviours are pinned here:
 //
-//   1. The same username from different IPs is tracked separately.
-//      Each (username, IP) pair has its own failure counter; a
-//      successful login from one IP does not unlock a locked key
-//      bound to a different IP.
-//   2. The same (username, IP) pair shares a counter. Hitting
-//      MaxFailures locks that pair, but a different IP for the same
-//      username is not affected.
-//   3. The lockout key is the literal concatenation "username|ip",
-//      so that a future operator can read the tracker storage and
-//      tell which IP a lockout applies to.
+//  1. The same username from different IPs is tracked separately.
+//     Each (username, IP) pair has its own failure counter; a
+//     successful login from one IP does not unlock a locked key
+//     bound to a different IP.
+//  2. The same (username, IP) pair shares a counter. Hitting
+//     MaxFailures locks that pair, but a different IP for the same
+//     username is not affected.
+//  3. The lockout key is the literal concatenation "username|ip",
+//     so that a future operator can read the tracker storage and
+//     tell which IP a lockout applies to.
 func TestLogin_LockoutKey_BindsUsernameAndIP(t *testing.T) {
 	h, _, _ := newTestLoginHandler(t)
 	tracker, ok := h.Tracker.(*memory.LoginAttemptTracker)

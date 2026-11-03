@@ -557,7 +557,7 @@ func TestRefresh_RotationExpiry_SlidingExtendsAndClampsToAbsolute(t *testing.T) 
 	// we'll mint, so the ceiling is the constraining factor. The
 	// rotation must clamp new ExpiresAt to the absolute ceiling.
 	client.RefreshTokenExpiration = domain.TokenExpirationSliding
-	client.RefreshTokenLifetimeSeconds = 7 * 24 * 3600        // 7d sliding
+	client.RefreshTokenLifetimeSeconds = 7 * 24 * 3600          // 7d sliding
 	client.RefreshTokenAbsoluteLifetimeSeconds = 30 * 24 * 3600 // 30d ceiling (carried)
 	if err := g.Clients.Store(context.Background(), client); err != nil {
 		t.Fatalf("re-store client: %v", err)

@@ -143,4 +143,3 @@ func (s *RoleStore) UpdateRole(_ context.Context, role *domain.Role) error {
 	s.roles[role.ID] = role
 	return nil
 }
-

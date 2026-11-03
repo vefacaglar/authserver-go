@@ -1,0 +1,47 @@
+name: authserver
+
+services:
+  authserver:
+    image: ${AUTH_IMAGE:?Set AUTH_IMAGE to the published image digest}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - path: ./authserver.env
+        format: raw
+    environment:
+      AUTH_ISSUER: https://auth.vefacaglar.com
+      AUTH_PUBLIC_URL: https://auth.vefacaglar.com
+      AUTH_LISTEN_ADDR: :5175
+      AUTH_REQUIRE_HTTPS: "true"
+      AUTH_DB_DRIVER: postgres
+      AUTH_AUTO_MIGRATE: "false"
+      AUTH_SEED: "false"
+      AUTH_ADMIN_ALLOW_ANONYMOUS: "false"
+      AUTH_DEV_LOG_EMAILS: "false"
+    ports:
+      - "127.0.0.1:${AUTH_BIND_PORT:-5175}:5175"
+    networks:
+      backend:
+        aliases: [authserver]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 30s
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:5175/.well-known/jwks.json"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  backend:
+    external: true
+    name: ${AUTH_DOCKER_NETWORK:?Set AUTH_DOCKER_NETWORK to the existing proxy/database network}

@@ -91,6 +91,14 @@ public demo client (`demo-public`), a confidential demo client
 (`demo-confidential`, fresh keypair each restart), and a demo user
 (`demo` / `demo`).
 
+### CI/CD and VPS deployment
+
+GitHub Actions verifies changes and publishes a Docker image on `main`.
+Optional SSH deployment targets `https://auth.vefacaglar.com`, with a migration
+step, container health checks and image rollback. See
+[deploy/README.md](deploy/README.md) for server setup, GitHub secrets and the
+`AUTH_DEPLOY_ENABLED` switch. No server or DNS changes are made by adding these files.
+
 ### Configuration reference
 
 | Variable | Default | Notes |
@@ -101,7 +109,7 @@ public demo client (`demo-public`), a confidential demo client
 | `AUTH_DB_DRIVER` | `postgres` | Must be `postgres` — the only supported runtime driver |
 | `AUTH_DB_DSN` | _(required)_ | PostgreSQL DSN, e.g. `postgres://user:pass@host:5432/db?sslmode=require` |
 | `AUTH_AUTO_MIGRATE` | `true` | Run schema migration on startup. Set `false` in production and run `authserver migrate` at deploy time for fast cold starts |
-| `AUTH_SEED` | `true` | Seed demo client/user/scopes on startup. Set `false` in production |
+| `AUTH_SEED` | `true` | Seed demo client/user/scopes during `serve` and `migrate`. Set `false` in production |
 | `AUTH_ADMIN_TOKEN` | _(required\*)_ | Admin API bearer; \*not required if `AUTH_ADMIN_ALLOW_ANONYMOUS=true` |
 | `AUTH_ADMIN_ALLOW_ANONYMOUS` | `false` | Dev-only: open the admin API without a token |
 | `AUTH_AUTH_CODE_LIFETIME` | `60s` | Must be ≤ 2m |
@@ -130,7 +138,7 @@ The binary has three subcommands:
 | Command | What it does |
 | --- | --- |
 | `authserver serve` | Start the HTTP server (default when no subcommand given) |
-| `authserver migrate` | Apply the schema, seed demo fixtures, and pre-create the signing key — run once at deploy time |
+| `authserver migrate` | Apply the schema, seed demo fixtures only if `AUTH_SEED=true`, and pre-create signing/data-protection keys — run once at deploy time |
 | `authserver rotate-keys` | Generate a fresh active signing key and retire the current one (kept in JWKS so old tokens stay verifiable) |
 | `authserver rotate-dp-keys` | Rotate the data-protection key (cookie + CSRF material); retired keys stay in the ring so existing sessions keep working |
 
@@ -159,7 +167,7 @@ Run the schema step once at deploy time and start the server with migration
 and seeding off:
 
 ```sh
-authserver migrate                       # once, at deploy
+AUTH_SEED=false authserver migrate       # once, at deploy
 AUTH_AUTO_MIGRATE=false AUTH_SEED=false authserver serve
 ```
 

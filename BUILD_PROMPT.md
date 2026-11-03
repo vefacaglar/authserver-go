@@ -377,3 +377,20 @@ Validation: issuer must be absolute (and HTTPS when `AUTH_REQUIRE_HTTPS`); cooki
 - Keep everything `internal/` — this is an application, not a library. Keep files focused and named after their primary type/function.
 - English only in all repo content.
 - Work one task at a time from `TASKS.md`; keep `go build ./...` and `go vet ./...` clean after each.
+
+## Production deployment
+
+GitHub Actions verifies formatting, build, vet, race tests and the real OIDC client
+flow before building the production image. A disposable PostgreSQL container
+verifies the image's migrations and endpoints before publication. Main-branch
+images are published to GHCR and optionally deployed over SSH to the Docker host
+serving `https://auth.vefacaglar.com`, behind Caddy. Deployment is gated by the
+repository variable `AUTH_DEPLOY_ENABLED=true`.
+
+Keep runtime secrets on the host. Use PostgreSQL persistence, HTTPS, authenticated
+admin access, `AUTH_AUTO_MIGRATE=false`, and `AUTH_SEED=false`. Both `serve` and
+`migrate` must honor the seed setting. Apply migrations before replacing the
+running container; check JWKS readiness and restore the previous image on failure.
+Preserve the existing database and signing/data-protection keys during the move
+from Render. Image rollback cannot reverse a schema migration. Setup and cutover
+instructions live in `deploy/README.md`.

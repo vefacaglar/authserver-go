@@ -184,7 +184,7 @@ func (g *AuthCodeGrant) Handle(ctx context.Context, w http.ResponseWriter, clien
 		}
 		now := g.Clock.Now().UTC()
 		sid := code.SessionID
-		
+
 		var expiresAt time.Time
 		if client.RefreshTokenExpiration == domain.TokenExpirationAbsolute {
 			expiresAt = now.Add(client.RefreshTokenAbsoluteLifetime())

@@ -17,7 +17,7 @@ const (
 type TokenExpiration int
 
 const (
-	TokenExpirationSliding TokenExpiration = 0
+	TokenExpirationSliding  TokenExpiration = 0
 	TokenExpirationAbsolute TokenExpiration = 1
 )
 

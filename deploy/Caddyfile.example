@@ -1,0 +1,12 @@
+# Add this block to the existing Caddyfile; preserve the other sites.
+auth.vefacaglar.com {
+    reverse_proxy authserver:5175 {
+        # The application trusts proxy headers. Replace user-supplied values.
+        header_up -True-Client-IP
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+    }
+}
+# Caddy must share AUTH_DOCKER_NETWORK with authserver.
+# If Caddy runs on the host, use 127.0.0.1:5175 as the upstream.
+# Use direct DNS initially; a CDN requires an explicit trusted-proxy setup.

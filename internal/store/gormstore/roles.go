@@ -130,4 +130,3 @@ func (s *RoleStore) UpdateRole(ctx context.Context, role *domain.Role) error {
 	ent := toRoleEntity(role)
 	return s.db.WithContext(ctx).Save(ent).Error
 }
-

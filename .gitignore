@@ -93,3 +93,10 @@ $RECYCLE.BIN/
 /.democlient.pid
 loginflow
 plan-2.md
+
+# Server-only deployment secrets and state
+/deploy/authserver.env
+/deploy/.current-image
+/deploy/.previous-image
+/deploy/.last-good-compose.yml
+/deploy/.deploy.lock
