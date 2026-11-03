@@ -177,11 +177,21 @@ func TestLoad_ProfilePath(t *testing.T) {
 
 func TestLoad_PasswordResetConfig(t *testing.T) {
 	load := func(extra map[string]string) (*Config, error) {
+		// Every key this test varies starts empty (treated as unset by
+		// the loaders) so values from an earlier load() call cannot
+		// leak into the next case through the process environment.
 		m := map[string]string{
-			"AUTH_ISSUER":           "https://auth.example.com",
-			"AUTH_COOKIE_HASH_KEY":  b64(make([]byte, 32)),
-			"AUTH_COOKIE_BLOCK_KEY": b64(make([]byte, 32)),
-			"AUTH_CSRF_KEY":         b64(make([]byte, 32)),
+			"AUTH_ISSUER":                  "https://auth.example.com",
+			"AUTH_COOKIE_HASH_KEY":         b64(make([]byte, 32)),
+			"AUTH_COOKIE_BLOCK_KEY":        b64(make([]byte, 32)),
+			"AUTH_CSRF_KEY":                b64(make([]byte, 32)),
+			"AUTH_PUBLIC_URL":              "",
+			"AUTH_FORGOT_PASSWORD_PATH":    "",
+			"AUTH_RESET_PASSWORD_PATH":     "",
+			"AUTH_PASSWORD_RESET_LIFETIME": "",
+			"AUTH_SMTP_HOST":               "",
+			"AUTH_SMTP_PORT":               "",
+			"AUTH_SMTP_FROM":               "",
 		}
 		for k, v := range extra {
 			m[k] = v
