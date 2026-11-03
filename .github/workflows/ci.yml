@@ -34,8 +34,9 @@ jobs:
         run: RUN_SMOKE=1 go test -tags m8smoke -count=1 -run TestSmoke_RealOIDCClient ./test/...
       - name: Check deployment scripts
         run: |
-          bash -n deploy/deploy.sh scripts/ci-container-smoke.sh
-          shellcheck deploy/deploy.sh scripts/ci-container-smoke.sh
+          bash -n deploy/deploy.sh deploy/receive.sh scripts/ssh-deploy.sh scripts/ci-container-smoke.sh
+          shellcheck deploy/deploy.sh deploy/receive.sh scripts/ssh-deploy.sh scripts/ci-container-smoke.sh
+          python3 -m unittest discover -s scripts -p 'test_deploy.py'
 
   image:
     needs: verify
@@ -92,6 +93,9 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.AUTH_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
     environment:
       name: production
       url: https://auth.vefacaglar.com
@@ -100,6 +104,7 @@ jobs:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+      DEPLOY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -107,27 +112,43 @@ jobs:
       - name: Configure SSH
         env:
           SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          SSH_PASSWORD: ${{ secrets.VPS_PASSWORD }}
           KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
         run: |
-          test -n "$SSH_KEY" && test -n "$KNOWN_HOSTS"
+          test -n "$KNOWN_HOSTS"
+          test -n "$SSH_KEY" || test -n "$SSH_PASSWORD"
           [[ "$VPS_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
           [[ "$VPS_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]
           [[ "$VPS_PORT" =~ ^[0-9]+$ ]]
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
-      - name: Deploy published image
-        run: |
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'test -f ~/authserver/.env && test -f ~/authserver/authserver.env'
-          scp -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -P "$VPS_PORT" deploy/compose.yml deploy/deploy.sh "$VPS_USER@$VPS_HOST:authserver/"
-          [[ "$AUTH_IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "cd ~/authserver && bash deploy.sh '$AUTH_IMAGE'"
+          chmod 600 ~/.ssh/known_hosts
+          if [[ -n "$SSH_KEY" ]]; then
+            printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/authserver-ssh-key"
+            chmod 600 "$RUNNER_TEMP/authserver-ssh-key"
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends sshpass
+          fi
+      - name: Prepare configuration from GitHub secrets
+        env:
+          AUTH_ENV: ${{ secrets.AUTH_ENV }}
+          AUTH_DOCKER_NETWORK: ${{ vars.AUTH_DOCKER_NETWORK || 'databases_default' }}
+          AUTH_BIND_PORT: ${{ vars.AUTH_BIND_PORT || '5175' }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: python3 scripts/prepare-deploy.py "$RUNNER_TEMP/authserver-bundle"
+      - name: Upload configuration and deploy published image
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VPS_PASSWORD: ${{ secrets.VPS_PASSWORD }}
+        run: bash scripts/ssh-deploy.sh
       - name: Verify public OIDC endpoints
         run: |
           curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors --max-time 15 https://auth.vefacaglar.com/healthz > /dev/null
           curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors --max-time 15 https://auth.vefacaglar.com/.well-known/openid-configuration | jq -e '.issuer == "https://auth.vefacaglar.com"' > /dev/null
           curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors --max-time 15 https://auth.vefacaglar.com/.well-known/jwks.json | jq -e '(.keys | length) > 0 and all(.keys[]; has("d") | not)' > /dev/null
-      - name: Remove SSH key
+      - name: Remove temporary deployment credentials
         if: always()
-        run: rm -f ~/.ssh/id_ed25519
+        run: |
+          rm -f "$RUNNER_TEMP/authserver-ssh-key"
+          rm -rf "$RUNNER_TEMP/authserver-bundle"

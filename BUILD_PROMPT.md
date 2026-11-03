@@ -387,7 +387,16 @@ images are published to GHCR and optionally deployed over SSH to the Docker host
 serving `https://auth.vefacaglar.com`, behind Caddy. Deployment is gated by the
 repository variable `AUTH_DEPLOY_ENABLED=true`.
 
-Keep runtime secrets on the host. Use PostgreSQL persistence, HTTPS, authenticated
+Store the complete runtime environment in the GitHub Actions secret `AUTH_ENV`.
+CD creates the server directory and transfers private configuration on each
+deployment, without manual SSH setup of application files. Network and bind-port
+settings come from repository variables. Use the job-scoped, package-read
+`GITHUB_TOKEN` for temporary registry login on the host and remove its credential
+directory after the deployment. Serialize configuration installation with the
+deployment lock and restore the previous environment when a deployment fails.
+An existing Docker/Compose host, authorized SSH access, database and reverse proxy
+remain prerequisites; provisioning them and changing DNS are separate operations.
+Use PostgreSQL persistence, HTTPS, authenticated
 admin access, `AUTH_AUTO_MIGRATE=false`, and `AUTH_SEED=false`. Both `serve` and
 `migrate` must honor the seed setting. Apply migrations before replacing the
 running container; check JWKS readiness and restore the previous image on failure.

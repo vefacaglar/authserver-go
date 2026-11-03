@@ -18,65 +18,80 @@ Deployment uses the immutable image digest. Pull requests never publish or deplo
 Automatic SSH deployment remains disabled until the repository variable
 `AUTH_DEPLOY_ENABLED` is set to `true`.
 
-## Server preparation
+## Configuration through GitHub
 
-Create `~/authserver` under the SSH deployment user's home. That user needs
-Docker access and the `flock` command. Copy these files from `deploy/`:
-
-```sh
-mkdir -p ~/authserver
-chmod 700 ~/authserver
-cp compose.yml deploy.sh ~/authserver/
-cp .env.example ~/authserver/.env
-cp authserver.env.example ~/authserver/authserver.env
-chmod 600 ~/authserver/.env ~/authserver/authserver.env
-```
-
-Set `AUTH_DOCKER_NETWORK` in `~/authserver/.env` to the **existing** network shared
-with Caddy (and PostgreSQL, if hosted locally). `databases_default` is only an
-example. Port 5175 binds to loopback; use `AUTH_BIND_PORT` if it is occupied.
-
-Put the production `AUTH_DB_DSN`, `AUTH_ADMIN_TOKEN`, and current SMTP settings in
-`~/authserver/authserver.env`. This is a raw env file: no shell substitutions or
-surrounding quotes. These secrets stay on the server; CI does not upload them.
-The Compose file enforces HTTPS, disables anonymous admin access, email-body
-logging, startup migrations, and demo seeding. Migrations run as a separate step.
-
-For a private GHCR package, log in on the server **as the deployment user** using
-a GitHub token with `read:packages` access to this package:
-
-```sh
-printf '%s' "$GHCR_READ_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
-```
-
-Add the block in `Caddyfile.example` to the existing Caddy configuration, validate
-and reload it, and point the domain's A record to `187.126.24.87`. Remove a stale
-AAAA record unless IPv6 also reaches this server. Ports 80/443 must reach Caddy.
-The proxy example overwrites forwarded client IP headers; start with DNS-only
-resolution. A CDN needs its own trusted-proxy configuration.
-
-## GitHub configuration
+No application files or environment files need to be created manually on the
+server. CD creates `~/authserver`, uploads the release and environment, logs into
+GHCR with the temporary job token, migrates, starts the service and checks health.
+It removes temporary uploads and registry credentials afterwards.
 
 In repository **Settings → Secrets and variables → Actions**, add these secrets
-(or scope them to a GitHub environment named `production`):
+(or scope them to the GitHub environment named `production`):
 
 | Secret | Value |
 | --- | --- |
 | `VPS_HOST` | `187.126.24.87` |
-| `VPS_USER` | SSH deployment user |
-| `VPS_PORT` | SSH port, optional; defaults to `22` |
-| `VPS_SSH_KEY` | Dedicated deployment private key; authorize its public key on the server |
-| `VPS_KNOWN_HOSTS` | Verified SSH host-key entry; include `[host]:port` for a nonstandard port |
+| `VPS_USER` | Existing SSH deployment user with Docker access |
+| `VPS_PORT` | Optional SSH port; defaults to `22` |
+| `VPS_PASSWORD` | Existing SSH password; no new server-side key installation needed |
+| `VPS_SSH_KEY` | Alternative to the password: private key already authorized for this user; takes precedence when set |
+| `VPS_KNOWN_HOSTS` | Verified SSH host-key entry; use `[host]:port` for a nonstandard port |
+| `AUTH_ENV` | Complete production runtime env file, including database, admin and SMTP settings |
 
-Verify the host-key fingerprint through the server console before saving the
-known-hosts entry. The workflow enforces strict SSH host-key checking.
-`GITHUB_TOKEN` is supplied automatically and publishes the image; no registry
-write credential needs to be stored on the server.
+Start `AUTH_ENV` with the contents of `authserver.env.example`, replacing the
+sample values with the current production values from Render. For example:
 
-Once the server, database, DNS and proxy are ready, set the **repository Actions
-variable** `AUTH_DEPLOY_ENABLED=true`. Push to `main` or manually run **CI and
-deploy** on `main`. Keep this variable unset during preparation: CI and image
-publishing still run, but SSH deployment is skipped.
+```dotenv
+AUTH_DB_DSN=postgres://USER:PASSWORD@DB_HOST:5432/DB_NAME?sslmode=require
+AUTH_ADMIN_TOKEN=YOUR_EXISTING_ADMIN_TOKEN
+AUTH_SMTP_HOST=YOUR_SMTP_HOST
+AUTH_SMTP_PORT=587
+AUTH_SMTP_USERNAME=YOUR_SMTP_USERNAME
+AUTH_SMTP_PASSWORD=YOUR_SMTP_PASSWORD
+AUTH_SMTP_FROM=YOUR_SENDER_ADDRESS
+```
+
+Include other runtime settings, such as custom paths and token lifetimes, in the
+same secret. Use raw `NAME=value` lines: no `export`, shell substitutions or
+surrounding quotes. Literal spaces, dollar signs and quotes are preserved, not
+executed. `AUTH_DB_DSN` and `AUTH_ADMIN_TOKEN` are required; duplicate or malformed
+entries are rejected without printing their contents. The Compose file still
+fixes the production issuer, listening address and security flags (HTTPS on,
+seeding/anonymous admin/email-body logging off); these cannot be weakened by the
+runtime file.
+
+Add these **repository Actions variables**:
+
+| Variable | Value |
+| --- | --- |
+| `AUTH_DEPLOY_ENABLED` | `true` to deploy after successful main-branch CI |
+| `AUTH_DOCKER_NETWORK` | Existing network shared with the reverse proxy; default `databases_default` |
+| `AUTH_BIND_PORT` | Optional loopback port; default `5175` |
+
+Push to `main` or select **Actions → CI and deploy → Run workflow → main**.
+Updating a secret alone does not start a deployment; run the workflow to apply it.
+Every deploy replaces the complete runtime file, so removing a setting from
+`AUTH_ENV` also removes it on the server. Files have owner-only permissions.
+GitHub is the source of truth; manual server edits would be replaced next time.
+
+No separate registry PAT or server-side `docker login` is needed. The deploy job
+has `packages: read` and passes its short-lived `GITHUB_TOKEN` over SSH stdin to a
+temporary Docker credential directory. The package must allow this repository to
+read it (automatic for packages published by this repository's workflow).
+
+## Existing infrastructure
+
+The host must already provide Docker, Compose 2.30+, `flock`, authorized SSH
+access and the configured Docker network. The PostgreSQL DSN must be reachable
+from that host. This workflow does not provision a fresh VPS, create a database,
+modify another service's proxy configuration, or manage DNS.
+
+`auth.vefacaglar.com` must resolve to `187.126.24.87`, with ports 80/443 reaching
+Caddy. The existing proxy must route to `authserver:5175` on the shared network,
+or `127.0.0.1:5175` when Caddy runs directly on the host. See `Caddyfile.example`
+for the route and forwarding-header configuration. A CDN needs an explicit
+trusted-proxy setup. Once that infrastructure is in place, routine deployments
+and all runtime configuration changes are handled from GitHub alone.
 
 ## Migration from Render
 
@@ -87,8 +102,8 @@ refresh tokens, signing keys and `data_protection_keys`. Do not point the new
 server at an empty database expecting existing accounts to appear. With demo
 seeding disabled, a genuinely new database needs explicit scope/client setup.
 
-Copy the existing runtime settings, including SMTP and any custom lifetimes or
-paths. Production migrations now honor `AUTH_SEED=false`; this does not remove
+Save the existing runtime settings, including SMTP and any custom lifetimes or
+paths, in the GitHub `AUTH_ENV` secret. Production migrations now honor `AUTH_SEED=false`; this does not remove
 demo accounts that already exist in the source database.
 
 Configure relying applications to use `https://auth.vefacaglar.com` as the issuer
@@ -102,23 +117,19 @@ replace this cutover check.
 
 `deploy.sh` serializes deployments, pulls the requested digest, migrates, and
 waits for the JWKS endpoint (which reads persisted signing keys). A failed
-migration leaves the running service untouched. A failed container health check
-restores the previous healthy image and Compose file if one exists. First deploys
+migration restores the previous environment and leaves the running service
+untouched. A failed container health check restores the previous environment,
+healthy image and Compose file if one exists. First deploys
 have no previous image. Public HTTPS checks run after this local health gate;
 DNS/proxy failures fail the workflow but do not trigger an image rollback.
 
 Successful deploys record `.current-image`, `.previous-image` and
-`.last-good-compose.yml`. To roll back the image after a later regression:
-
-```sh
-cd ~/authserver
-AUTH_IMAGE=$(cat .previous-image) docker compose --env-file .env -f compose.yml up -d --wait --wait-timeout 120 authserver
-```
-
-Check compatibility with the current Compose file first; retain previous release
-files separately for configuration rollbacks. After a manual rollback, update
-`.current-image` to the restored digest. Image rollback does **not** reverse schema
-migrations or restore database data; schema changes must remain backward compatible.
+`.last-good-compose.yml`. To recover from a later application regression without
+SSH, revert the faulty application change in GitHub and deploy `main` again. For
+configuration regressions, restore the previous `AUTH_ENV` secret or repository
+variables and select **Run workflow**. Schema changes must remain backward
+compatible: image/configuration rollback does not reverse a database migration
+or restore database data.
 
 References: [GitHub image publishing](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images),
 [Compose environment files](https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/).

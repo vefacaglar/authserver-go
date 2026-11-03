@@ -100,3 +100,5 @@ plan-2.md
 /deploy/.previous-image
 /deploy/.last-good-compose.yml
 /deploy/.deploy.lock
+/deploy/.deploy-backup.*/
+__pycache__/
