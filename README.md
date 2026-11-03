@@ -3,8 +3,11 @@
 A standalone OAuth2 / OpenID Connect authorization server written in Go.
 Functional and security port of an existing, production-hardened C# OIDC server.
 
-This is a **deployable auth server** (single binary + config), not a reusable
-library/package.
+This is a **deployable auth server** (API-only Go binary + config, plus a
+separate browser SPA in `web/`), not a reusable library/package. The Go
+server serves the OIDC protocol endpoints and JSON APIs; all HTML pages
+(login, register, profile, admin console) live in the SPA, which is served
+on the same origin in production (see `deploy/`).
 
 ## Status
 
@@ -34,6 +37,15 @@ foreground against the PostgreSQL given by `AUTH_DB_DSN` (loaded from `.env`
 if present). It prints the issuer, the admin bearer token, and the
 discovery URL on boot.
 
+The Go server is API-only — browser pages come from the SPA. For a full
+browser flow, also run `make web-dev` (Vite on `:5173`, proxying `/api`,
+`/admin/api`, `/connect`, and `/.well-known` to `:5175`) and enter through
+`http://localhost:5173`. When an OIDC client is involved, the issuer must
+be the SPA origin so the authorize endpoint can bounce to the SPA login
+page on the same origin: start the stack with
+`AUTH_ISSUER=http://localhost:5173`, or just use `make start-all`, which
+wires the auth server, the SPA, and the demo client up that way.
+
 Run `make` with no target to see every task:
 
 | Command | What it does |
@@ -42,7 +54,10 @@ Run `make` with no target to see every task:
 | `make build` | Compile a binary to `./authserver` |
 | `make run` | Build, then run the binary in the foreground |
 | `make start` / `make stop` | Run in the **background** / stop it. `start` frees port `5175` first, so it always restarts cleanly (no "address already in use") |
-| `make start-all` / `make stop-all` | Background the auth server **and** the browser demo client ([examples/loginflow](examples/loginflow)), then open `http://localhost:8090` and log in as `demo`/`demo` |
+| `make start-all` / `make stop-all` | Background the auth server, the web SPA, **and** the browser demo client ([examples/loginflow](examples/loginflow)), then open `http://localhost:8090` and log in as `demo`/`demo` (run `make web-install` once first) |
+| `make web-install` | Install the web SPA dependencies (`pnpm install` in `web/`) |
+| `make web-dev` | Run the web SPA dev server on `:5173` (needs the API from `make dev` in another terminal) |
+| `make web-build` | Type-check and build the web SPA into `web/dist` |
 | `make test` | Run the full test suite |
 | `make smoke` | Run the real-OIDC-client smoke test (build-tagged) |
 | `make check` | `go vet` + `go test` + `go build` — run before committing |
@@ -249,8 +264,11 @@ token on boot:
 curl http://localhost:5175/admin/api/clients -H "Authorization: Bearer <AUTH_ADMIN_TOKEN>"
 ```
 
-A minimal admin SPA is served at `/admin` and lists clients via that API.
-Key responses always strip the private PEM; mutations require a CSRF token.
+The admin console is part of the web SPA (route `/admin`): sign in through
+the SPA as a user holding the admin role and it consumes the same API with
+the session cookie. The Bearer token remains for scripts. Key responses
+always strip the private PEM; cookie-authenticated mutations require a
+CSRF token.
 
 ## Source of truth
 
@@ -271,7 +289,8 @@ Key responses always strip the private PEM; mutations require a CSRF token.
 | JOSE / JWT / JWKS | `github.com/lestrrat-go/jwx/v2` |
 | Persistence | GORM on PostgreSQL (SQLite for tests only) |
 | Session cookie | `github.com/gorilla/securecookie` |
-| CSRF | `github.com/gorilla/csrf` |
+| CSRF | double-submit cookie (`GET /api/csrf` + `X-CSRF-Token` header) |
+| Web SPA | React 19 + Vite + Tailwind CSS 4 (`web/`, pnpm) |
 | Rate limiting | `golang.org/x/time/rate` |
 | Password hashing | `golang.org/x/crypto/bcrypt` |
 | Entity IDs | `github.com/google/uuid` |
@@ -288,7 +307,8 @@ internal/store/        store interfaces (ports)
 internal/token/        hashing, PKCE, RSA keys, JWT issuance
 internal/session/      encrypted SSO cookie
 internal/oidc/         HTTP handlers (discovery, jwks, authorize, token, ...)
-internal/admin/        admin JSON API + SPA (auth-required)
+internal/admin/        admin JSON API (auth-required; console UI is in web/)
+web/                   browser SPA (login, account, admin console)
 internal/server/       router + middleware
 cmd/authserver/        composition root (wiring, seed, graceful shutdown)
 scripts/dev.sh         one-command local dev runner (used by `make dev`)

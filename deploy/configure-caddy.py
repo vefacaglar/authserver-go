@@ -34,7 +34,7 @@ def routed(config):
     return False
 
 
-def updated_config(original, upstream, already_routed):
+def updated_config(original, upstream, web_upstream, already_routed):
     if BEGIN in original or END in original:
         if original.count(BEGIN) != 1 or original.count(END) != 1:
             raise RuntimeError("Invalid authserver managed-route markers")
@@ -47,10 +47,16 @@ def updated_config(original, upstream, already_routed):
         raise RuntimeError("An unmanaged auth route already exists; refusing to overwrite it")
     return original.rstrip() + "\n\n" + f"""{BEGIN}
 {DOMAIN} {{
-    reverse_proxy {upstream} {{
-        header_up -True-Client-IP
-        header_up X-Real-IP {{remote_host}}
-        header_up X-Forwarded-For {{remote_host}}
+    @api path /api/* /admin/api/* /connect/* /.well-known/* /healthz
+    handle @api {{
+        reverse_proxy {upstream} {{
+            header_up -True-Client-IP
+            header_up X-Real-IP {{remote_host}}
+            header_up X-Forwarded-For {{remote_host}}
+        }}
+    }}
+    handle {{
+        reverse_proxy {web_upstream}
     }}
 }}
 {END}
@@ -73,7 +79,7 @@ def mounted_config(mounts, config):
     return max(matches, key=lambda item: item[0])[1]
 
 
-def target(settings, network, port):
+def target(settings, network, port, web_port):
     rows = run(["docker", "ps", "--format", "{{.ID}}\t{{.Image}}\t{{.Names}}"]).splitlines()
     containers = [row.split("\t") for row in rows if row.strip()]
     requested = settings.get("container", "")
@@ -103,7 +109,7 @@ def target(settings, network, port):
         networks = json.loads(run(["docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", container]))
         if network not in networks:
             run(["docker", "network", "connect", network, container])
-        return source, ["docker", "exec", container, "caddy"], config, "authserver:5175"
+        return source, ["docker", "exec", container, "caddy"], config, "authserver:5175", "web:8080"
     if requested:
         raise RuntimeError("The configured Caddy container is not running")
     binary = shutil.which("caddy")
@@ -111,13 +117,13 @@ def target(settings, network, port):
     if not binary or not Path(config).is_file():
         raise RuntimeError("No supported running Caddy installation found")
     run(["systemctl", "is-active", "--quiet", "caddy"])
-    return Path(config), [binary], config, f"127.0.0.1:{port}"
+    return Path(config), [binary], config, f"127.0.0.1:{port}", f"127.0.0.1:{web_port}"
 
 
-def apply_config(source, command, config, upstream, backup_directory):
+def apply_config(source, command, config, upstream, web_upstream, backup_directory):
     original = source.read_text()
     adapted = json.loads(run(command + ["adapt", "--config", config, "--adapter", "caddyfile"]))
-    replacement = updated_config(original, upstream, routed(adapted))
+    replacement = updated_config(original, upstream, web_upstream, routed(adapted))
     directory = Path(tempfile.mkdtemp(prefix=".caddy-backup-", dir=backup_directory))
     keep_backup = False
     try:
@@ -150,12 +156,15 @@ def main():
     values = dict(line.split("=", 1) for line in (directory / ".env").read_text().splitlines())
     with (directory / ".proxy.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        source, command, config, upstream = target(
-            settings, values["AUTH_DOCKER_NETWORK"], values["AUTH_BIND_PORT"]
+        source, command, config, upstream, web_upstream = target(
+            settings,
+            values["AUTH_DOCKER_NETWORK"],
+            values["AUTH_BIND_PORT"],
+            values.get("AUTH_WEB_BIND_PORT", "5176"),
         )
         if not source.is_file():
             raise RuntimeError("The persistent Caddyfile was not found")
-        apply_config(source, command, config, upstream, directory)
+        apply_config(source, command, config, upstream, web_upstream, directory)
 
 
 if __name__ == "__main__":

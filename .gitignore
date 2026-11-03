@@ -91,13 +91,20 @@ $RECYCLE.BIN/
 # Background-process pidfiles (make start / make start-all)
 /.authserver.pid
 /.democlient.pid
+/.web.pid
 loginflow
 plan-2.md
+
+# Web SPA (web/, pnpm)
+web/node_modules/
+web/dist/
 
 # Server-only deployment secrets and state
 /deploy/authserver.env
 /deploy/.current-image
 /deploy/.previous-image
+/deploy/.current-web-image
+/deploy/.previous-web-image
 /deploy/.last-good-compose.yml
 /deploy/.deploy.lock
 /deploy/.deploy-backup.*/

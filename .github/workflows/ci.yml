@@ -30,6 +30,15 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
       - run: go test -race ./...
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build web SPA
+        working-directory: web
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm run build
       - name: Real OIDC client smoke test
         run: RUN_SMOKE=1 go test -tags m8smoke -count=1 -run TestSmoke_RealOIDCClient ./test/...
       - name: Check deployment scripts
@@ -44,10 +53,11 @@ jobs:
           from pathlib import Path
           import runpy
           proxy = runpy.run_path('deploy/configure-caddy.py')
-          config = proxy['updated_config']('existing.example.test {\n    respond ok\n}\n', 'authserver:5175', False)
+          config = proxy['updated_config']('existing.example.test {\n    respond ok\n}\n', 'authserver:5175', 'web:8080', False)
           (Path(os.environ['RUNNER_TEMP']) / 'authserver-test-Caddyfile').write_text(config)
           PY
           docker run --rm --mount "type=bind,src=$RUNNER_TEMP/authserver-test-Caddyfile,dst=/etc/caddy/Caddyfile,readonly" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker run --rm --mount "type=bind,src=$PWD/web/Caddyfile,dst=/etc/caddy/Caddyfile,readonly" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
   image:
     needs: verify
@@ -58,6 +68,7 @@ jobs:
       packages: write
     outputs:
       image: ${{ steps.name.outputs.image }}@${{ steps.publish.outputs.digest }}
+      web_image: ${{ steps.name.outputs.web_image }}@${{ steps.publish-web.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -74,11 +85,27 @@ jobs:
           cache-to: type=gha,mode=max
       - name: Verify PostgreSQL migration and production container
         run: bash scripts/ci-container-smoke.sh authserver:ci
+      - name: Build web image for runtime checks
+        uses: docker/build-push-action@v7
+        with:
+          context: web
+          load: true
+          platforms: linux/amd64
+          tags: authserver-web:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify web container serves the SPA
+        run: |
+          docker run -d --name authserver-web-ci -p 127.0.0.1:8080:8080 authserver-web:ci
+          curl --fail --silent --show-error --retry 12 --retry-delay 2 --retry-all-errors --max-time 10 http://127.0.0.1:8080/login | grep -q '<div id="root">'
+          docker rm -f authserver-web-ci
       - name: Image name
         id: name
         env:
           REPOSITORY: ${{ github.repository }}
-        run: echo "image=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "image=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "web_image=ghcr.io/${REPOSITORY,,}-web" >> "$GITHUB_OUTPUT"
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v4
@@ -98,6 +125,18 @@ jobs:
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Publish verified web image
+        id: publish-web
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v7
+        with:
+          context: web
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.name.outputs.web_image }}:${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   deploy:
     needs: image
@@ -112,6 +151,7 @@ jobs:
       url: https://auth.vefacaglar.com
     env:
       AUTH_IMAGE: ${{ needs.image.outputs.image }}
+      AUTH_WEB_IMAGE: ${{ needs.image.outputs.web_image }}
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
@@ -153,6 +193,7 @@ jobs:
           AUTH_SMTP_FROM: ${{ secrets.AUTH_SMTP_FROM }}
           AUTH_DOCKER_NETWORK: ${{ vars.AUTH_DOCKER_NETWORK || 'databases_default' }}
           AUTH_BIND_PORT: ${{ vars.AUTH_BIND_PORT || '5175' }}
+          AUTH_WEB_BIND_PORT: ${{ vars.AUTH_WEB_BIND_PORT || '5176' }}
           AUTH_CADDY_CONTAINER: ${{ vars.AUTH_CADDY_CONTAINER }}
           AUTH_CADDY_CONFIG_PATH: ${{ vars.AUTH_CADDY_CONFIG_PATH }}
           REGISTRY_USER: ${{ github.actor }}
@@ -169,6 +210,7 @@ jobs:
           curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors --max-time 15 https://auth.vefacaglar.com/healthz > /dev/null
           curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors --max-time 15 https://auth.vefacaglar.com/.well-known/openid-configuration | jq -e '.issuer == "https://auth.vefacaglar.com"' > /dev/null
           curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors --max-time 15 https://auth.vefacaglar.com/.well-known/jwks.json | jq -e '(.keys | length) > 0 and all(.keys[]; has("d") | not)' > /dev/null
+          curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors --max-time 15 https://auth.vefacaglar.com/login | grep -q '<div id="root">'
       - name: Remove temporary deployment credentials
         if: always()
         run: |

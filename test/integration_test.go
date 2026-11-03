@@ -11,7 +11,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"io"
 	"log/slog"
 	"net/http"
@@ -76,6 +75,7 @@ type bundle struct {
 	Scopes         store.ScopeStore
 	AuditLogs      store.AuditLogStore
 	Users          store.UserStore
+	Roles          store.RoleStore
 	Tracker        store.LoginAttemptTracker
 	PasswordResets store.PasswordResetStore
 }
@@ -94,6 +94,7 @@ func memoryBuilder() storeBuilder {
 				Scopes:         memory.NewScopeStore(),
 				AuditLogs:      memory.NewAuditLogStore(),
 				Users:          memory.NewUserStore(),
+				Roles:          memory.NewRoleStore(),
 				Tracker:        memory.NewLoginAttemptTracker(time.Now),
 				PasswordResets: memory.NewPasswordResetStore(),
 			}, func() {}
@@ -132,6 +133,7 @@ func gormBuilder() storeBuilder {
 				Scopes:         gormstore.NewScopeStore(db),
 				AuditLogs:      gormstore.NewAuditLogStore(db),
 				Users:          gormstore.NewUserStore(db),
+				Roles:          gormstore.NewRoleStore(db),
 				Tracker:        memory.NewLoginAttemptTracker(time.Now),
 				PasswordResets: gormstore.NewPasswordResetStore(db),
 			}, closer
@@ -228,20 +230,15 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		clk,
 	)
 
-	loginTmpl := template.Must(template.New("login").Parse(oidc.LoginTemplate()))
-	logoutTmpl := template.Must(template.New("logout").Parse(oidc.LogoutTemplate()))
-
 	sessionResolver := &oidc.SessionResolver{Cookies: cookieMgr, Sessions: b.Sessions, Clock: clk}
-	homeHandler := sessionResolver.RequireSession("/login", &oidc.HomeHandler{
-		Cfg:       oidc.HomeConfig{ProfilePath: "/profile", LogoutPath: "/logout"},
+	homeHandler := sessionResolver.RequireSession(&oidc.HomeHandler{
 		Users:     b.Users,
 		AuditLogs: b.AuditLogs,
 		Logger:    logger,
-		Template:  template.Must(template.New("home").Parse(oidc.HomeTemplate())),
 	})
 
-	profileHandler := sessionResolver.RequireSession("/login", &oidc.ProfileHandler{
-		Cfg:           oidc.ProfileConfig{ProfilePath: "/profile", LogoutPath: "/logout"},
+	profileHandler := sessionResolver.RequireSession(&oidc.ProfileHandler{
+		Cfg:           oidc.ProfileConfig{BasePath: "/api/account/profile"},
 		Users:         b.Users,
 		Sessions:      b.Sessions,
 		RefreshTokens: b.RefreshTokens,
@@ -249,16 +246,13 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		Tracker:       b.Tracker,
 		Clock:         clk,
 		Logger:        logger,
-		Template:      template.Must(template.New("profile").Parse(oidc.ProfileTemplate())),
 		ClientIP:      server.ClientIP,
 	})
 
 	mailer := &captureMailer{}
 	forgotHandler := &oidc.ForgotPasswordHandler{
 		Cfg: oidc.ForgotPasswordConfig{
-			ForgotPath:    "/forgot-password",
 			ResetPath:     "/reset-password",
-			LoginPath:     "/login",
 			PublicURL:     "https://app.example.test",
 			TokenLifetime: 30 * time.Minute,
 		},
@@ -269,15 +263,12 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		AuditLogs: b.AuditLogs,
 		Clock:     clk,
 		Logger:    logger,
-		Template:  template.Must(template.New("forgot").Parse(oidc.ForgotPasswordTemplate())),
 		ClientIP:  server.ClientIP,
 		Spawn:     func(f func()) { f() },
 	}
 	resetHandler := &oidc.ResetPasswordHandler{
 		Cfg: oidc.ResetPasswordConfig{
-			ResetPath:  "/reset-password",
-			ForgotPath: "/forgot-password",
-			LoginPath:  "/login",
+			LoginPath: "/login",
 		},
 		Users:         b.Users,
 		Resets:        b.PasswordResets,
@@ -286,18 +277,15 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		AuditLogs:     b.AuditLogs,
 		Clock:         clk,
 		Logger:        logger,
-		Template:      template.Must(template.New("reset").Parse(oidc.ResetPasswordTemplate())),
 		ClientIP:      server.ClientIP,
 	}
 
 	loginHandler := &oidc.LoginHandler{
 		Cfg: oidc.LoginConfig{
-			IssuerURL:          testIssuer,
-			LoginPath:          "/login",
-			ProfilePath:        "/profile",
-			ForgotPasswordPath: "/forgot-password",
-			AuthorizePath:      "/connect/authorize",
-			SessionLifetime:    time.Hour,
+			IssuerURL:       testIssuer,
+			ProfilePath:     "/profile",
+			AuthorizePath:   "/connect/authorize",
+			SessionLifetime: time.Hour,
 		},
 		Users:     b.Users,
 		Sessions:  b.Sessions,
@@ -305,10 +293,14 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		Tracker:   b.Tracker,
 		Clock:     clk,
 		Logger:    logger,
-		Template:  loginTmpl,
 		ClientIP:  server.ClientIP,
 		AuditLogs: b.AuditLogs,
-		Resolver:  sessionResolver,
+	}
+	registerHandler := &oidc.RegisterHandler{
+		Cfg:    oidc.RegisterConfig{LoginPath: "/login"},
+		Users:  b.Users,
+		Clock:  clk,
+		Logger: logger,
 	}
 	authorizeHandler := &oidc.AuthorizeHandler{
 		Cfg: oidc.AuthorizeConfig{
@@ -393,11 +385,13 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		Issuer:        issuer,
 		Clock:         clk,
 		Logger:        logger,
-		Confirm:       logoutTmpl,
 	}
 
 	handlers := server.Handlers{
+		CSRF:      &oidc.CSRFHandler{Logger: logger},
+		Session:   &oidc.SessionHandler{Resolver: sessionResolver, Users: b.Users, AdminRole: "admin", Logger: logger},
 		Login:     loginHandler,
+		Register:  registerHandler,
 		Logout:    logoutHandler,
 		Authorize: authorizeHandler,
 		Token:     tokenHandler,
@@ -423,26 +417,20 @@ func newTestServerWith(t *testing.T, sb storeBuilder) *testServer {
 		Profile:        profileHandler,
 		ForgotPassword: forgotHandler,
 		ResetPassword:  resetHandler,
-		Admin:          buildTestAdminMount(t, b, clk, logger),
+		Admin:          buildTestAdminMount(t, b, clk, logger, sessionResolver),
 	}
 	router := server.NewRouter(
 		server.RouterConfig{
-			IssuerURL:          testIssuer,
-			RequireHTTPS:       false,
-			LoginPath:          "/login",
-			LogoutPath:         "/logout",
-			ProfilePath:        "/profile",
-			ForgotPasswordPath: "/forgot-password",
-			ResetPasswordPath:  "/reset-password",
-			AuthorizePath:      "/connect/authorize",
-			TokenPath:          "/connect/token",
-			UserInfoPath:       "/connect/userinfo",
-			RevokePath:         "/connect/revoke",
-			JWKSPath:           "/.well-known/jwks.json",
-			DiscoveryPath:      "/.well-known/openid-configuration",
-			HealthPath:         "/healthz",
-			LoginRateLimitRPS:  testServerRateLimitRPS(t),
-			LoginRateBurst:     testServerRateLimitBurst(t),
+			RequireHTTPS:      false,
+			AuthorizePath:     "/connect/authorize",
+			TokenPath:         "/connect/token",
+			UserInfoPath:      "/connect/userinfo",
+			RevokePath:        "/connect/revoke",
+			JWKSPath:          "/.well-known/jwks.json",
+			DiscoveryPath:     "/.well-known/openid-configuration",
+			HealthPath:        "/healthz",
+			LoginRateLimitRPS: testServerRateLimitRPS(t),
+			LoginRateBurst:    testServerRateLimitBurst(t),
 		},
 		server.RouterOptions{Logger: logger},
 		handlers,
@@ -495,6 +483,106 @@ func (ts *testServer) do(t *testing.T, method, path string, form url.Values, coo
 	return ts.client.Do(req)
 }
 
+// fetchCSRF calls GET /api/csrf and returns the token and the cookie a
+// browser would send back with it.
+func fetchCSRF(t *testing.T, ts *testServer) (string, *http.Cookie) {
+	t.Helper()
+	resp, err := ts.do(t, http.MethodGet, "/api/csrf", nil, nil)
+	if err != nil {
+		t.Fatalf("GET /api/csrf: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/csrf status = %d", resp.StatusCode)
+	}
+	var body struct {
+		CSRFToken string `json:"csrf_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body.CSRFToken == "" {
+		t.Fatalf("decode csrf: err=%v body=%+v", err, body)
+	}
+	cookie := findCookie(resp.Cookies(), "_csrf")
+	if cookie == nil {
+		t.Fatal("csrf cookie not set by /api/csrf")
+	}
+	return body.CSRFToken, cookie
+}
+
+// doJSON sends a JSON request. For state-changing methods it attaches
+// a fresh CSRF token/cookie pair, like the SPA does. Extra cookies
+// (e.g. the session cookie) are appended.
+func (ts *testServer) doJSON(t *testing.T, method, path string, payload any, cookies []*http.Cookie) *http.Response {
+	t.Helper()
+	var body io.Reader
+	if payload != nil {
+		b, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("marshal payload: %v", err)
+		}
+		body = strings.NewReader(string(b))
+	}
+	req, err := http.NewRequest(method, ts.URL(path), body)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if method != http.MethodGet && method != http.MethodHead {
+		tok, cookie := fetchCSRF(t, ts)
+		req.Header.Set("X-CSRF-Token", tok)
+		req.AddCookie(cookie)
+	}
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := ts.client.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	return resp
+}
+
+// loginAttempt posts one credential attempt to the login API and
+// returns the raw response (caller closes the body).
+func loginAttempt(t *testing.T, ts *testServer, user, pass, returnURL string) *http.Response {
+	t.Helper()
+	return ts.doJSON(t, http.MethodPost, "/api/auth/login", map[string]any{
+		"username":   user,
+		"password":   pass,
+		"return_url": returnURL,
+	}, nil)
+}
+
+// loginViaAPI logs in and returns the session cookie plus the
+// server-validated redirect target from the JSON body.
+func loginViaAPI(t *testing.T, ts *testServer, user, pass, returnURL string) (*http.Cookie, string) {
+	t.Helper()
+	resp := loginAttempt(t, ts, user, pass, returnURL)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("login status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	var body struct {
+		Redirect string `json:"redirect"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode login: %v", err)
+	}
+	sess := findCookie(resp.Cookies(), ".auth.session")
+	if sess == nil {
+		t.Fatalf("session cookie not set")
+	}
+	return sess, body.Redirect
+}
+
+// readBodyString reads and closes a response body.
+func readBodyString(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return string(b)
+}
+
 func TestE2E_HappyPath(t *testing.T) {
 	ts := newTestServer(t)
 
@@ -520,39 +608,11 @@ func TestE2E_HappyPath(t *testing.T) {
 		t.Errorf("returnURL = %q, want %q", returnURL, authorizeURL)
 	}
 
-	resp, err = ts.do(t, http.MethodGet, "/login", nil, nil)
-	if err != nil {
-		t.Fatalf("GET login: %v", err)
+	sessionCookie, redirect := loginViaAPI(t, ts, testUser, testPassword, returnURL)
+	if !sameURL(redirect, authorizeURL) {
+		t.Errorf("redirect = %q, want %q", redirect, authorizeURL)
 	}
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("login GET status = %d", resp.StatusCode)
-	}
-	csrfToken := extractInputValue(t, string(bodyBytes), `name="csrf_token"`)
-	csrfCookie := findCookie(resp.Cookies(), "_csrf")
-
 	form := url.Values{}
-	form.Set("csrf_token", csrfToken)
-	form.Set("username", testUser)
-	form.Set("password", testPassword)
-	form.Set("returnUrl", returnURL)
-	resp, err = ts.do(t, http.MethodPost, "/login", form, []*http.Cookie{csrfCookie})
-	if err != nil {
-		t.Fatalf("POST login: %v", err)
-	}
-	lb, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("login POST status = %d, want 302; body=%s; headers=%v", resp.StatusCode, lb, resp.Header)
-	}
-	if loc := resp.Header.Get("Location"); !sameURL(loc, authorizeURL) {
-		t.Errorf("Location = %q, want %q", loc, authorizeURL)
-	}
-	sessionCookie := findCookie(resp.Cookies(), ".auth.session")
-	if sessionCookie == nil {
-		t.Fatalf("session cookie not set; headers=%v", resp.Header)
-	}
 
 	resp, err = ts.do(t, http.MethodGet, authorizeURL, nil, []*http.Cookie{sessionCookie})
 	if err != nil {
@@ -1254,24 +1314,33 @@ func TestE2E_Logout_GetRedirectsToConfirm(t *testing.T) {
 	}
 }
 
+// The confirm page itself is served by the SPA; the Go server's part
+// of the contract is that GET /connect/logout redirects to it carrying
+// the RP parameters, and that the CSRF token endpoint issues the
+// cookie the confirm form's POST is checked against.
 func TestE2E_Logout_ConfirmPage(t *testing.T) {
 	ts := newTestServer(t)
-	resp, err := ts.do(t, http.MethodGet, "/logout", nil, nil)
+	resp, err := ts.do(t, http.MethodGet, "/connect/logout?post_logout_redirect_uri="+url.QueryEscape(testIssuer+"/logged-out")+"&state=xyz&client_id="+testClientID, nil, nil)
 	if err != nil {
-		t.Fatalf("GET /logout: %v", err)
+		t.Fatalf("GET /connect/logout: %v", err)
 	}
-	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
 	}
-	csrfToken := extractInputValue(t, string(body), `name="csrf_token"`)
-	if csrfToken == "" {
-		t.Fatalf("csrf_token missing from confirm page: %s", body)
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "/logout?") {
+		t.Fatalf("Location = %q, want /logout?...", loc)
 	}
-	csrfCookie := findCookie(resp.Cookies(), "_logout_csrf")
-	if csrfCookie == nil {
-		t.Fatalf("logout CSRF cookie not set")
+	for _, want := range []string{"post_logout_redirect_uri=", "state=xyz", "client_id=" + testClientID} {
+		if !strings.Contains(loc, want) {
+			t.Errorf("Location = %q, want it to carry %q", loc, want)
+		}
+	}
+	// The confirm form's CSRF pair comes from /api/csrf.
+	token, cookie := fetchCSRF(t, ts)
+	if token == "" || cookie.Value != token {
+		t.Errorf("csrf token/cookie mismatch: token=%q cookie=%q", token, cookie.Value)
 	}
 }
 
@@ -1279,17 +1348,7 @@ func TestE2E_Logout_PostRevokesAndClears(t *testing.T) {
 	ts := newTestServer(t)
 	tr, sessionCookie := exchangeCodeForTokens(t, ts)
 
-	resp, err := ts.do(t, http.MethodGet, "/logout", nil, []*http.Cookie{sessionCookie})
-	if err != nil {
-		t.Fatalf("GET /logout: %v", err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	csrfToken := extractInputValue(t, string(body), `name="csrf_token"`)
-	csrfCookie := findCookie(resp.Cookies(), "_logout_csrf")
-	if csrfCookie == nil {
-		t.Fatalf("logout CSRF cookie not set")
-	}
+	csrfToken, csrfCookie := fetchCSRF(t, ts)
 
 	form := url.Values{}
 	form.Set("csrf_token", csrfToken)
@@ -1297,7 +1356,7 @@ func TestE2E_Logout_PostRevokesAndClears(t *testing.T) {
 	form.Set("client_id", testClientID)
 	form.Set("confirm", "yes")
 	form.Set("state", "abc")
-	resp, err = ts.do(t, http.MethodPost, "/connect/logout", form, []*http.Cookie{sessionCookie, csrfCookie})
+	resp, err := ts.do(t, http.MethodPost, "/connect/logout", form, []*http.Cookie{sessionCookie, csrfCookie})
 	if err != nil {
 		t.Fatalf("POST logout: %v", err)
 	}
@@ -1351,17 +1410,12 @@ func TestE2E_Logout_PostCancelDoesNotRevoke(t *testing.T) {
 	ts := newTestServer(t)
 	tr, sessionCookie := exchangeCodeForTokens(t, ts)
 
-	resp, err := ts.do(t, http.MethodGet, "/logout", nil, []*http.Cookie{sessionCookie})
-	if err != nil {
-		t.Fatalf("GET /logout: %v", err)
-	}
-	resp.Body.Close()
-	csrfCookie := findCookie(resp.Cookies(), "_logout_csrf")
+	csrfToken, csrfCookie := fetchCSRF(t, ts)
 
 	form := url.Values{}
-	form.Set("csrf_token", csrfCookie.Value)
+	form.Set("csrf_token", csrfToken)
 	form.Set("confirm", "no")
-	resp, err = ts.do(t, http.MethodPost, "/connect/logout", form, []*http.Cookie{sessionCookie, csrfCookie})
+	resp, err := ts.do(t, http.MethodPost, "/connect/logout", form, []*http.Cookie{sessionCookie, csrfCookie})
 	if err != nil {
 		t.Fatalf("POST logout: %v", err)
 	}
@@ -1449,21 +1503,11 @@ func TestE2E_Logout_IdTokenHintGET_DoesNotRevokeAndGoesToConfirm(t *testing.T) {
 		t.Errorf("session cookie cleared by GET with id_token_hint — that is the logout-CSRF bug")
 	}
 
-	// Now drive the legitimate confirm flow: GET /logout, get CSRF,
-	// POST it, and confirm the session IS revoked afterwards. This
-	// proves the confirm page is reachable and functional, just not
-	// reachable as a side effect of the CSRF GET.
-	getRR, err := ts.do(t, http.MethodGet, "/logout?"+strings.TrimPrefix(loc, "/logout?"), nil, []*http.Cookie{sessionCookie})
-	if err != nil {
-		t.Fatalf("GET /logout: %v", err)
-	}
-	gb, _ := io.ReadAll(getRR.Body)
-	getRR.Body.Close()
-	csrfToken := extractInputValue(t, string(gb), `name="csrf_token"`)
-	csrfCookie := findCookie(getRR.Cookies(), "_logout_csrf")
-	if csrfCookie == nil {
-		t.Fatal("logout CSRF cookie not set on confirm page")
-	}
+	// Now drive the legitimate confirm flow the SPA performs: fetch a
+	// CSRF token, POST the confirm form, and confirm the session IS
+	// revoked afterwards. This proves the confirm flow is functional,
+	// just not reachable as a side effect of the CSRF GET.
+	csrfToken, csrfCookie := fetchCSRF(t, ts)
 	form := url.Values{}
 	form.Set("csrf_token", csrfToken)
 	form.Set("post_logout_redirect_uri", target)
@@ -1561,7 +1605,7 @@ func TestE2E_ExpiredCode_Rejected(t *testing.T) {
 
 func TestE2E_Admin_RejectsAnonymous(t *testing.T) {
 	ts := newAdminTestServer(t)
-	resp, err := ts.do(t, http.MethodGet, "/admin/", nil, nil)
+	resp, err := ts.do(t, http.MethodGet, "/admin/api/clients", nil, nil)
 	if err != nil {
 		t.Fatalf("admin: %v", err)
 	}
@@ -1576,7 +1620,7 @@ func TestE2E_Admin_RejectsAnonymous(t *testing.T) {
 
 func TestE2E_Admin_AcceptsToken(t *testing.T) {
 	ts := newAdminTestServer(t)
-	resp, err := ts.adminGet(t, "/admin/")
+	resp, err := ts.adminGet(t, "/admin/api/clients")
 	if err != nil {
 		t.Fatalf("admin: %v", err)
 	}
@@ -1585,11 +1629,58 @@ func TestE2E_Admin_AcceptsToken(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
 	}
-	if !strings.Contains(string(body), "<html") {
-		t.Errorf("body is not HTML: %s", body)
+	if !strings.Contains(string(body), `"items"`) {
+		t.Errorf("body is not the client list JSON: %s", body)
 	}
-	if !strings.Contains(string(body), `name="csrf-token"`) {
-		t.Errorf("body missing csrf-token meta tag: %s", body)
+}
+
+// A signed-in user can only reach the admin API once they hold the
+// admin role; state-changing session requests additionally require
+// the CSRF double-submit pair.
+func TestE2E_Admin_SessionRoleAccess(t *testing.T) {
+	ts := newAdminTestServer(t)
+	sess := loginAs(t, ts.testServer, testUser, testPassword, "/")
+
+	// No admin role yet: 403, not 401 — the user is known but not allowed.
+	resp, err := ts.do(t, http.MethodGet, "/admin/api/clients", nil, []*http.Cookie{sess})
+	if err != nil {
+		t.Fatalf("admin list: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin session status = %d, want 403", resp.StatusCode)
+	}
+
+	if err := ts.users.AddToRoles(context.Background(), "u-demo", []string{"admin"}); err != nil {
+		t.Fatalf("grant admin role: %v", err)
+	}
+	resp, err = ts.do(t, http.MethodGet, "/admin/api/clients", nil, []*http.Cookie{sess})
+	if err != nil {
+		t.Fatalf("admin list: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin session status = %d, want 200", resp.StatusCode)
+	}
+
+	// A state-changing request on the session without CSRF is refused...
+	req, _ := http.NewRequest(http.MethodPost, ts.URL("/admin/api/scopes"), strings.NewReader(`{"name":"custom"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(sess)
+	resp, err = ts.client.Do(req)
+	if err != nil {
+		t.Fatalf("admin create scope: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("session POST without CSRF status = %d, want 403", resp.StatusCode)
+	}
+
+	// ...and accepted with the pair.
+	resp = ts.doJSON(t, http.MethodPost, "/admin/api/scopes", map[string]any{"name": "custom"}, []*http.Cookie{sess})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("session POST with CSRF status = %d, want 201", resp.StatusCode)
 	}
 }
 
@@ -1692,14 +1783,14 @@ func TestE2E_LoginRateLimit_Over429(t *testing.T) {
 	// Burst is 1, refill is slow. Two POSTs in a row should
 	// yield a non-429 for the first, 429 for the second.
 	body := strings.NewReader("username=x&password=y")
-	first := postRaw(t, ts, "/login", body)
+	first := postRaw(t, ts, "/api/auth/login", body)
 	first.Body.Close()
 	if first.StatusCode == http.StatusTooManyRequests {
 		t.Fatalf("first request: rate-limited too early (status %d)", first.StatusCode)
 	}
 
 	body2 := strings.NewReader("username=x&password=y")
-	second := postRaw(t, ts, "/login", body2)
+	second := postRaw(t, ts, "/api/auth/login", body2)
 	defer second.Body.Close()
 	if second.StatusCode != http.StatusTooManyRequests {
 		t.Errorf("second request: status = %d, want 429", second.StatusCode)
@@ -1767,34 +1858,18 @@ func TestE2E_Login_LockoutAfterRepeatedFailures(t *testing.T) {
 	}
 	// 6th: still bad creds, but should also be locked.
 	resp := loginWithCreds(t, ts, "wrong", "wrong", authorizeURL)
-	defer resp.Body.Close()
-	loc := resp.Header.Get("Location")
-	if !strings.Contains(loc, "error=account_locked") {
-		t.Errorf("6th attempt Location = %q, want error=account_locked", loc)
+	body := readBodyString(t, resp)
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("6th attempt status = %d, want 429", resp.StatusCode)
+	}
+	if !strings.Contains(body, "account_locked") {
+		t.Errorf("6th attempt body = %q, want it to contain account_locked", body)
 	}
 }
 
 func loginWithCreds(t *testing.T, ts *testServer, user, pass, returnURL string) *http.Response {
 	t.Helper()
-	// Get CSRF cookie + token first.
-	resp, err := ts.do(t, http.MethodGet, "/login", nil, nil)
-	if err != nil {
-		t.Fatalf("GET login: %v", err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	csrfToken := extractInputValue(t, string(body), `name="csrf_token"`)
-	csrfCookie := findCookie(resp.Cookies(), "_csrf")
-	form := url.Values{}
-	form.Set("csrf_token", csrfToken)
-	form.Set("username", user)
-	form.Set("password", pass)
-	form.Set("returnUrl", returnURL)
-	postResp, err := ts.do(t, http.MethodPost, "/login", form, []*http.Cookie{csrfCookie})
-	if err != nil {
-		t.Fatalf("POST login: %v", err)
-	}
-	return postResp
+	return loginAttempt(t, ts, user, pass, returnURL)
 }
 
 // testServerRateLimitRPS / testServerRateLimitBurst let a test
@@ -1892,32 +1967,8 @@ func testE2EHappyPath(t *testing.T, ts *testServer) {
 		t.Fatalf("Location = %q, want /login?returnUrl=...", loc)
 	}
 
-	resp, err = ts.do(t, http.MethodGet, "/login", nil, nil)
-	if err != nil {
-		t.Fatalf("GET login: %v", err)
-	}
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	csrfToken := extractInputValue(t, string(bodyBytes), `name="csrf_token"`)
-	csrfCookie := findCookie(resp.Cookies(), "_csrf")
-
+	sessionCookie, _ := loginViaAPI(t, ts, testUser, testPassword, authorizeURL)
 	form := url.Values{}
-	form.Set("csrf_token", csrfToken)
-	form.Set("username", testUser)
-	form.Set("password", testPassword)
-	form.Set("returnUrl", authorizeURL)
-	resp, err = ts.do(t, http.MethodPost, "/login", form, []*http.Cookie{csrfCookie})
-	if err != nil {
-		t.Fatalf("POST login: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("login POST status = %d, want 302", resp.StatusCode)
-	}
-	sessionCookie := findCookie(resp.Cookies(), ".auth.session")
-	if sessionCookie == nil {
-		t.Fatalf("session cookie not set")
-	}
 
 	resp, err = ts.do(t, http.MethodGet, authorizeURL, nil, []*http.Cookie{sessionCookie})
 	if err != nil {
@@ -2159,22 +2210,12 @@ func testE2ERevoke(t *testing.T, ts *testServer) {
 
 func testE2ELogout(t *testing.T, ts *testServer) {
 	tr, sessionCookie := exchangeCodeForTokens(t, ts)
-	resp, err := ts.do(t, http.MethodGet, "/logout", nil, []*http.Cookie{sessionCookie})
-	if err != nil {
-		t.Fatalf("GET /logout: %v", err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	csrfToken := extractInputValue(t, string(body), `name="csrf_token"`)
-	csrfCookie := findCookie(resp.Cookies(), "_logout_csrf")
-	if csrfCookie == nil {
-		t.Fatalf("CSRF cookie not set")
-	}
+	csrfToken, csrfCookie := fetchCSRF(t, ts)
 	form := url.Values{}
 	form.Set("csrf_token", csrfToken)
 	form.Set("client_id", testClientID)
 	form.Set("confirm", "yes")
-	resp, err = ts.do(t, http.MethodPost, "/connect/logout", form, []*http.Cookie{sessionCookie, csrfCookie})
+	resp, err := ts.do(t, http.MethodPost, "/connect/logout", form, []*http.Cookie{sessionCookie, csrfCookie})
 	if err != nil {
 		t.Fatalf("POST logout: %v", err)
 	}
@@ -2240,52 +2281,8 @@ func buildAuthorizeURLRaw(clientID, redirectURI, state, nonce, challenge string)
 
 func loginAs(t *testing.T, ts *testServer, user, pass, returnURL string) *http.Cookie {
 	t.Helper()
-	resp, err := ts.do(t, http.MethodGet, "/login?returnUrl="+url.QueryEscape(returnURL), nil, nil)
-	if err != nil {
-		t.Fatalf("GET login: %v", err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	csrfToken := extractInputValue(t, string(body), `name="csrf_token"`)
-	csrfCookie := findCookie(resp.Cookies(), "_csrf")
-
-	form := url.Values{}
-	form.Set("csrf_token", csrfToken)
-	form.Set("username", user)
-	form.Set("password", pass)
-	form.Set("returnUrl", returnURL)
-	resp, err = ts.do(t, http.MethodPost, "/login", form, []*http.Cookie{csrfCookie})
-	if err != nil {
-		t.Fatalf("POST login: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("login POST status = %d, want 302", resp.StatusCode)
-	}
-	sess := findCookie(resp.Cookies(), ".auth.session")
-	if sess == nil {
-		t.Fatalf("session cookie not set")
-	}
+	sess, _ := loginViaAPI(t, ts, user, pass, returnURL)
 	return sess
-}
-
-func extractInputValue(t *testing.T, body, attr string) string {
-	t.Helper()
-	i := strings.Index(body, attr)
-	if i < 0 {
-		t.Fatalf("attribute %q not found in body", attr)
-	}
-	rest := body[i:]
-	j := strings.Index(rest, `value="`)
-	if j < 0 {
-		t.Fatalf("value attribute not found after %q", attr)
-	}
-	rest = rest[j+len(`value="`):]
-	k := strings.Index(rest, `"`)
-	if k < 0 {
-		t.Fatalf("closing quote not found for value attribute")
-	}
-	return rest[:k]
 }
 
 func findCookie(cookies []*http.Cookie, name string) *http.Cookie {
@@ -3030,16 +3027,21 @@ func TestAuthorize_PromptNone_MaxAgeZero(t *testing.T) {
 
 // --- admin helpers ---
 
-// buildTestAdminMount wires the admin auth + CSRF + API + SPA for
-// the test server. The test admin token is a fixed value
-// (testAdminTokenValue) the test client sends.
-func buildTestAdminMount(t *testing.T, b bundle, clk *clock.FakeClock, logger *slog.Logger) *server.AdminMount {
+// buildTestAdminMount wires the admin auth + CSRF + API for the test
+// server. The test admin token is a fixed value (testAdminTokenValue)
+// the test client sends; browser sessions with the "admin" role are
+// also accepted, mirroring production wiring.
+func buildTestAdminMount(t *testing.T, b bundle, clk *clock.FakeClock, logger *slog.Logger, resolver *oidc.SessionResolver) http.Handler {
 	t.Helper()
-	authMW, err := admin.AuthMiddleware(admin.AuthConfig{Token: testAdminTokenValue}, logger)
+	authMW, err := admin.AuthMiddleware(admin.AuthConfig{
+		Token:     testAdminTokenValue,
+		AdminRole: "admin",
+		Sessions:  resolver,
+		Users:     b.Users,
+	}, logger)
 	if err != nil {
 		t.Fatalf("admin.AuthMiddleware: %v", err)
 	}
-	csrfMW := admin.CSRFMiddleware([]byte("0123456789abcdef0123456789abcdef"), false)
 	apiMux := http.NewServeMux()
 	(&admin.API{
 		Clients:       b.Clients,
@@ -3048,15 +3050,12 @@ func buildTestAdminMount(t *testing.T, b bundle, clk *clock.FakeClock, logger *s
 		RefreshTokens: b.RefreshTokens,
 		SigningKeys:   b.SigningKeys,
 		AuditLogs:     b.AuditLogs,
+		Users:         b.Users,
+		Roles:         b.Roles,
 		Clock:         clk,
 		Logger:        logger,
 	}).Mount(apiMux)
-	ui := &admin.UI{
-		Template: template.Must(template.New("admin").Parse(admin.IndexPage())),
-		Logger:   logger,
-	}
-	wrapped := authMW(csrfMW(admin.CombineMux(apiMux, ui)))
-	return &server.AdminMount{Root: wrapped, API: wrapped}
+	return authMW(admin.CSRFMiddleware()(apiMux))
 }
 
 var _ = fmt.Sprintf

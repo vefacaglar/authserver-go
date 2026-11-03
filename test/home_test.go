@@ -2,9 +2,9 @@ package test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -29,37 +29,59 @@ func getWithSession(t *testing.T, ts *testServer, path string, sess *http.Cookie
 	return resp, string(body)
 }
 
-func TestHome_AnonymousRedirectsToLogin(t *testing.T) {
-	ts := newTestServer(t)
-	resp, _ := getWithSession(t, ts, "/", nil)
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("status = %d, want 303", resp.StatusCode)
+type homeLoginJSON struct {
+	When    time.Time `json:"when"`
+	IP      string    `json:"ip"`
+	Device  string    `json:"device"`
+	Current bool      `json:"current"`
+}
+
+type homeJSON struct {
+	Username     string          `json:"username"`
+	Email        string          `json:"email"`
+	Logins       []homeLoginJSON `json:"logins"`
+	FailedLogins []homeLoginJSON `json:"failed_logins"`
+}
+
+// getHome fetches and decodes GET /api/account/home.
+func getHome(t *testing.T, ts *testServer, sess *http.Cookie) (*http.Response, homeJSON) {
+	t.Helper()
+	resp, body := getWithSession(t, ts, "/api/account/home", sess)
+	var out homeJSON
+	if resp.StatusCode == http.StatusOK {
+		if err := json.Unmarshal([]byte(body), &out); err != nil {
+			t.Fatalf("decode home: %v (body=%s)", err, body)
+		}
 	}
-	if loc := resp.Header.Get("Location"); loc != "/login?returnUrl=%2F" {
-		t.Fatalf("Location = %q", loc)
+	return resp, out
+}
+
+func TestHome_AnonymousGets401(t *testing.T) {
+	ts := newTestServer(t)
+	resp, body := getWithSession(t, ts, "/api/account/home", nil)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+	if !strings.Contains(body, "login_required") {
+		t.Fatalf("body = %q, want login_required", body)
 	}
 }
 
 func TestHome_LoginWithoutReturnURLLandsOnHome(t *testing.T) {
 	ts := newTestServer(t)
-	resp := loginWithCreds(t, ts, testUser, testPassword, "")
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("login status = %d, want 302", resp.StatusCode)
-	}
-	if loc := resp.Header.Get("Location"); loc != "/" {
-		t.Fatalf("Location = %q, want the relative home path", loc)
+	_, redirect := loginViaAPI(t, ts, testUser, testPassword, "")
+	if redirect != "/" {
+		t.Fatalf("redirect = %q, want the relative home path", redirect)
 	}
 }
 
 func TestHome_AnonymousBounceThroughLoginReturnsHome(t *testing.T) {
 	ts := newTestServer(t)
-	// "/" sends anonymous users to /login?returnUrl=/ ; that returnUrl
-	// must pass the open-redirect guard instead of erroring out.
-	resp := loginWithCreds(t, ts, testUser, testPassword, "/")
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/" {
-		t.Fatalf("status=%d Location=%q, want 302 to /", resp.StatusCode, resp.Header.Get("Location"))
+	// The SPA sends anonymous visitors to login with returnUrl=/ ;
+	// that value must pass the open-redirect guard.
+	_, redirect := loginViaAPI(t, ts, testUser, testPassword, "/")
+	if redirect != "/" {
+		t.Fatalf("redirect = %q, want /", redirect)
 	}
 }
 
@@ -77,28 +99,32 @@ func homeShowsProfileAndLogins(t *testing.T, ts *testServer) {
 	ts.clk.Advance(time.Minute)
 	sess := loginAs(t, ts, testUser, testPassword, "/connect/authorize?x=1")
 
-	resp, body := getWithSession(t, ts, "/", sess)
+	resp, home := getHome(t, ts, sess)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 	if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store", cc)
 	}
-	for _, want := range []string{"welcome, " + testUser, "demo@example.com", "recent sign-ins", "this sign-in"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("body missing %q", want)
-		}
+	if home.Username != testUser || home.Email != "demo@example.com" {
+		t.Errorf("home = %+v, want the demo user's fields", home)
 	}
-	if n := strings.Count(body, "<tr>"); n != 2 {
-		t.Errorf("history rows = %d, want 2", n)
+	if len(home.Logins) != 2 {
+		t.Fatalf("logins = %d, want 2", len(home.Logins))
 	}
-	// Newest first: the 1700000060 login precedes the 1700000000 one.
-	if i, j := strings.Index(body, "2023-11-14 22:14 UTC"), strings.Index(body, "2023-11-14 22:13 UTC"); i < 0 || j < 0 || i > j {
-		t.Errorf("history not newest-first (i=%d j=%d)", i, j)
+	if !home.Logins[0].Current || home.Logins[1].Current {
+		t.Errorf("current flags = [%v %v], want only the newest marked", home.Logins[0].Current, home.Logins[1].Current)
+	}
+	// Newest first: the second login happened one minute after the first.
+	if !home.Logins[0].When.After(home.Logins[1].When) {
+		t.Errorf("history not newest-first: %v then %v", home.Logins[0].When, home.Logins[1].When)
+	}
+	if len(home.FailedLogins) != 0 {
+		t.Errorf("failed_logins = %d, want 0", len(home.FailedLogins))
 	}
 }
 
-func TestHome_HistoryIsPerUserAndEscaped(t *testing.T) {
+func TestHome_HistoryIsPerUser(t *testing.T) {
 	ts := newTestServer(t)
 	sess := loginAs(t, ts, testUser, testPassword, "/connect/authorize")
 
@@ -117,37 +143,53 @@ func TestHome_HistoryIsPerUserAndEscaped(t *testing.T) {
 		}
 	}
 
-	_, body := getWithSession(t, ts, "/", sess)
-	if strings.Contains(body, "203.0.113.9") {
-		t.Error("another user's sign-in leaked into the home page")
+	_, rawBody := getWithSession(t, ts, "/api/account/home", sess)
+	if strings.Contains(rawBody, "203.0.113.9") {
+		t.Error("another user's sign-in leaked into the home response")
 	}
-	if strings.Contains(body, "<script>alert(1)</script>") {
-		t.Error("stored IP value rendered unescaped")
+	// The raw JSON must not carry an executable script tag: encoding/json
+	// escapes < and >, and the SPA renders values as text.
+	if strings.Contains(rawBody, "<script>alert(1)</script>") {
+		t.Error("stored IP value serialised unescaped")
 	}
 }
 
-func TestLogin_AlreadySignedInGETRedirectsHome(t *testing.T) {
+func TestSession_ReportsSignedInUser(t *testing.T) {
 	ts := newTestServer(t)
 	sess := loginAs(t, ts, testUser, testPassword, "/connect/authorize")
 
-	resp, _ := getWithSession(t, ts, "/login", sess)
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/" {
-		t.Fatalf("status=%d Location=%q, want 303 to /", resp.StatusCode, resp.Header.Get("Location"))
-	}
-	// A redirect-driven visit (returnUrl present) must still render the form.
-	resp, _ = getWithSession(t, ts, "/login?returnUrl="+url.QueryEscape("/connect/authorize"), sess)
+	resp, body := getWithSession(t, ts, "/api/auth/session", sess)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("returnUrl visit status = %d, want 200", resp.StatusCode)
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var view struct {
+		Authenticated bool   `json:"authenticated"`
+		Username      string `json:"username"`
+		IsAdmin       bool   `json:"is_admin"`
+	}
+	if err := json.Unmarshal([]byte(body), &view); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	if !view.Authenticated || view.Username != testUser {
+		t.Errorf("view = %+v, want authenticated demo user", view)
+	}
+	if view.IsAdmin {
+		t.Error("demo user reported as admin without the role")
+	}
+
+	resp, body = getWithSession(t, ts, "/api/auth/session", nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"authenticated":false`) {
+		t.Errorf("anonymous session probe: status=%d body=%q", resp.StatusCode, body)
 	}
 }
 
-func TestHome_ExpiredSessionRedirectsToLogin(t *testing.T) {
+func TestHome_ExpiredSessionGets401(t *testing.T) {
 	ts := newTestServer(t)
 	sess := loginAs(t, ts, testUser, testPassword, "/connect/authorize")
 	ts.clk.Advance(2 * time.Hour) // session lifetime in the harness is 1h
 
-	resp, _ := getWithSession(t, ts, "/", sess)
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("status = %d, want 303", resp.StatusCode)
+	resp, _ := getWithSession(t, ts, "/api/account/home", sess)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
 	}
 }

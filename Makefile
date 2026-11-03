@@ -12,9 +12,10 @@
 BINARY    := authserver
 PKG       := ./cmd/authserver
 PORT      ?= 5175
+WEB_PORT  ?= 5173
 DEMO_PORT ?= 8090
 
-.PHONY: help dev run build start stop start-all stop-all logs test smoke vet check tidy clean
+.PHONY: help dev run build start stop start-all stop-all logs test smoke vet check tidy clean web-install web-dev web-build
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -44,20 +45,27 @@ stop: ## Stop the background server: pidfile + anything bound to port $(PORT)
 demo: ## Run the browser demo client (loads .env)
 	@set -a; . ./.env; set +a; go run ./examples/loginflow
 
-start-all: ## Background auth server + browser demo client (open http://localhost:$(DEMO_PORT))
+start-all: ## Background auth server + web SPA + browser demo client (open http://localhost:$(DEMO_PORT))
 	@$(MAKE) -s stop-all
-	@set -a; . ./.env; set +a; ./scripts/dev.sh > /tmp/authserver.log 2>&1 & echo $$! > .authserver.pid
+	@set -a; . ./.env; set +a; AUTH_ISSUER=http://localhost:$(WEB_PORT) ./scripts/dev.sh > /tmp/authserver.log 2>&1 & echo $$! > .authserver.pid
 	@sleep 2
-	@set -a; . ./.env; set +a; DEMO_ADDR=:$(DEMO_PORT) DEMO_REDIRECT_URI=http://localhost:$(DEMO_PORT)/callback \
+	@cd web && pnpm run dev > /tmp/authweb.log 2>&1 & echo $$! > .web.pid
+	@sleep 2
+	@set -a; . ./.env; set +a; AUTH_ISSUER=http://localhost:$(WEB_PORT) DEMO_ADDR=:$(DEMO_PORT) DEMO_REDIRECT_URI=http://localhost:$(DEMO_PORT)/callback \
 		go run ./examples/loginflow > /tmp/democlient.log 2>&1 & echo $$! > .democlient.pid
 	@sleep 2
-	@echo "auth server : http://localhost:$(PORT)   (logs: /tmp/authserver.log)"
+	@echo "auth server : http://localhost:$(PORT)   (API only; logs: /tmp/authserver.log)"
+	@echo "web SPA     : http://localhost:$(WEB_PORT)   (issuer origin; logs: /tmp/authweb.log)"
 	@echo "demo client : http://localhost:$(DEMO_PORT)   (logs: /tmp/democlient.log)"
 	@echo "==> open http://localhost:$(DEMO_PORT) and log in as demo/demo"
-	@echo "    stop both with 'make stop-all'"
+	@echo "    stop all with 'make stop-all' (needs 'make web-install' once)"
 
-stop-all: ## Stop both the auth server and the demo client
+stop-all: ## Stop the auth server, the web SPA, and the demo client
 	@$(MAKE) -s stop
+	@if [ -f .web.pid ]; then kill $$(cat .web.pid) 2>/dev/null || true; rm -f .web.pid; fi
+	@pids=$$(lsof -ti tcp:$(WEB_PORT) 2>/dev/null); \
+	if [ -n "$$pids" ]; then kill $$pids 2>/dev/null || true; echo "freed port $(WEB_PORT) (killed: $$pids)"; \
+	else echo "port $(WEB_PORT) already free"; fi
 	@if [ -f .democlient.pid ]; then kill $$(cat .democlient.pid) 2>/dev/null || true; rm -f .democlient.pid; fi
 	@pids=$$(lsof -ti tcp:$(DEMO_PORT) 2>/dev/null); \
 	if [ -n "$$pids" ]; then kill $$pids 2>/dev/null || true; echo "freed port $(DEMO_PORT) (killed: $$pids)"; \
@@ -65,6 +73,15 @@ stop-all: ## Stop both the auth server and the demo client
 
 logs: ## Tail the logs of both background services in real time (Ctrl-C to stop)
 	@tail -f /tmp/authserver.log -f /tmp/democlient.log
+
+web-install: ## Install web SPA dependencies (pnpm)
+	cd web && pnpm install
+
+web-dev: ## Run the web SPA dev server on :5173 (needs `make dev` for the API in another terminal)
+	cd web && pnpm run dev
+
+web-build: ## Type-check and build the web SPA into web/dist
+	cd web && pnpm run build
 
 
 test: ## Run the full test suite

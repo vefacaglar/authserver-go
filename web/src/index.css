@@ -1,0 +1,191 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap");
+@import "tailwindcss";
+
+/*
+ * Theme carried over from the former Go-rendered auth pages:
+ * #121212 page, #1a1a1a panels, JetBrains Mono everywhere, lowercase
+ * labels, square corners, light slate inputs on the dark shell.
+ */
+@theme {
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --color-shell: #121212;
+  --color-panel: #1a1a1a;
+  --color-field: #cbd5e1;
+}
+
+html {
+  background: #121212;
+}
+
+body {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  background: #121212;
+  color: var(--color-zinc-400);
+  -webkit-font-smoothing: antialiased;
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #09090b !important;
+  -webkit-box-shadow: 0 0 0px 1000px #cbd5e1 inset !important;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+}
+
+@layer components {
+  .auth-label {
+    display: block;
+    font-size: 0.75rem;
+    line-height: 1rem;
+    color: var(--color-zinc-500);
+    text-transform: lowercase;
+    letter-spacing: 0.025em;
+    margin-bottom: 0.5rem;
+  }
+  .auth-input {
+    display: block;
+    width: 100%;
+    border: 0;
+    border-radius: 0;
+    padding: 0.75rem 1rem;
+    background: #cbd5e1;
+    color: var(--color-zinc-950);
+    font-family: inherit;
+    font-size: 0.875rem;
+    outline: none;
+  }
+  .auth-input::placeholder {
+    color: var(--color-zinc-500);
+  }
+  .auth-btn {
+    display: flex;
+    width: 100%;
+    justify-content: center;
+    border-radius: 0;
+    background: var(--color-zinc-300);
+    padding: 0.75rem;
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: var(--color-zinc-950);
+    text-transform: lowercase;
+    letter-spacing: 0.025em;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background-color 0.15s;
+  }
+  .auth-btn:hover:not(:disabled) {
+    background: var(--color-zinc-400);
+  }
+  .auth-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .auth-link {
+    color: var(--color-zinc-500);
+    text-decoration: underline;
+    text-underline-offset: 4px;
+    text-decoration-thickness: 1px;
+    font-size: 0.75rem;
+    text-transform: lowercase;
+    transition: color 0.15s;
+    cursor: pointer;
+    background: none;
+    border: 0;
+    font-family: inherit;
+    padding: 0;
+  }
+  .auth-link:hover {
+    color: var(--color-zinc-300);
+  }
+  .nav-link {
+    font-size: 0.75rem;
+    text-transform: lowercase;
+    letter-spacing: 0.025em;
+    color: var(--color-zinc-500);
+    transition: color 0.15s;
+  }
+  .nav-link:hover {
+    color: var(--color-zinc-300);
+  }
+  .nav-link-active {
+    color: var(--color-zinc-200);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 8px;
+  }
+  /* Admin surfaces reuse the same language at a denser scale. */
+  .admin-input {
+    display: block;
+    width: 100%;
+    border: 1px solid rgb(39 39 42 / 0.9);
+    border-radius: 0;
+    padding: 0.45rem 0.6rem;
+    background: #121212;
+    color: var(--color-zinc-200);
+    font-family: inherit;
+    font-size: 0.8125rem;
+    outline: none;
+  }
+  .admin-input:focus {
+    border-color: var(--color-zinc-500);
+  }
+  .admin-input::placeholder {
+    color: var(--color-zinc-600);
+  }
+  .admin-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border-radius: 0;
+    background: var(--color-zinc-300);
+    padding: 0.45rem 0.8rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--color-zinc-950);
+    text-transform: lowercase;
+    font-family: inherit;
+    cursor: pointer;
+    border: 1px solid var(--color-zinc-300);
+    transition: background-color 0.15s;
+    white-space: nowrap;
+  }
+  .admin-btn:hover:not(:disabled) {
+    background: var(--color-zinc-400);
+    border-color: var(--color-zinc-400);
+  }
+  .admin-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .admin-btn-ghost {
+    background: transparent;
+    color: var(--color-zinc-400);
+    border: 1px solid rgb(39 39 42 / 0.9);
+  }
+  .admin-btn-ghost:hover:not(:disabled) {
+    background: #1a1a1a;
+    border-color: var(--color-zinc-600);
+    color: var(--color-zinc-200);
+  }
+  .admin-btn-danger {
+    background: transparent;
+    color: var(--color-red-400);
+    border: 1px solid rgb(127 29 29 / 0.8);
+  }
+  .admin-btn-danger:hover:not(:disabled) {
+    background: rgb(69 10 10 / 0.35);
+    border-color: var(--color-red-500);
+    color: var(--color-red-300);
+  }
+}

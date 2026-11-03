@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"html/template"
 	"io"
 	"log/slog"
 	"net"
@@ -128,13 +127,12 @@ func buildTestServerForIssuer(t *testing.T, issuer string) *testServer {
 		session.CookieConfig{Name: ".auth.session", Path: "/"},
 		clk,
 	)
-	loginTmpl := template.Must(template.New("login").Parse(oidc.LoginTemplate()))
 	loginHandler := &oidc.LoginHandler{
 		Cfg: oidc.LoginConfig{
-			IssuerURL: issuer, LoginPath: "/login", AuthorizePath: "/connect/authorize", SessionLifetime: time.Hour,
+			IssuerURL: issuer, AuthorizePath: "/connect/authorize", SessionLifetime: time.Hour,
 		},
 		Users: users, Sessions: sessions, Cookies: cookieMgr, Tracker: tracker,
-		Clock: clk, Logger: logger, Template: loginTmpl,
+		Clock: clk, Logger: logger,
 	}
 	authorizeHandler := &oidc.AuthorizeHandler{
 		Cfg: oidc.AuthorizeConfig{
@@ -159,7 +157,6 @@ func buildTestServerForIssuer(t *testing.T, issuer string) *testServer {
 		},
 		Clients: clients, Clock: clk, Logger: logger,
 	}
-	logoutTmpl := template.Must(template.New("logout").Parse(oidc.LogoutTemplate()))
 	logoutHandler := &oidc.LogoutHandler{
 		Cfg: oidc.LogoutConfig{
 			IssuerURL: issuer, AuthorizePath: "/connect/authorize",
@@ -172,10 +169,10 @@ func buildTestServerForIssuer(t *testing.T, issuer string) *testServer {
 		Issuer:        iss,
 		Clock:         clk,
 		Logger:        logger,
-		Confirm:       logoutTmpl,
 	}
 
 	handlers := server.Handlers{
+		CSRF:      &oidc.CSRFHandler{Logger: logger},
 		Login:     loginHandler,
 		Logout:    logoutHandler,
 		Authorize: authorizeHandler,
@@ -193,8 +190,7 @@ func buildTestServerForIssuer(t *testing.T, issuer string) *testServer {
 	}
 	router := server.NewRouter(
 		server.RouterConfig{
-			IssuerURL: issuer, RequireHTTPS: false,
-			LoginPath: "/login", LogoutPath: "/logout",
+			RequireHTTPS:  false,
 			AuthorizePath: "/connect/authorize", TokenPath: "/connect/token",
 			UserInfoPath: "/connect/userinfo", RevokePath: "/connect/revoke",
 			JWKSPath: "/.well-known/jwks.json", DiscoveryPath: "/.well-known/openid-configuration",

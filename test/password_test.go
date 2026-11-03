@@ -14,13 +14,17 @@ import (
 
 const newTestPassword = "a-brand-new-pass"
 
-func changePasswordForm(token, current, next, confirm string) url.Values {
-	return url.Values{
-		"csrf_token":           {token},
-		"current_password":     {current},
-		"new_password":         {next},
-		"new_password_confirm": {confirm},
+func changePasswordPayload(current, next, confirm string) map[string]any {
+	return map[string]any{
+		"current_password":     current,
+		"new_password":         next,
+		"new_password_confirm": confirm,
 	}
+}
+
+func changePassword(t *testing.T, ts *testServer, sess *http.Cookie, current, next, confirm string) *http.Response {
+	t.Helper()
+	return ts.doJSON(t, http.MethodPost, "/api/account/profile/password", changePasswordPayload(current, next, confirm), []*http.Cookie{sess})
 }
 
 func refreshStatus(t *testing.T, ts *testServer, refreshToken string) int {
@@ -35,25 +39,19 @@ func refreshStatus(t *testing.T, ts *testServer, refreshToken string) int {
 	return resp.StatusCode
 }
 
-func TestProfile_PageShowsPasswordFormAndRevokeOthers(t *testing.T) {
+func TestProfile_HasOtherSessionsFlag(t *testing.T) {
 	ts := newTestServer(t)
 	first := loginAs(t, ts, testUser, testPassword, "/connect/authorize")
 
-	_, body := getWithSession(t, ts, "/profile", first)
-	for _, want := range []string{`action="/profile/password"`, `name="current_password"`, `name="new_password_confirm"`} {
-		if !strings.Contains(body, want) {
-			t.Errorf("profile page missing %s", want)
-		}
-	}
-	// With a single session there is nothing else to sign out.
-	if strings.Contains(body, "sign out all other sessions") {
-		t.Error("revoke-others button shown with only one session")
+	_, prof := getProfile(t, ts, first)
+	if prof.HasOtherSessions {
+		t.Error("has_other_sessions = true with a single session")
 	}
 
 	loginAs(t, ts, testUser, testPassword, "/connect/authorize")
-	_, body = getWithSession(t, ts, "/profile", first)
-	if !strings.Contains(body, `action="/profile/sessions/revoke-others"`) || !strings.Contains(body, "sign out all other sessions") {
-		t.Error("revoke-others button missing with two sessions")
+	_, prof = getProfile(t, ts, first)
+	if !prof.HasOtherSessions {
+		t.Error("has_other_sessions = false with two sessions")
 	}
 }
 
@@ -62,31 +60,29 @@ func TestProfile_ChangePassword(t *testing.T) {
 	// Session A holds a refresh token; session B (the browser doing the change) is current.
 	tokens, sessA := exchangeCodeForTokens(t, ts)
 	sessB := loginAs(t, ts, testUser, testPassword, "/connect/authorize")
-	csrfCookie, token := profileCSRF(t, ts, sessB)
 
-	resp := postProfile(t, ts, "/profile/password", changePasswordForm(token, testPassword, newTestPassword, newTestPassword), sessB, csrfCookie)
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/profile?status=password_changed" {
-		t.Fatalf("status=%d Location=%q", resp.StatusCode, resp.Header.Get("Location"))
+	resp := changePassword(t, ts, sessB, testPassword, newTestPassword, newTestPassword)
+	body := readBodyString(t, resp)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "password_changed") {
+		t.Fatalf("status=%d body=%q", resp.StatusCode, body)
 	}
 
 	// Old password stops working, the new one works.
 	old := loginWithCreds(t, ts, testUser, testPassword, "")
 	old.Body.Close()
-	if !strings.HasPrefix(old.Header.Get("Location"), "/login?error=invalid_credentials") {
-		t.Errorf("old password still accepted: Location=%q", old.Header.Get("Location"))
+	if old.StatusCode != http.StatusUnauthorized {
+		t.Errorf("old password still accepted: status=%d", old.StatusCode)
 	}
-	fresh := loginWithCreds(t, ts, testUser, newTestPassword, "")
-	fresh.Body.Close()
-	if fresh.StatusCode != http.StatusFound || fresh.Header.Get("Location") != "/" {
-		t.Errorf("new password rejected: status=%d Location=%q", fresh.StatusCode, fresh.Header.Get("Location"))
+	if _, redirect := loginViaAPI(t, ts, testUser, newTestPassword, ""); redirect != "/" {
+		t.Errorf("new password redirect = %q, want /", redirect)
 	}
 
 	// The current browser stays signed in; the other session and its refresh token are dead.
-	if r, _ := getWithSession(t, ts, "/", sessB); r.StatusCode != http.StatusOK {
+	if r, _ := getHome(t, ts, sessB); r.StatusCode != http.StatusOK {
 		t.Errorf("current session status = %d, want 200", r.StatusCode)
 	}
-	if r, _ := getWithSession(t, ts, "/", sessA); r.StatusCode != http.StatusSeeOther {
-		t.Errorf("other session status = %d, want 303 to login", r.StatusCode)
+	if r, _ := getHome(t, ts, sessA); r.StatusCode != http.StatusUnauthorized {
+		t.Errorf("other session status = %d, want 401", r.StatusCode)
 	}
 	if got := refreshStatus(t, ts, tokens.RefreshToken); got != http.StatusBadRequest {
 		t.Errorf("refresh token after password change: status = %d, want 400", got)
@@ -102,78 +98,91 @@ func TestProfile_ChangePassword(t *testing.T) {
 func TestProfile_ChangePasswordRejections(t *testing.T) {
 	ts := newTestServer(t)
 	sess := loginAs(t, ts, testUser, testPassword, "/connect/authorize")
-	csrfCookie, token := profileCSRF(t, ts, sess)
 
 	tests := []struct {
-		name string
-		form url.Values
-		want string
+		name    string
+		payload map[string]any
+		want    string
 	}{
-		{"no csrf", changePasswordForm("", testPassword, newTestPassword, newTestPassword), "error=antiforgery_failed"},
-		{"missing field", changePasswordForm(token, testPassword, newTestPassword, ""), "error=password_missing"},
-		{"wrong current", changePasswordForm(token, "not-my-password", newTestPassword, newTestPassword), "error=current_password_wrong"},
-		{"mismatch", changePasswordForm(token, testPassword, newTestPassword, newTestPassword+"x"), "error=password_mismatch"},
-		{"too short", changePasswordForm(token, testPassword, "short", "short"), "error=password_weak"},
-		{"too long", changePasswordForm(token, testPassword, strings.Repeat("a", 73), strings.Repeat("a", 73)), "error=password_weak"},
-		{"padded", changePasswordForm(token, testPassword, " "+newTestPassword, " "+newTestPassword), "error=password_weak"},
+		{"missing field", changePasswordPayload(testPassword, newTestPassword, ""), "password_missing"},
+		{"wrong current", changePasswordPayload("not-my-password", newTestPassword, newTestPassword), "current_password_wrong"},
+		{"mismatch", changePasswordPayload(testPassword, newTestPassword, newTestPassword+"x"), "password_mismatch"},
+		{"too short", changePasswordPayload(testPassword, "short", "short"), "password_weak"},
+		{"too long", changePasswordPayload(testPassword, strings.Repeat("a", 73), strings.Repeat("a", 73)), "password_weak"},
+		{"padded", changePasswordPayload(testPassword, " "+newTestPassword, " "+newTestPassword), "password_weak"},
 	}
 	// Reusing the current password is covered by
 	// TestProfile_ChangePasswordRejectsReusingCurrent: the seed password
 	// is shorter than the policy minimum, so it needs a compliant one first.
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			resp := postProfile(t, ts, "/profile/password", tc.form, sess, csrfCookie)
-			if resp.StatusCode != http.StatusSeeOther || !strings.HasSuffix(resp.Header.Get("Location"), tc.want) {
-				t.Fatalf("status=%d Location=%q, want suffix %q", resp.StatusCode, resp.Header.Get("Location"), tc.want)
+			resp := ts.doJSON(t, http.MethodPost, "/api/account/profile/password", tc.payload, []*http.Cookie{sess})
+			body := readBodyString(t, resp)
+			if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, tc.want) {
+				t.Fatalf("status=%d body=%q, want 400 with %q", resp.StatusCode, body, tc.want)
 			}
 		})
 	}
 
+	t.Run("no csrf", func(t *testing.T) {
+		b, _ := json.Marshal(changePasswordPayload(testPassword, newTestPassword, newTestPassword))
+		req, _ := http.NewRequest(http.MethodPost, ts.URL("/api/account/profile/password"), strings.NewReader(string(b)))
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(sess)
+		resp, err := ts.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := readBodyString(t, resp)
+		if resp.StatusCode != http.StatusForbidden || !strings.Contains(body, "antiforgery_failed") {
+			t.Fatalf("status=%d body=%q, want 403 antiforgery_failed", resp.StatusCode, body)
+		}
+	})
+
 	// Nothing above may have changed the password.
-	ok := loginWithCreds(t, ts, testUser, testPassword, "")
-	ok.Body.Close()
-	if ok.Header.Get("Location") != "/" {
-		t.Errorf("rejected requests changed the password: Location=%q", ok.Header.Get("Location"))
+	if _, redirect := loginViaAPI(t, ts, testUser, testPassword, ""); redirect != "/" {
+		t.Errorf("rejected requests changed the password: redirect=%q", redirect)
 	}
 	// Anonymous POSTs never reach the handler.
-	anon := postProfile(t, ts, "/profile/password", changePasswordForm(token, testPassword, newTestPassword, newTestPassword), csrfCookie)
-	if !strings.HasPrefix(anon.Header.Get("Location"), "/login") {
-		t.Errorf("anonymous POST Location = %q", anon.Header.Get("Location"))
+	anon := ts.doJSON(t, http.MethodPost, "/api/account/profile/password", changePasswordPayload(testPassword, newTestPassword, newTestPassword), nil)
+	anon.Body.Close()
+	if anon.StatusCode != http.StatusUnauthorized {
+		t.Errorf("anonymous POST status = %d, want 401", anon.StatusCode)
 	}
 }
 
 func TestProfile_ChangePasswordRejectsReusingCurrent(t *testing.T) {
 	ts := newTestServer(t)
 	sess := loginAs(t, ts, testUser, testPassword, "/connect/authorize")
-	csrfCookie, token := profileCSRF(t, ts, sess)
 	// First move to a policy-compliant password, then try to "change" to itself.
-	postProfile(t, ts, "/profile/password", changePasswordForm(token, testPassword, newTestPassword, newTestPassword), sess, csrfCookie)
-	resp := postProfile(t, ts, "/profile/password", changePasswordForm(token, newTestPassword, newTestPassword, newTestPassword), sess, csrfCookie)
-	if !strings.HasSuffix(resp.Header.Get("Location"), "error=password_unchanged") {
-		t.Errorf("Location = %q, want password_unchanged", resp.Header.Get("Location"))
+	resp := changePassword(t, ts, sess, testPassword, newTestPassword, newTestPassword)
+	resp.Body.Close()
+	resp = changePassword(t, ts, sess, newTestPassword, newTestPassword, newTestPassword)
+	body := readBodyString(t, resp)
+	if !strings.Contains(body, "password_unchanged") {
+		t.Errorf("body = %q, want password_unchanged", body)
 	}
 }
 
 func TestProfile_ChangePasswordLocksOutGuessing(t *testing.T) {
 	ts := newTestServer(t)
 	sess := loginAs(t, ts, testUser, testPassword, "/connect/authorize")
-	csrfCookie, token := profileCSRF(t, ts, sess)
 
 	for i := 0; i < 5; i++ {
-		resp := postProfile(t, ts, "/profile/password", changePasswordForm(token, "guess-"+string(rune('a'+i)), newTestPassword, newTestPassword), sess, csrfCookie)
-		if !strings.HasSuffix(resp.Header.Get("Location"), "error=current_password_wrong") {
-			t.Fatalf("attempt %d Location = %q", i, resp.Header.Get("Location"))
+		resp := changePassword(t, ts, sess, "guess-"+string(rune('a'+i)), newTestPassword, newTestPassword)
+		body := readBodyString(t, resp)
+		if !strings.Contains(body, "current_password_wrong") {
+			t.Fatalf("attempt %d body = %q", i, body)
 		}
 	}
 	// Even the right password is refused while locked, and nothing changes.
-	resp := postProfile(t, ts, "/profile/password", changePasswordForm(token, testPassword, newTestPassword, newTestPassword), sess, csrfCookie)
-	if !strings.HasSuffix(resp.Header.Get("Location"), "error=account_locked") {
-		t.Fatalf("Location = %q, want account_locked", resp.Header.Get("Location"))
+	resp := changePassword(t, ts, sess, testPassword, newTestPassword, newTestPassword)
+	body := readBodyString(t, resp)
+	if resp.StatusCode != http.StatusTooManyRequests || !strings.Contains(body, "account_locked") {
+		t.Fatalf("status=%d body=%q, want 429 account_locked", resp.StatusCode, body)
 	}
-	ok := loginWithCreds(t, ts, testUser, testPassword, "")
-	ok.Body.Close()
-	if ok.Header.Get("Location") != "/" {
-		t.Errorf("password changed while locked out: Location=%q", ok.Header.Get("Location"))
+	if _, redirect := loginViaAPI(t, ts, testUser, testPassword, ""); redirect != "/" {
+		t.Errorf("password changed while locked out: redirect=%q", redirect)
 	}
 }
 
@@ -181,26 +190,33 @@ func TestProfile_RevokeOtherSessions(t *testing.T) {
 	ts := newTestServer(t)
 	tokens, other := exchangeCodeForTokens(t, ts)
 	current := loginAs(t, ts, testUser, testPassword, "/connect/authorize")
-	csrfCookie, token := profileCSRF(t, ts, current)
 
 	// Missing CSRF is rejected and revokes nothing.
-	resp := postProfile(t, ts, "/profile/sessions/revoke-others", url.Values{}, current, csrfCookie)
-	if !strings.HasSuffix(resp.Header.Get("Location"), "error=antiforgery_failed") {
-		t.Fatalf("no-CSRF Location = %q", resp.Header.Get("Location"))
+	req, _ := http.NewRequest(http.MethodPost, ts.URL("/api/account/profile/sessions/revoke-others"), strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(current)
+	noCSRF, err := ts.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if r, _ := getWithSession(t, ts, "/", other); r.StatusCode != http.StatusOK {
+	body := readBodyString(t, noCSRF)
+	if noCSRF.StatusCode != http.StatusForbidden || !strings.Contains(body, "antiforgery_failed") {
+		t.Fatalf("no-CSRF: status=%d body=%q", noCSRF.StatusCode, body)
+	}
+	if r, _ := getHome(t, ts, other); r.StatusCode != http.StatusOK {
 		t.Fatal("session revoked without a valid CSRF token")
 	}
 
-	resp = postProfile(t, ts, "/profile/sessions/revoke-others", url.Values{"csrf_token": {token}}, current, csrfCookie)
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/profile?status=other_sessions_revoked" {
-		t.Fatalf("status=%d Location=%q", resp.StatusCode, resp.Header.Get("Location"))
+	resp := postProfileJSON(t, ts, "/api/account/profile/sessions/revoke-others", map[string]any{}, current)
+	body = readBodyString(t, resp)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "other_sessions_revoked") {
+		t.Fatalf("status=%d body=%q", resp.StatusCode, body)
 	}
-	if r, _ := getWithSession(t, ts, "/", current); r.StatusCode != http.StatusOK {
+	if r, _ := getHome(t, ts, current); r.StatusCode != http.StatusOK {
 		t.Errorf("current session status = %d, want 200", r.StatusCode)
 	}
-	if r, _ := getWithSession(t, ts, "/", other); r.StatusCode != http.StatusSeeOther {
-		t.Errorf("other session status = %d, want 303", r.StatusCode)
+	if r, _ := getHome(t, ts, other); r.StatusCode != http.StatusUnauthorized {
+		t.Errorf("other session status = %d, want 401", r.StatusCode)
 	}
 	if got := refreshStatus(t, ts, tokens.RefreshToken); got != http.StatusBadRequest {
 		t.Errorf("refresh token of a revoked session: status = %d, want 400", got)
@@ -222,22 +238,20 @@ func TestProfile_ChangePassword_GORM(t *testing.T) {
 	ts := newGormTestServer(t)
 	_, sessA := exchangeCodeForTokens(t, ts)
 	sessB := loginAs(t, ts, testUser, testPassword, "/connect/authorize")
-	csrfCookie, token := profileCSRF(t, ts, sessB)
 
-	resp := postProfile(t, ts, "/profile/password", changePasswordForm(token, testPassword, newTestPassword, newTestPassword), sessB, csrfCookie)
-	if resp.Header.Get("Location") != "/profile?status=password_changed" {
-		t.Fatalf("Location = %q", resp.Header.Get("Location"))
+	resp := changePassword(t, ts, sessB, testPassword, newTestPassword, newTestPassword)
+	body := readBodyString(t, resp)
+	if !strings.Contains(body, "password_changed") {
+		t.Fatalf("body = %q", body)
 	}
-	if r, _ := getWithSession(t, ts, "/", sessA); r.StatusCode != http.StatusSeeOther {
-		t.Errorf("other session status = %d, want 303", r.StatusCode)
+	if r, _ := getHome(t, ts, sessA); r.StatusCode != http.StatusUnauthorized {
+		t.Errorf("other session status = %d, want 401", r.StatusCode)
 	}
-	if r, _ := getWithSession(t, ts, "/", sessB); r.StatusCode != http.StatusOK {
+	if r, _ := getHome(t, ts, sessB); r.StatusCode != http.StatusOK {
 		t.Errorf("current session status = %d, want 200", r.StatusCode)
 	}
-	fresh := loginWithCreds(t, ts, testUser, newTestPassword, "")
-	fresh.Body.Close()
-	if fresh.Header.Get("Location") != "/" {
-		t.Errorf("new password rejected on GORM store: Location=%q", fresh.Header.Get("Location"))
+	if _, redirect := loginViaAPI(t, ts, testUser, newTestPassword, ""); redirect != "/" {
+		t.Errorf("new password rejected on GORM store: redirect=%q", redirect)
 	}
 	// The security-stamp write must not clobber the freshly hashed password.
 	user, _ := ts.users.FindUserByID(context.Background(), "u-demo")

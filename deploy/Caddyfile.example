@@ -1,12 +1,19 @@
 # Add this block to the existing Caddyfile; preserve the other sites.
+# API paths go to the Go server; everything else serves the SPA.
 auth.vefacaglar.com {
-    reverse_proxy authserver:5175 {
-        # The application trusts proxy headers. Replace user-supplied values.
-        header_up -True-Client-IP
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
+    @api path /api/* /admin/api/* /connect/* /.well-known/* /healthz
+    handle @api {
+        reverse_proxy authserver:5175 {
+            # The application trusts proxy headers. Replace user-supplied values.
+            header_up -True-Client-IP
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+        }
+    }
+    handle {
+        reverse_proxy web:8080
     }
 }
-# Caddy must share AUTH_DOCKER_NETWORK with authserver.
-# If Caddy runs on the host, use 127.0.0.1:5175 as the upstream.
+# Caddy must share AUTH_DOCKER_NETWORK with authserver and web.
+# If Caddy runs on the host, use 127.0.0.1:5175 and 127.0.0.1:5176 as the upstreams.
 # Use direct DNS initially; a CDN requires an explicit trusted-proxy setup.

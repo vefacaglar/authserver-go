@@ -2,7 +2,6 @@ package oidc
 
 import (
 	"context"
-	"html/template"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -29,24 +28,23 @@ const (
 // opportunistic cleanup deletes them.
 const resetTokenRetention = 24 * time.Hour
 
-// ForgotPasswordConfig bundles the paths and policy the page needs.
+// ForgotPasswordConfig bundles the paths and policy the handler needs.
+// ResetPath is the SPA page the emailed link opens.
 type ForgotPasswordConfig struct {
-	ForgotPath    string
 	ResetPath     string
-	LoginPath     string
 	PublicURL     string
 	TokenLifetime time.Duration
 	RequireHTTPS  bool
 }
 
-// ForgotPasswordHandler serves GET/POST on the forgot-password page.
+// ForgotPasswordHandler implements POST /api/auth/forgot-password.
 //
 // The response never depends on whether an account matched: the same
-// redirect and the same on-page message are returned for unknown
-// identifiers, accounts without an email, throttled accounts and real
-// sends, so the form cannot be used to discover which accounts exist. The
-// email itself is sent in the background so SMTP latency does not leak the
-// difference either.
+// {"sent": true} body is returned for unknown identifiers, accounts
+// without an email, throttled accounts and real sends, so the form
+// cannot be used to discover which accounts exist. The email itself is
+// sent in the background so SMTP latency does not leak the difference
+// either.
 type ForgotPasswordHandler struct {
 	Cfg     ForgotPasswordConfig
 	Users   store.UserStore
@@ -57,7 +55,6 @@ type ForgotPasswordHandler struct {
 	AuditLogs store.AuditLogStore
 	Clock     clock.Clock
 	Logger    *slog.Logger
-	Template  *template.Template
 	// ClientIP extracts the source IP for audit entries. Optional.
 	ClientIP func(*http.Request) string
 	// Spawn runs the email send. Production leaves it nil (a goroutine);
@@ -65,68 +62,32 @@ type ForgotPasswordHandler struct {
 	Spawn func(func())
 }
 
-func (h *ForgotPasswordHandler) csrf() CSRFGuard {
-	return CSRFGuard{CookieName: "_csrf_forgot", Path: h.Cfg.ForgotPath, RequireHTTPS: h.Cfg.RequireHTTPS}
+type forgotPasswordRequest struct {
+	Identifier string `json:"identifier"`
 }
 
 func (h *ForgotPasswordHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		h.render(w, r)
-	case http.MethodPost:
-		h.handlePost(w, r)
-	default:
-		w.Header().Set("Allow", "GET, POST")
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
 		writeJSONError(w, http.StatusMethodNotAllowed, ErrInvalidRequest, "method not allowed")
-	}
-}
-
-func (h *ForgotPasswordHandler) render(w http.ResponseWriter, r *http.Request) {
-	tok, err := h.csrf().Issue(w)
-	if err != nil {
-		h.Logger.Error("forgot: csrf issue failed", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	data := struct {
-		CSRFToken  string
-		Action     string
-		LoginPath  string
-		Sent       bool
-		Error      string
-		ErrorLabel string
-	}{
-		CSRFToken: tok,
-		Action:    h.Cfg.ForgotPath,
-		LoginPath: h.Cfg.LoginPath,
-		Sent:      r.URL.Query().Get("sent") == "1",
-	}
-	if code := r.URL.Query().Get("error"); code != "" {
-		data.Error, data.ErrorLabel = code, forgotErrorLabel(code)
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	if err := h.Template.Execute(w, data); err != nil {
-		h.Logger.Error("forgot render failed", "err", err)
-	}
-}
-
-func (h *ForgotPasswordHandler) handlePost(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil || !h.csrf().Verify(r) {
-		h.redirectError(w, r, forgotErrAntiforgery)
+	if !APICSRFGuard(h.Cfg.RequireHTTPS).VerifyHeader(r) {
+		writeJSONError(w, http.StatusForbidden, forgotErrAntiforgery, forgotErrorLabel(forgotErrAntiforgery))
 		return
 	}
-	identifier := strings.TrimSpace(r.FormValue("identifier"))
+	var body forgotPasswordRequest
+	if err := decodeJSON(r, &body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, forgotErrMissing, forgotErrorLabel(forgotErrMissing))
+		return
+	}
+	identifier := strings.TrimSpace(body.Identifier)
 	if identifier == "" {
-		h.redirectError(w, r, forgotErrMissing)
+		writeJSONError(w, http.StatusBadRequest, forgotErrMissing, forgotErrorLabel(forgotErrMissing))
 		return
 	}
 	h.process(r, identifier)
-	http.Redirect(w, r, h.Cfg.ForgotPath+"?sent=1", http.StatusSeeOther)
-}
-
-func (h *ForgotPasswordHandler) redirectError(w http.ResponseWriter, r *http.Request, code string) {
-	http.Redirect(w, r, h.Cfg.ForgotPath+"?error="+url.QueryEscape(code), http.StatusSeeOther)
+	writeJSON(w, http.StatusOK, map[string]any{"sent": true})
 }
 
 // process issues and mails a reset token when the identifier matches an

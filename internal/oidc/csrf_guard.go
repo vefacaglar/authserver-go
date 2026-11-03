@@ -48,3 +48,27 @@ func (g CSRFGuard) Verify(r *http.Request) bool {
 	}
 	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(got)) == 1
 }
+
+// VerifyHeader is Verify for JSON requests: the token must arrive in the
+// X-CSRF-Token header. It never touches the request body, so callers can
+// run it before decoding JSON.
+func (g CSRFGuard) VerifyHeader(r *http.Request) bool {
+	c, err := r.Cookie(g.CookieName)
+	if err != nil || c.Value == "" {
+		return false
+	}
+	got := r.Header.Get(csrfHeaderName)
+	if got == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(got)) == 1
+}
+
+// APICSRFGuard returns the one guard shared by every JSON endpoint the
+// browser SPA calls (auth, account, logout confirm, admin). The cookie
+// is issued by GET /api/csrf with Path=/ so a single token covers all of
+// them; the SPA reads the token from that endpoint's JSON body (never
+// from the HttpOnly cookie) and echoes it in the X-CSRF-Token header.
+func APICSRFGuard(requireHTTPS bool) CSRFGuard {
+	return CSRFGuard{CookieName: csrfCookieName, Path: "/", RequireHTTPS: requireHTTPS}
+}

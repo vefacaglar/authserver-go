@@ -2,7 +2,6 @@ package oidc
 
 import (
 	"errors"
-	"html/template"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -29,16 +28,15 @@ const (
 // into a "password updated" banner.
 const loginNoticePasswordReset = "password_reset"
 
-// ResetPasswordConfig bundles the paths the page needs.
+// ResetPasswordConfig bundles the paths the handler needs.
 type ResetPasswordConfig struct {
-	ResetPath    string
-	ForgotPath   string
 	LoginPath    string
 	RequireHTTPS bool
 }
 
-// ResetPasswordHandler serves the page the emailed link opens: GET shows
-// the new-password form for a valid token, POST sets the password.
+// ResetPasswordHandler implements the API behind the page the emailed
+// link opens: GET /api/auth/reset-password?token=... reports whether
+// the token is usable, POST sets the new password.
 type ResetPasswordHandler struct {
 	Cfg           ResetPasswordConfig
 	Users         store.UserStore
@@ -49,28 +47,12 @@ type ResetPasswordHandler struct {
 	AuditLogs store.AuditLogStore
 	Clock     clock.Clock
 	Logger    *slog.Logger
-	Template  *template.Template
 	// ClientIP extracts the source IP for audit entries. Optional.
 	ClientIP func(*http.Request) string
 }
 
-type resetData struct {
-	CSRFToken  string
-	Action     string
-	Token      string
-	TokenValid bool
-	ForgotPath string
-	LoginPath  string
-	Error      string
-	ErrorLabel string
-}
-
-func (h *ResetPasswordHandler) csrf() CSRFGuard {
-	return CSRFGuard{CookieName: "_csrf_reset", Path: h.Cfg.ResetPath, RequireHTTPS: h.Cfg.RequireHTTPS}
-}
-
 func (h *ResetPasswordHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// The URL carries a live credential: keep it out of Referer headers
+	// The token is a live credential: keep it out of Referer headers
 	// and caches.
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cache-Control", "no-store")
@@ -104,65 +86,49 @@ func (h *ResetPasswordHandler) lookup(r *http.Request, raw string) *domain.Passw
 	return t
 }
 
-func (h *ResetPasswordHandler) render(w http.ResponseWriter, status int, raw string, valid bool, errCode string) {
-	d := resetData{
-		Action:     h.Cfg.ResetPath,
-		Token:      raw,
-		TokenValid: valid,
-		ForgotPath: h.Cfg.ForgotPath,
-		LoginPath:  h.Cfg.LoginPath,
-	}
-	if valid {
-		tok, err := h.csrf().Issue(w)
-		if err != nil {
-			h.Logger.Error("reset: csrf issue failed", "err", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		d.CSRFToken = tok
-	}
-	if errCode != "" {
-		d.Error, d.ErrorLabel = errCode, resetErrorLabel(errCode)
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	if err := h.Template.Execute(w, d); err != nil {
-		h.Logger.Error("reset render failed", "err", err)
-	}
+func (h *ResetPasswordHandler) respondWithError(w http.ResponseWriter, status int, code string) {
+	writeJSONError(w, status, code, resetErrorLabel(code))
 }
 
 func (h *ResetPasswordHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 	raw := r.URL.Query().Get("token")
-	if h.lookup(r, raw) == nil {
-		// Same page whether the token is missing, wrong, used or expired.
-		h.render(w, http.StatusOK, "", false, resetErrInvalid)
-		return
-	}
-	h.render(w, http.StatusOK, raw, true, "")
+	// Same answer whether the token is missing, wrong, used or expired.
+	writeJSON(w, http.StatusOK, map[string]any{"valid": h.lookup(r, raw) != nil})
+}
+
+type resetPasswordRequest struct {
+	Token           string `json:"token"`
+	NewPassword     string `json:"new_password"`
+	PasswordConfirm string `json:"new_password_confirm"`
 }
 
 func (h *ResetPasswordHandler) handlePost(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil || !h.csrf().Verify(r) {
-		h.render(w, http.StatusBadRequest, "", false, resetErrAntiforgery)
+	if !APICSRFGuard(h.Cfg.RequireHTTPS).VerifyHeader(r) {
+		h.respondWithError(w, http.StatusForbidden, resetErrAntiforgery)
 		return
 	}
-	raw := r.FormValue("token")
+	var body resetPasswordRequest
+	if err := decodeJSON(r, &body); err != nil {
+		h.respondWithError(w, http.StatusBadRequest, resetErrInvalid)
+		return
+	}
+	raw := body.Token
 	if h.lookup(r, raw) == nil {
-		h.render(w, http.StatusBadRequest, "", false, resetErrInvalid)
+		h.respondWithError(w, http.StatusBadRequest, resetErrInvalid)
 		return
 	}
 
-	next := r.FormValue("new_password")
-	confirm := r.FormValue("new_password_confirm")
+	next := body.NewPassword
+	confirm := body.PasswordConfirm
 	switch {
 	case next == "" || confirm == "":
-		h.render(w, http.StatusBadRequest, raw, true, resetErrMissing)
+		h.respondWithError(w, http.StatusBadRequest, resetErrMissing)
 		return
 	case next != confirm:
-		h.render(w, http.StatusBadRequest, raw, true, resetErrMismatch)
+		h.respondWithError(w, http.StatusBadRequest, resetErrMismatch)
 		return
 	case ValidatePassword(next) != nil:
-		h.render(w, http.StatusBadRequest, raw, true, resetErrWeak)
+		h.respondWithError(w, http.StatusBadRequest, resetErrWeak)
 		return
 	}
 
@@ -173,24 +139,24 @@ func (h *ResetPasswordHandler) handlePost(w http.ResponseWriter, r *http.Request
 	now := h.Clock.Now().UTC()
 	t := h.lookup(r, raw)
 	if t == nil {
-		h.render(w, http.StatusBadRequest, "", false, resetErrInvalid)
+		h.respondWithError(w, http.StatusBadRequest, resetErrInvalid)
 		return
 	}
 	won, err := h.Resets.Consume(ctx, t.ID, now)
 	if err != nil {
 		h.Logger.Error("reset: consume failed", "err", err)
-		h.render(w, http.StatusInternalServerError, "", false, resetErrServer)
+		h.respondWithError(w, http.StatusInternalServerError, resetErrServer)
 		return
 	}
 	if !won {
-		h.render(w, http.StatusBadRequest, "", false, resetErrInvalid)
+		h.respondWithError(w, http.StatusBadRequest, resetErrInvalid)
 		return
 	}
 
 	if err := h.Users.SetPassword(ctx, t.UserID, next); err != nil {
 		// The token is spent; the user has to ask for a new link.
 		h.Logger.Error("reset: set password failed", "err", err)
-		h.render(w, http.StatusInternalServerError, "", false, resetErrServer)
+		h.respondWithError(w, http.StatusInternalServerError, resetErrServer)
 		return
 	}
 
@@ -220,7 +186,7 @@ func (h *ResetPasswordHandler) handlePost(w http.ResponseWriter, r *http.Request
 	}
 	h.audit(r, t.UserID, len(revoked))
 
-	http.Redirect(w, r, h.Cfg.LoginPath+"?notice="+loginNoticePasswordReset, http.StatusSeeOther)
+	writeJSON(w, http.StatusOK, map[string]any{"redirect": h.Cfg.LoginPath + "?notice=" + loginNoticePasswordReset})
 }
 
 func (h *ResetPasswordHandler) audit(r *http.Request, userID string, revoked int) {

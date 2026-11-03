@@ -17,6 +17,8 @@ PREPARE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PREPARE)
 OLD_IMAGE = "ghcr.io/vefacaglar/authserver-go@sha256:" + "a" * 64
 NEW_IMAGE = "ghcr.io/vefacaglar/authserver-go@sha256:" + "b" * 64
+OLD_WEB_IMAGE = "ghcr.io/vefacaglar/authserver-go-web@sha256:" + "c" * 64
+NEW_WEB_IMAGE = "ghcr.io/vefacaglar/authserver-go-web@sha256:" + "d" * 64
 
 
 class DeployTest(unittest.TestCase):
@@ -34,6 +36,7 @@ class DeployTest(unittest.TestCase):
             **dict.fromkeys(PREPARE.INDIVIDUAL_SECRETS, ""),
             "AUTH_ENV": self.runtime,
             "AUTH_IMAGE": NEW_IMAGE,
+            "AUTH_WEB_IMAGE": NEW_WEB_IMAGE,
             "AUTH_DOCKER_NETWORK": "existing-network",
             "AUTH_BIND_PORT": "5175",
             "REGISTRY_USER": "vefacaglar",
@@ -61,6 +64,8 @@ class DeployTest(unittest.TestCase):
             ("AUTH_DOCKER_NETWORK", "network\nINJECT=value"),
             ("AUTH_BIND_PORT", "65536"),
             ("AUTH_IMAGE", "ghcr.io/vefacaglar/authserver-go:latest"),
+            ("AUTH_WEB_IMAGE", "ghcr.io/vefacaglar/authserver-go-web:latest"),
+            ("AUTH_WEB_BIND_PORT", "65536"),
             ("AUTH_ADMIN_TOKEN", "token\nINJECTED=value"),
         ):
             with self.subTest(key=key):
@@ -144,15 +149,17 @@ fi
         result, calls = self.run_receiver()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / ".current-image").read_text().strip(), NEW_IMAGE)
+        self.assertEqual((self.root / ".current-web-image").read_text().strip(), NEW_WEB_IMAGE)
         self.assertEqual(
             (self.root / "authserver.env").read_text(), self.runtime.replace("\r\n", "\n")
         )
-        self.assertLess(calls.index("login"), calls.index("pull authserver"))
+        self.assertLess(calls.index("login"), calls.index("pull authserver web"))
         self.assertLess(calls.index("run --rm"), calls.index("up -d"))
         self.assertLess(calls.index("up -d"), calls.index("configure-caddy"))
 
     def setup_previous_release(self):
         (self.root / ".current-image").write_text(OLD_IMAGE + "\n")
+        (self.root / ".current-web-image").write_text(OLD_WEB_IMAGE + "\n")
         (self.root / "authserver.env").write_text("AUTH_ADMIN_TOKEN=previous-secret\n")
         (self.root / "old-env").write_bytes((self.root / "authserver.env").read_bytes())
         (self.root / ".env").write_text("AUTH_DOCKER_NETWORK=previous-network\n")
@@ -161,6 +168,7 @@ fi
 
     def assert_previous_release(self):
         self.assertEqual((self.root / ".current-image").read_text().strip(), OLD_IMAGE)
+        self.assertEqual((self.root / ".current-web-image").read_text().strip(), OLD_WEB_IMAGE)
         self.assertEqual((self.root / "authserver.env").read_bytes(), (self.root / "old-env").read_bytes())
         self.assertEqual((self.root / ".env").read_text(), "AUTH_DOCKER_NETWORK=previous-network\n")
         self.assertEqual((self.root / "compose.yml").read_text(), "previous compose configuration\n")

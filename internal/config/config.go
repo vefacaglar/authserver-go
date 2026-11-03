@@ -81,6 +81,10 @@ type Config struct {
 	// When empty, the admin API is unreachable unless
 	// AdminAllowAnonymous is set (which is a dev-only convenience).
 	AdminToken string
+
+	// AdminRole is the role name that grants a signed-in user access
+	// to the admin API and console.
+	AdminRole string
 }
 
 func Load() (*Config, error) {
@@ -123,6 +127,7 @@ func Load() (*Config, error) {
 	// in the data-protection key ring (data_protection_keys table),
 	// generated server-side and shared across instances.
 	c.AdminToken = getenv("AUTH_ADMIN_TOKEN", "")
+	c.AdminRole = getenv("AUTH_ADMIN_ROLE", "admin")
 	c.PublicURL = strings.TrimRight(getenv("AUTH_PUBLIC_URL", c.Issuer), "/")
 
 	if err := c.validate(); err != nil {
@@ -177,6 +182,9 @@ func (c *Config) validate() error {
 	}
 	if !c.AdminAllowAnonymous && strings.TrimSpace(c.AdminToken) == "" {
 		return errors.New("AUTH_ADMIN_TOKEN must be set unless AUTH_ADMIN_ALLOW_ANONYMOUS=true")
+	}
+	if strings.TrimSpace(c.AdminRole) == "" {
+		return errors.New("AUTH_ADMIN_ROLE must not be empty")
 	}
 	// The server runs on PostgreSQL only. The in-memory store keeps
 	// sessions, refresh tokens, and — critically — signing keys per-process:

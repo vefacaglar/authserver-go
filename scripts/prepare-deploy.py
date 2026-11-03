@@ -40,14 +40,20 @@ def prepare(destination: Path) -> None:
 
     network = os.environ.get("AUTH_DOCKER_NETWORK", "databases_default")
     port = os.environ.get("AUTH_BIND_PORT", "5175")
+    web_port = os.environ.get("AUTH_WEB_BIND_PORT", "5176")
     image = os.environ.get("AUTH_IMAGE", "")
+    web_image = os.environ.get("AUTH_WEB_IMAGE", "")
     actor = os.environ.get("REGISTRY_USER", "")
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", network):
         raise ValueError("Invalid AUTH_DOCKER_NETWORK")
     if not port.isascii() or not port.isdecimal() or not 1 <= int(port) <= 65535:
         raise ValueError("Invalid AUTH_BIND_PORT")
+    if not web_port.isascii() or not web_port.isdecimal() or not 1 <= int(web_port) <= 65535:
+        raise ValueError("Invalid AUTH_WEB_BIND_PORT")
     if not re.fullmatch(r"ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}", image):
         raise ValueError("Invalid image digest")
+    if not re.fullmatch(r"ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}", web_image):
+        raise ValueError("Invalid web image digest")
     if not re.fullmatch(r"[a-zA-Z0-9_-]+(?:\[bot\])?", actor):
         raise ValueError("Invalid registry user")
 
@@ -58,8 +64,9 @@ def prepare(destination: Path) -> None:
         (destination / name).chmod(0o600)
     for name, content in {
         "authserver.env": runtime.rstrip("\n") + "\n",
-        ".env": f"AUTH_DOCKER_NETWORK={network}\nAUTH_BIND_PORT={port}\n",
+        ".env": f"AUTH_DOCKER_NETWORK={network}\nAUTH_BIND_PORT={port}\nAUTH_WEB_BIND_PORT={web_port}\n",
         "image": image + "\n",
+        "web-image": web_image + "\n",
         "registry-user": actor + "\n",
         "proxy.json": json.dumps({
             "container": os.environ.get("AUTH_CADDY_CONTAINER", ""),

@@ -1,52 +1,44 @@
 package admin
 
 import (
-	"context"
+	"crypto/subtle"
 	"net/http"
-
-	"github.com/gorilla/csrf"
 )
 
-// csrfFromContext reads the CSRF token that gorilla/csrf's
-// Protect() middleware injects into the request context. The token
-// is the same value the SPA must echo back in the X-CSRF-Token
-// header.
-func csrfFromContext(ctx context.Context) (string, error) {
-	if t, ok := ctx.Value(csrf.TemplateField).(string); ok {
-		return t, nil
-	}
-	return "", nil
-}
+// csrfCookieName and csrfHeaderName must match the oidc package's
+// shared API guard: GET /api/csrf issues the cookie, the SPA echoes
+// the token in the header. Duplicated as constants so this package
+// does not import the HTTP handlers it sits beside.
+const (
+	csrfCookieName = "_csrf"
+	csrfHeaderName = "X-CSRF-Token"
+)
 
-// CSRFMiddleware returns the gorilla/csrf Protect middleware
-// configured for the admin route group. The key must be 32 bytes
-// (per gorilla/csrf's requirement) and shared across instances so a
-// browser that loaded a CSRF cookie on one instance can post to
-// another.
-//
-// secure follows the same RequireHTTPS flag as the rest of the
-// server. When secure=true the CSRF cookie is marked Secure, which
-// keeps it out of plaintext requests and is required for the
-// `__Host-` prefix to be accepted. When secure=false the cookie
-// travels over HTTP as well, which is the right default for local
-// dev and tests behind httptest.
-func CSRFMiddleware(key []byte, secure bool) func(http.Handler) http.Handler {
-	if len(key) < 32 {
-		// Pad up; gorilla/csrf will panic if the key is shorter.
-		// This is a safety net for tests; production should always
-		// pass a 32-byte key from config.
-		padded := make([]byte, 32)
-		copy(padded, key)
-		key = padded
+// CSRFMiddleware enforces the double-submit check on state-changing
+// admin API requests. Bearer-token requests are exempt: the token is
+// not ambient authority, so a cross-origin form cannot ride on it.
+// Session- and anonymous-mode requests must present an X-CSRF-Token
+// header matching the _csrf cookie. Safe methods are never checked.
+func CSRFMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet, http.MethodHead, http.MethodOptions:
+				next.ServeHTTP(w, r)
+				return
+			}
+			if authMethodFrom(r) == authToken {
+				next.ServeHTTP(w, r)
+				return
+			}
+			c, err := r.Cookie(csrfCookieName)
+			got := r.Header.Get(csrfHeaderName)
+			if err != nil || c.Value == "" || got == "" ||
+				subtle.ConstantTimeCompare([]byte(c.Value), []byte(got)) != 1 {
+				writeAuthError(w, http.StatusForbidden, "antiforgery_failed")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
 	}
-	return csrf.Protect(key,
-		csrf.Secure(secure),
-		csrf.Path("/admin/"),
-		csrf.TrustedOrigins([]string{
-			"localhost:5175",
-			"127.0.0.1:5175",
-			"localhost:8090",
-			"127.0.0.1:8090",
-		}),
-	)
 }

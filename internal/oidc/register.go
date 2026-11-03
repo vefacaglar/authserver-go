@@ -1,11 +1,7 @@
 package oidc
 
 import (
-	"crypto/rand"
-	"crypto/subtle"
-	"encoding/base64"
 	"errors"
-	"html/template"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -29,121 +25,60 @@ const (
 )
 
 type RegisterConfig struct {
-	RegisterPath string
 	LoginPath    string
-	IssuerURL    string
+	RequireHTTPS bool
 }
 
+// RegisterHandler implements POST /api/auth/register for the SPA.
 type RegisterHandler struct {
-	Cfg      RegisterConfig
-	Users    store.UserStore
-	Clock    clock.Clock
-	Logger   *slog.Logger
-	Template *template.Template
+	Cfg    RegisterConfig
+	Users  store.UserStore
+	Clock  clock.Clock
+	Logger *slog.Logger
 }
 
-func (h *RegisterHandler) issueCSRFToken(w http.ResponseWriter, r *http.Request) string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		h.Logger.Error("csrf rand", "err", err)
-		return ""
-	}
-	tok := base64.RawURLEncoding.EncodeToString(b)
-	cookie := &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    tok,
-		Path:     h.Cfg.RegisterPath,
-		HttpOnly: true,
-		Secure:   strings.HasPrefix(h.Cfg.IssuerURL, "https://"),
-		SameSite: http.SameSiteLaxMode,
-	}
-	http.SetCookie(w, cookie)
-	return tok
-}
-
-func (h *RegisterHandler) verifyCSRFToken(r *http.Request) bool {
-	cookie, err := r.Cookie(csrfCookieName)
-	if err != nil {
-		return false
-	}
-	got := r.FormValue(csrfFieldName)
-	if got == "" {
-		got = r.Header.Get(csrfHeaderName)
-	}
-	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(got)) == 1
-}
-
-func (h *RegisterHandler) render(w http.ResponseWriter, r *http.Request, errorCode, returnURL string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	token := h.issueCSRFToken(w, r)
-	loginPath := h.Cfg.LoginPath
-	if returnURL != "" {
-		loginPath += "?returnUrl=" + url.QueryEscape(returnURL)
-	}
-	data := struct {
-		CSRFToken  string
-		Action     string
-		LoginPath  string
-		ReturnURL  string
-		Error      string
-		ErrorLabel string
-	}{
-		CSRFToken: token,
-		Action:    h.Cfg.RegisterPath,
-		LoginPath: loginPath,
-		ReturnURL: returnURL,
-		Error:     errorCode,
-	}
-	if errorCode != "" {
-		data.ErrorLabel = registerErrorLabel(errorCode)
-	}
-	if err := h.Template.Execute(w, data); err != nil {
-		h.Logger.Error("register render failed", "err", err)
-	}
+type registerRequest struct {
+	Username        string `json:"username"`
+	Email           string `json:"email"`
+	Password        string `json:"password"`
+	PasswordConfirm string `json:"password_confirm"`
+	ReturnURL       string `json:"return_url"`
 }
 
 func (h *RegisterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		h.render(w, r, r.URL.Query().Get("error"), r.URL.Query().Get("returnUrl"))
-	case http.MethodPost:
-		h.handlePost(w, r)
-	default:
-		w.Header().Set("Allow", "GET, POST")
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
 		writeJSONError(w, http.StatusMethodNotAllowed, ErrInvalidRequest, "method not allowed")
+		return
 	}
-}
-
-func (h *RegisterHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	returnURL := r.URL.Query().Get("returnUrl")
-	if err := r.ParseForm(); err != nil {
-		h.respondWithError(w, r, RegisterErrMissingFields, returnURL)
+	if !APICSRFGuard(h.Cfg.RequireHTTPS).VerifyHeader(r) {
+		h.respondWithError(w, http.StatusForbidden, RegisterErrAntiforgeryFailed)
 		return
 	}
-	if !h.verifyCSRFToken(r) {
-		h.respondWithError(w, r, RegisterErrAntiforgeryFailed, returnURL)
+	var body registerRequest
+	if err := decodeJSON(r, &body); err != nil {
+		h.respondWithError(w, http.StatusBadRequest, RegisterErrMissingFields)
 		return
 	}
 
-	username := strings.TrimSpace(r.FormValue("username"))
-	email := strings.TrimSpace(r.FormValue("email"))
-	password := r.FormValue("password")
-	passwordConfirm := r.FormValue("password_confirm")
+	username := strings.TrimSpace(body.Username)
+	email := strings.TrimSpace(body.Email)
+	password := body.Password
+	passwordConfirm := body.PasswordConfirm
 
 	if username == "" || email == "" || password == "" || passwordConfirm == "" {
-		h.respondWithError(w, r, RegisterErrMissingFields, returnURL)
+		h.respondWithError(w, http.StatusBadRequest, RegisterErrMissingFields)
 		return
 	}
 
 	if password != passwordConfirm {
-		h.respondWithError(w, r, RegisterErrPasswordMismatch, returnURL)
+		h.respondWithError(w, http.StatusBadRequest, RegisterErrPasswordMismatch)
 		return
 	}
 
 	if err := ValidatePassword(password); err != nil {
-		h.respondWithError(w, r, RegisterErrWeakPassword, returnURL)
+		h.respondWithError(w, http.StatusBadRequest, RegisterErrWeakPassword)
 		return
 	}
 
@@ -160,30 +95,26 @@ func (h *RegisterHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 	err := h.Users.CreateUser(ctx, user, password)
 	if err != nil {
 		if errors.Is(err, store.ErrDuplicate) {
-			h.respondWithError(w, r, RegisterErrDuplicateUser, returnURL)
+			h.respondWithError(w, http.StatusConflict, RegisterErrDuplicateUser)
 			return
 		}
 		h.Logger.Error("user store error during registration", "err", err)
-		h.respondWithError(w, r, RegisterErrServerError, returnURL)
+		h.respondWithError(w, http.StatusInternalServerError, RegisterErrServerError)
 		return
 	}
 
-	// Successfully registered. Redirect to login page with returnUrl if present.
+	// Successfully registered. Send the SPA to the login page, keeping
+	// any returnUrl so an in-progress authorize flow can resume. The
+	// login handler validates the returnUrl again before using it.
 	target := h.Cfg.LoginPath
-	if returnURL != "" {
-		target += "?returnUrl=" + url.QueryEscape(returnURL)
+	if body.ReturnURL != "" {
+		target += "?returnUrl=" + url.QueryEscape(body.ReturnURL)
 	}
-	http.Redirect(w, r, target, http.StatusFound)
+	writeJSON(w, http.StatusCreated, map[string]any{"redirect": target})
 }
 
-func (h *RegisterHandler) respondWithError(w http.ResponseWriter, r *http.Request, code, returnURL string) {
-	q := url.Values{}
-	q.Set("error", code)
-	if returnURL != "" {
-		q.Set("returnUrl", returnURL)
-	}
-	target := h.Cfg.RegisterPath + "?" + q.Encode()
-	http.Redirect(w, r, target, http.StatusFound)
+func (h *RegisterHandler) respondWithError(w http.ResponseWriter, status int, code string) {
+	writeJSONError(w, status, code, registerErrorLabel(code))
 }
 
 func registerErrorLabel(code string) string {

@@ -34,7 +34,7 @@ func requestWithSession(t *testing.T, res *SessionResolver, id uuid.UUID) *http.
 	if err := res.Cookies.SetCookie(rec, id); err != nil {
 		t.Fatalf("set cookie: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/profile?x=1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/account/profile", nil)
 	for _, c := range rec.Result().Cookies() {
 		req.AddCookie(c)
 	}
@@ -49,7 +49,7 @@ func TestRequireSession_AllowsActiveSession(t *testing.T) {
 	}
 
 	var got *domain.Session
-	h := res.RequireSession("/login", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := res.RequireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got, _ = SessionFromContext(r.Context())
 	}))
 	rec := httptest.NewRecorder()
@@ -60,19 +60,19 @@ func TestRequireSession_AllowsActiveSession(t *testing.T) {
 	}
 }
 
-func TestRequireSession_RedirectsAnonymousWithReturnURL(t *testing.T) {
+func TestRequireSession_RejectsAnonymousWith401(t *testing.T) {
 	res, _, _ := newTestResolver(t)
-	h := res.RequireSession("/login", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	h := res.RequireSession(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("next must not run for anonymous requests")
 	}))
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/profile?x=1", nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/account/profile", nil))
 
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want 303", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "/login?returnUrl=%2Fprofile%3Fx%3D1" {
-		t.Fatalf("Location = %q", loc)
+	if code := decodeErrorCode(t, rec); code != ErrLoginRequired {
+		t.Fatalf("error = %q, want %q", code, ErrLoginRequired)
 	}
 }
 
@@ -86,24 +86,14 @@ func TestRequireSession_RejectsRevokedAndExpired(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	h := res.RequireSession("/login", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	h := res.RequireSession(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("next must not run")
 	}))
 	for _, s := range []*domain.Session{revoked, expired} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, requestWithSession(t, res, s.ID))
-		if rec.Code != http.StatusSeeOther {
-			t.Fatalf("status = %d, want 303", rec.Code)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", rec.Code)
 		}
-	}
-}
-
-func TestRequireSession_NonGETDropsReturnURL(t *testing.T) {
-	res, _, _ := newTestResolver(t)
-	h := res.RequireSession("/login", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/profile", nil))
-	if loc := rec.Header().Get("Location"); loc != "/login" {
-		t.Fatalf("Location = %q, want /login", loc)
 	}
 }

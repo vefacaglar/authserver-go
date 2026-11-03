@@ -16,5 +16,5 @@ docker compose version > /dev/null
 command -v flock > /dev/null
 command -v python3 > /dev/null
 docker login ghcr.io --username "$(cat "$bundle/registry-user")" --password-stdin > /dev/null
-bash "$bundle/deploy.sh" "$(cat "$bundle/image")" "$bundle"
+bash "$bundle/deploy.sh" "$(cat "$bundle/image")" "$bundle" "$(cat "$bundle/web-image")"
 python3 "$bundle/configure-caddy.py"

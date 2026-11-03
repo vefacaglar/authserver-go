@@ -2,11 +2,7 @@ package oidc
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/subtle"
-	"encoding/base64"
 	"errors"
-	"html/template"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -22,8 +18,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// Login flow error codes surfaced via the ?error= query parameter so the
-// login page can render a localised message without exposing server logs.
+// Login flow error codes returned in the JSON error body so the SPA can
+// map them to messages without exposing server logs.
 const (
 	LoginErrInvalidCredentials = "invalid_credentials"
 	LoginErrMissingCredentials = "missing_credentials"
@@ -34,69 +30,32 @@ const (
 )
 
 // CSRF cookie/field names. The double-submit pattern: the server sets an
-// HttpOnly cookie carrying an opaque token, and the form mirrors the same
-// token in a hidden input. A cross-origin attacker can neither read the
-// HttpOnly cookie nor inject a form field that the server would trust.
+// HttpOnly cookie carrying an opaque token (see GET /api/csrf), and the
+// client mirrors the same token in the X-CSRF-Token header (or the
+// csrf_token form field on the logout confirm form). A cross-origin
+// attacker can read neither the HttpOnly cookie nor the /api/csrf body.
 const (
 	csrfCookieName = "_csrf"
 	csrfFieldName  = "csrf_token"
 	csrfHeaderName = "X-CSRF-Token"
 )
 
-// issueCSRFToken returns a fresh opaque token and stores it in the response
-// cookie. The same value is rendered into the form (and also returned so
-// the handler can put it in the template).
-func (h *LoginHandler) issueCSRFToken(w http.ResponseWriter, r *http.Request) string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		h.Logger.Error("csrf rand", "err", err)
-		return ""
-	}
-	tok := base64.RawURLEncoding.EncodeToString(b)
-	cookie := &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    tok,
-		Path:     h.Cfg.LoginPath,
-		HttpOnly: true,
-		Secure:   strings.HasPrefix(h.Cfg.IssuerURL, "https://"),
-		SameSite: http.SameSiteLaxMode,
-	}
-	http.SetCookie(w, cookie)
-	return tok
-}
-
-// verifyCSRFToken compares the cookie value with the form field / header
-// value using a constant-time compare. Missing on either side is a failure.
-func (h *LoginHandler) verifyCSRFToken(r *http.Request) bool {
-	cookie, err := r.Cookie(csrfCookieName)
-	if err != nil {
-		return false
-	}
-	got := r.FormValue(csrfFieldName)
-	if got == "" {
-		got = r.Header.Get(csrfHeaderName)
-	}
-	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(got)) == 1
-}
-
 // LoginConfig bundles the policy inputs the login handler reads.
 type LoginConfig struct {
 	IssuerURL     string
-	LoginPath     string
-	RegisterPath  string
 	AuthorizePath string
 	// ProfilePath is an allowed post-login target so the profile page
 	// can send anonymous visitors through login and back.
-	ProfilePath string
-	// ForgotPasswordPath, when set, adds a "forgot password?" link.
-	ForgotPasswordPath string
-	SessionLifetime    time.Duration
+	ProfilePath     string
+	RequireHTTPS    bool
+	SessionLifetime time.Duration
 }
 
-// LoginHandler implements GET (render) and POST (validate) for /login.
-// State stored in cookies:
-//   - the encrypted SSO session cookie, set on success
-//   - the gorilla/csrf cookie, set by the csrf middleware
+// LoginHandler implements POST /api/auth/login for the SPA. On success
+// it sets the encrypted SSO session cookie and returns the validated
+// redirect target as JSON; the SPA performs the navigation. The target
+// is always server-validated (see validateReturnURL) — the SPA never
+// gets to pick an arbitrary destination.
 type LoginHandler struct {
 	Cfg      LoginConfig
 	Users    store.UserStore
@@ -105,7 +64,6 @@ type LoginHandler struct {
 	Tracker  store.LoginAttemptTracker
 	Clock    clock.Clock
 	Logger   *slog.Logger
-	Template *template.Template
 	// ClientIP extracts the source IP for the lockout key. Optional;
 	// when nil the handler falls back to r.RemoteAddr so misconfigured
 	// deployments do not accidentally disable lockouts (they would
@@ -117,70 +75,101 @@ type LoginHandler struct {
 	// AuditLogs records successful sign-ins for the home page's recent
 	// activity list. Optional; a write failure never blocks a login.
 	AuditLogs store.AuditLogStore
-	// Resolver lets GET skip the form for users who are already signed
-	// in and did not arrive through a redirect. Optional.
-	Resolver *SessionResolver
 }
 
-func (h *LoginHandler) render(w http.ResponseWriter, r *http.Request, errorCode, returnURL string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	token := h.issueCSRFToken(w, r)
-	registerPath := h.Cfg.RegisterPath
-	if returnURL != "" {
-		registerPath += "?returnUrl=" + url.QueryEscape(returnURL)
-	}
-	data := struct {
-		CSRFToken    string
-		Action       string
-		ReturnURL    string
-		RegisterPath string
-		ForgotPath   string
-		Notice       string
-		Error        string
-		ErrorLabel   string
-	}{
-		CSRFToken:    token,
-		Action:       h.Cfg.LoginPath,
-		ReturnURL:    returnURL,
-		RegisterPath: registerPath,
-		ForgotPath:   h.Cfg.ForgotPasswordPath,
-		Error:        errorCode,
-	}
-	if r.URL.Query().Get("notice") == loginNoticePasswordReset {
-		data.Notice = "your password was updated. sign in with the new password."
-	}
-	if errorCode != "" {
-		data.ErrorLabel = loginErrorLabel(errorCode)
-	}
-	if err := h.Template.Execute(w, data); err != nil {
-		h.Logger.Error("login render failed", "err", err)
-	}
+type loginRequest struct {
+	Username  string `json:"username"`
+	Password  string `json:"password"`
+	ReturnURL string `json:"return_url"`
 }
 
 func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		q := r.URL.Query()
-		if h.alreadySignedIn(r) && q.Get("error") == "" && q.Get("returnUrl") == "" {
-			http.Redirect(w, r, homePath, http.StatusSeeOther)
-			return
-		}
-		h.render(w, r, q.Get("error"), q.Get("returnUrl"))
-	case http.MethodPost:
-		h.handlePost(w, r)
-	default:
-		w.Header().Set("Allow", "GET, POST")
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
 		writeJSONError(w, http.StatusMethodNotAllowed, ErrInvalidRequest, "method not allowed")
+		return
 	}
+	ctx := r.Context()
+	if !APICSRFGuard(h.Cfg.RequireHTTPS).VerifyHeader(r) {
+		h.respondWithError(w, http.StatusForbidden, LoginErrAntiforgeryFailed)
+		return
+	}
+	var body loginRequest
+	if err := decodeJSON(r, &body); err != nil {
+		h.respondWithError(w, http.StatusBadRequest, LoginErrInvalidCredentials)
+		return
+	}
+	username := strings.TrimSpace(body.Username)
+	password := body.Password
+	returnURL := body.ReturnURL
+	if username == "" || password == "" {
+		h.respondWithError(w, http.StatusBadRequest, LoginErrMissingCredentials)
+		return
+	}
+
+	trackerKey := h.lockoutKey(r, username)
+	locked, err := h.Tracker.IsLockedOut(ctx, trackerKey)
+	if err != nil {
+		h.Logger.Error("tracker lookup failed", "err", err)
+	}
+	if locked {
+		h.respondWithError(w, http.StatusTooManyRequests, LoginErrAccountLocked)
+		return
+	}
+
+	info, err := h.Users.ValidateCredentials(ctx, username, password)
+	if err != nil {
+		h.Logger.Error("user store error", "err", err)
+		h.respondWithError(w, http.StatusInternalServerError, LoginErrServerError)
+		return
+	}
+	if info == nil {
+		_ = h.Tracker.RecordFailure(ctx, trackerKey)
+		h.recordFailedLogin(r, username, h.Clock.Now().UTC())
+		h.respondWithError(w, http.StatusUnauthorized, LoginErrInvalidCredentials)
+		return
+	}
+
+	if err := h.Tracker.Reset(ctx, trackerKey); err != nil {
+		h.Logger.Warn("tracker reset failed", "err", err)
+	}
+
+	now := h.Clock.Now().UTC()
+	sess := &domain.Session{
+		ID:        uuid.New(),
+		UserID:    info.UserID,
+		CreatedAt: now,
+		ExpiresAt: now.Add(h.Cfg.SessionLifetime),
+	}
+	if err := h.Sessions.Store(ctx, sess); err != nil {
+		h.Logger.Error("session store failed", "err", err)
+		h.respondWithError(w, http.StatusInternalServerError, LoginErrServerError)
+		return
+	}
+	if err := h.Cookies.SetCookie(w, sess.ID); err != nil {
+		h.Logger.Error("session cookie set failed", "err", err)
+		h.respondWithError(w, http.StatusInternalServerError, LoginErrServerError)
+		return
+	}
+
+	h.recordLogin(r, info.UserID, now)
+
+	target, err := validateReturnURL(returnURL, h.Cfg.IssuerURL, h.Cfg.AuthorizePath, h.Cfg.ProfilePath)
+	if err != nil {
+		h.respondWithError(w, http.StatusBadRequest, LoginErrInvalidReturn)
+		return
+	}
+	if target == "" {
+		// No redirect brought the user here: land on the home page. The
+		// path is relative on purpose: it stays on whatever host served
+		// the SPA instead of bouncing to the configured issuer origin.
+		target = homePath
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"redirect": target})
 }
 
-func (h *LoginHandler) alreadySignedIn(r *http.Request) bool {
-	if h.Resolver == nil {
-		return false
-	}
-	sess, err := h.Resolver.Resolve(r)
-	return err == nil && sess != nil
+func (h *LoginHandler) respondWithError(w http.ResponseWriter, status int, code string) {
+	writeJSONError(w, status, code, loginErrorLabel(code))
 }
 
 // recordLogin appends a login_succeeded audit entry.
@@ -251,95 +240,6 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
-}
-
-func (h *LoginHandler) handlePost(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	if err := r.ParseForm(); err != nil {
-		h.respondWithError(w, r, LoginErrInvalidCredentials, "")
-		return
-	}
-	if !h.verifyCSRFToken(r) {
-		h.respondWithError(w, r, LoginErrAntiforgeryFailed, r.FormValue("returnUrl"))
-		return
-	}
-	username := strings.TrimSpace(r.FormValue("username"))
-	password := r.FormValue("password")
-	returnURL := r.FormValue("returnUrl")
-	if username == "" || password == "" {
-		h.respondWithError(w, r, LoginErrMissingCredentials, returnURL)
-		return
-	}
-
-	trackerKey := h.lockoutKey(r, username)
-	locked, err := h.Tracker.IsLockedOut(ctx, trackerKey)
-	if err != nil {
-		h.Logger.Error("tracker lookup failed", "err", err)
-	}
-	if locked {
-		h.respondWithError(w, r, LoginErrAccountLocked, returnURL)
-		return
-	}
-
-	info, err := h.Users.ValidateCredentials(ctx, username, password)
-	if err != nil {
-		h.Logger.Error("user store error", "err", err)
-		h.respondWithError(w, r, LoginErrServerError, returnURL)
-		return
-	}
-	if info == nil {
-		_ = h.Tracker.RecordFailure(ctx, trackerKey)
-		h.recordFailedLogin(r, username, h.Clock.Now().UTC())
-		h.respondWithError(w, r, LoginErrInvalidCredentials, returnURL)
-		return
-	}
-
-	if err := h.Tracker.Reset(ctx, trackerKey); err != nil {
-		h.Logger.Warn("tracker reset failed", "err", err)
-	}
-
-	now := h.Clock.Now().UTC()
-	sess := &domain.Session{
-		ID:        uuid.New(),
-		UserID:    info.UserID,
-		CreatedAt: now,
-		ExpiresAt: now.Add(h.Cfg.SessionLifetime),
-	}
-	if err := h.Sessions.Store(ctx, sess); err != nil {
-		h.Logger.Error("session store failed", "err", err)
-		h.respondWithError(w, r, LoginErrServerError, returnURL)
-		return
-	}
-	if err := h.Cookies.SetCookie(w, sess.ID); err != nil {
-		h.Logger.Error("session cookie set failed", "err", err)
-		h.respondWithError(w, r, LoginErrServerError, returnURL)
-		return
-	}
-
-	h.recordLogin(r, info.UserID, now)
-
-	target, err := validateReturnURL(returnURL, h.Cfg.IssuerURL, h.Cfg.AuthorizePath, h.Cfg.ProfilePath)
-	if err != nil {
-		h.respondWithError(w, r, LoginErrInvalidReturn, "")
-		return
-	}
-	if target == "" {
-		// No redirect brought the user here: land on the home page. The
-		// path is relative on purpose: it stays on whatever host served the
-		// login form instead of bouncing to the configured issuer origin.
-		target = homePath
-	}
-	http.Redirect(w, r, target, http.StatusFound)
-}
-
-func (h *LoginHandler) respondWithError(w http.ResponseWriter, r *http.Request, code, returnURL string) {
-	q := url.Values{}
-	q.Set("error", code)
-	if returnURL != "" {
-		q.Set("returnUrl", returnURL)
-	}
-	target := h.Cfg.LoginPath + "?" + q.Encode()
-	http.Redirect(w, r, target, http.StatusFound)
 }
 
 // validateReturnURL implements the open-redirect guard. The value must be

@@ -2,6 +2,11 @@
 // handlers defined in internal/oidc. The package is the composition target
 // for cmd/authserver: it builds a fully-wired http.Handler from a Config
 // and a set of store implementations.
+//
+// The server is API-only: it serves the OIDC protocol endpoints, the
+// JSON APIs under /api that the browser SPA consumes, and the admin API
+// under /admin/api. All HTML pages live in the SPA (web/), which is
+// served separately on the same origin.
 package server
 
 import (
@@ -20,26 +25,17 @@ import (
 // smallest surface the cmd binary needs to provide; all the lower-level
 // dependencies (stores, issuer) are plumbed through the handler structs.
 type RouterConfig struct {
-	IssuerURL    string
-	RequireHTTPS bool
-	LoginPath    string
-	RegisterPath string
-	LogoutPath   string
-	ProfilePath  string
-	// ForgotPasswordPath and ResetPasswordPath are the anonymous
-	// password-recovery pages.
-	ForgotPasswordPath string
-	ResetPasswordPath  string
-	AuthorizePath      string
-	TokenPath          string
-	UserInfoPath       string
-	RevokePath         string
-	JWKSPath           string
-	DiscoveryPath      string
-	HealthPath         string
+	RequireHTTPS  bool
+	AuthorizePath string
+	TokenPath     string
+	UserInfoPath  string
+	RevokePath    string
+	JWKSPath      string
+	DiscoveryPath string
+	HealthPath    string
 
-	// LoginRateLimitRPS is the per-IP rate applied to the login
-	// POST. 0 disables the limiter.
+	// LoginRateLimitRPS is the per-IP rate applied to the credential
+	// endpoints. 0 disables the limiter.
 	LoginRateLimitRPS int
 	// LoginRateBurst is the per-IP burst for the login limiter.
 	LoginRateBurst int
@@ -48,8 +44,18 @@ type RouterConfig struct {
 // Handlers is the bundle of ready-to-mount handlers. A nil entry means
 // the route is not exposed (e.g. during a partial integration test).
 type Handlers struct {
-	Login     http.Handler
-	Register  http.Handler
+	// Browser SPA APIs. The caller wraps the session-required ones
+	// (Home, Profile) in the session guard.
+	CSRF           http.Handler
+	Session        http.Handler
+	Login          http.Handler
+	Register       http.Handler
+	ForgotPassword http.Handler
+	ResetPassword  http.Handler
+	Home           http.Handler
+	Profile        http.Handler
+
+	// OIDC protocol endpoints.
 	Logout    http.Handler
 	Authorize http.Handler
 	Token     http.Handler
@@ -58,34 +64,10 @@ type Handlers struct {
 	Discovery http.Handler
 	JWKS      http.Handler
 	Health    http.Handler
-	// Home is the signed-in landing page served at exactly "/". The
-	// caller wraps it in the session guard.
-	Home http.Handler
-	// Profile serves ProfilePath and its /password and /sessions/* subpaths; the
-	// caller wraps it in the session guard.
-	Profile http.Handler
-	// ForgotPassword and ResetPassword are anonymous pages; both are
-	// rate limited per IP here.
-	ForgotPassword http.Handler
-	ResetPassword  http.Handler
 
-	// Admin is the bundle of admin API + SPA. Mounted under /admin/
-	// as a separate chi group so the middleware (auth + CSRF) only
-	// applies to that subtree.
-	Admin *AdminMount
-}
-
-// AdminMount is the set of handlers the /admin group needs. The
-// router mounts whatever it finds at /admin/ and /admin/api/.
-// Both fields are typically the same handler (the wrapped
-// admin mux that combines auth + CSRF + API + index).
-type AdminMount struct {
-	// Root serves requests at /admin/ (the SPA index). When nil,
-	// /admin/ returns 404.
-	Root http.Handler
-	// API serves requests under /admin/api/. When nil, /admin/api/
-	// returns 404.
-	API http.Handler
+	// Admin is the admin API handler (auth + CSRF already applied by
+	// the caller), mounted under /admin/api/.
+	Admin http.Handler
 }
 
 // NewRouter assembles the production route table and middleware chain.
@@ -96,48 +78,45 @@ func NewRouter(cfg RouterConfig, opts RouterOptions, h Handlers) http.Handler {
 	r.Use(recovererMiddleware(opts.Logger))
 	r.Use(securityHeadersMiddleware(cfg.RequireHTTPS))
 
-	if h.Login != nil && cfg.LoginPath != "" {
-		// Per-IP rate limit on the login endpoint, before any other
-		// middleware, so that a flood of failed attempts cannot
-		// even reach the user store.
-		limiter := NewLoginRateLimiter(cfg.LoginRateLimitRPS, cfg.LoginRateBurst)
-		loginChain := limiter.Middleware(h.Login)
-		r.Handle(cfg.LoginPath, loginChain)
+	limiter := func(next http.Handler) http.Handler {
+		return NewLoginRateLimiter(cfg.LoginRateLimitRPS, cfg.LoginRateBurst).Middleware(next)
 	}
-	if h.Register != nil && cfg.RegisterPath != "" {
-		// Use the same rate limit logic for registration to prevent abuse.
-		limiter := NewLoginRateLimiter(cfg.LoginRateLimitRPS, cfg.LoginRateBurst)
-		registerChain := limiter.Middleware(h.Register)
-		r.Handle(cfg.RegisterPath, registerChain)
+
+	// Browser SPA APIs. Credential endpoints are rate limited per IP
+	// before any other work, so a flood of attempts cannot even reach
+	// the user store.
+	if h.CSRF != nil {
+		r.Method(http.MethodGet, "/api/csrf", h.CSRF)
+	}
+	if h.Session != nil {
+		r.Method(http.MethodGet, "/api/auth/session", h.Session)
+	}
+	if h.Login != nil {
+		r.Method(http.MethodPost, "/api/auth/login", limiter(h.Login))
+	}
+	if h.Register != nil {
+		r.Method(http.MethodPost, "/api/auth/register", limiter(h.Register))
+	}
+	if h.ForgotPassword != nil {
+		r.Method(http.MethodPost, "/api/auth/forgot-password", limiter(h.ForgotPassword))
+	}
+	if h.ResetPassword != nil {
+		r.Handle("/api/auth/reset-password", limiter(h.ResetPassword))
 	}
 	if h.Home != nil {
-		r.Method(http.MethodGet, "/", h.Home)
-		r.Method(http.MethodHead, "/", h.Home)
+		r.Method(http.MethodGet, "/api/account/home", h.Home)
 	}
-	if h.ForgotPassword != nil && cfg.ForgotPasswordPath != "" {
-		limiter := NewLoginRateLimiter(cfg.LoginRateLimitRPS, cfg.LoginRateBurst)
-		r.Handle(cfg.ForgotPasswordPath, limiter.Middleware(h.ForgotPassword))
-	}
-	if h.ResetPassword != nil && cfg.ResetPasswordPath != "" {
-		limiter := NewLoginRateLimiter(cfg.LoginRateLimitRPS, cfg.LoginRateBurst)
-		r.Handle(cfg.ResetPasswordPath, limiter.Middleware(h.ResetPassword))
-	}
-	if h.Profile != nil && cfg.ProfilePath != "" {
-		r.Handle(cfg.ProfilePath, h.Profile)
-		r.Handle(cfg.ProfilePath+"/sessions/revoke", h.Profile)
-		r.Handle(cfg.ProfilePath+"/sessions/revoke-others", h.Profile)
+	if h.Profile != nil {
+		r.Handle("/api/account/profile", h.Profile)
+		r.Handle("/api/account/profile/sessions/revoke", h.Profile)
+		r.Handle("/api/account/profile/sessions/revoke-others", h.Profile)
 		// Password changes are throttled per IP like the login form: the
 		// current-password check is a credential oracle.
-		pwLimiter := NewLoginRateLimiter(cfg.LoginRateLimitRPS, cfg.LoginRateBurst)
-		r.Handle(cfg.ProfilePath+"/password", pwLimiter.Middleware(h.Profile))
+		r.Handle("/api/account/profile/password", limiter(h.Profile))
 	}
+
 	if h.Logout != nil {
-		// Logout owns both /connect/logout and the confirm page at
-		// cfg.LogoutPath; the handler dispatches internally.
 		r.Handle("/connect/logout", h.Logout)
-		if cfg.LogoutPath != "" && cfg.LogoutPath != "/connect/logout" {
-			r.Handle(cfg.LogoutPath, h.Logout)
-		}
 	}
 	if h.Authorize != nil && cfg.AuthorizePath != "" {
 		r.Method(http.MethodGet, cfg.AuthorizePath, h.Authorize)
@@ -162,26 +141,11 @@ func NewRouter(cfg RouterConfig, opts RouterOptions, h Handlers) http.Handler {
 		r.Method(http.MethodGet, cfg.HealthPath, h.Health)
 	}
 
-	// Admin group: everything under /admin/ goes through the auth
-	// middleware supplied by main.go. The admin mount is plain
-	// stdlib net/http so the SPA can call any path the admin.API
-	// ServeMux registered. We use chi.Mount for prefix routing —
-	// chi's Handle does not treat a trailing slash as a prefix
-	// match. StripPrefix("/admin") lets the inner mux see paths
-	// like /api/clients instead of /admin/api/clients.
+	// Admin API: the inner mux uses stdlib patterns like
+	// "GET /api/clients", so strip the /admin prefix and let it see
+	// /api/... paths.
 	if h.Admin != nil {
-		adminRoot := http.StripPrefix("/admin", h.Admin.Root)
-		adminAPI := http.StripPrefix("/admin", h.Admin.API)
-		// Redirect /admin to /admin/ for developer convenience.
-		r.Get("/admin", func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
-		})
-		// /admin/  — SPA index (serves the same handler; the
-		// inner CombineMux dispatches /api/... to the API mux).
-		r.Mount("/admin/", adminRoot)
-		// /admin/api/...  — explicit API mount so chi knows it's
-		// a sub-tree.
-		r.Mount("/admin/api/", adminAPI)
+		r.Mount("/admin/api/", http.StripPrefix("/admin", h.Admin))
 	}
 
 	return r
@@ -229,8 +193,7 @@ func recovererMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 }
 
 // securityHeadersMiddleware sets a baseline of defensive HTTP headers on
-// every response. The OAuth/OIDC endpoints return JSON, but the login
-// page is HTML — both benefit from these defaults.
+// every response.
 func securityHeadersMiddleware(requireHTTPS bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

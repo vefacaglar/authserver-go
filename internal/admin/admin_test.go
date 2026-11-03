@@ -22,75 +22,66 @@ const testAdminToken = "test-admin-token-1234567890"
 
 // --- CSRF middleware ---
 
-// §2.5 (plan-2.md) — the admin CSRF cookie must follow the same
-// Secure flag as the rest of the server. Under RequireHTTPS=true
-// the cookie carries Secure; under RequireHTTPS=false it does not,
-// so local dev and httptest work without TLS.
-//
-// gorilla/csrf names the cookie "_gorilla_csrf" by default. The
-// library refuses to set a Secure cookie over a non-TLS request
-// (r.TLS == nil), so the two branches of the parameter must be
-// exercised differently: the false branch via httptest.NewRequest
-// (no TLS), and the true branch via httptest.NewTLSServer which
-// makes r.TLS non-nil.
-const csrfCookieName = "_gorilla_csrf"
+// The CSRF check is a double-submit against the shared _csrf cookie
+// (issued by GET /api/csrf in the oidc package). It applies only to
+// state-changing requests that rely on ambient cookie authority:
+// Bearer-token requests are exempt, safe methods are always allowed.
 
-func TestCSRFMiddleware_SecureFalse_OmitsSecureFlag(t *testing.T) {
-	key := []byte("0123456789abcdef0123456789abcdef")
-	mw := CSRFMiddleware(key, false)
-	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func csrfTestHandler() http.Handler {
+	return CSRFMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
+}
 
+func TestCSRFMiddleware_AllowsSafeMethods(t *testing.T) {
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "http://localhost:5175/admin/", nil)
-	h.ServeHTTP(rr, req)
-
-	var cookie *http.Cookie
-	for _, c := range rr.Result().Cookies() {
-		if c.Name == csrfCookieName {
-			cookie = c
-			break
-		}
-	}
-	if cookie == nil {
-		t.Fatal("_gorilla_csrf cookie not set under Secure=false")
-	}
-	if cookie.Secure {
-		t.Errorf("Secure=false: cookie.Secure = true, want false")
+	csrfTestHandler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/admin/api/clients", nil))
+	if rr.Code != http.StatusOK {
+		t.Errorf("GET status = %d, want 200", rr.Code)
 	}
 }
 
-func TestCSRFMiddleware_SecureTrue_SetsCookieWithSecureFlag(t *testing.T) {
-	key := []byte("0123456789abcdef0123456789abcdef")
-	mw := CSRFMiddleware(key, true)
-	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	ts := httptest.NewTLSServer(h)
-	defer ts.Close()
-	req, err := http.NewRequest(http.MethodGet, ts.URL+"/admin/", nil)
-	if err != nil {
-		t.Fatalf("new request: %v", err)
+func TestCSRFMiddleware_RejectsSessionPOSTWithoutToken(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/clients", nil)
+	req = withAuthMethod(req, authSession)
+	rr := httptest.NewRecorder()
+	csrfTestHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rr.Code)
 	}
-	resp, err := ts.Client().Do(req)
-	if err != nil {
-		t.Fatalf("do: %v", err)
-	}
-	defer resp.Body.Close()
+}
 
-	var cookie *http.Cookie
-	for _, c := range resp.Cookies() {
-		if c.Name == csrfCookieName {
-			cookie = c
-			break
-		}
+func TestCSRFMiddleware_AcceptsSessionPOSTWithMatchingToken(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/clients", nil)
+	req = withAuthMethod(req, authSession)
+	req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "tok-1"})
+	req.Header.Set(csrfHeaderName, "tok-1")
+	rr := httptest.NewRecorder()
+	csrfTestHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rr.Code)
 	}
-	if cookie == nil {
-		t.Fatal("_gorilla_csrf cookie not set")
+}
+
+func TestCSRFMiddleware_RejectsSessionPOSTWithWrongToken(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/clients", nil)
+	req = withAuthMethod(req, authSession)
+	req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "tok-1"})
+	req.Header.Set(csrfHeaderName, "wrong")
+	rr := httptest.NewRecorder()
+	csrfTestHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rr.Code)
 	}
-	if !cookie.Secure {
-		t.Errorf("Secure=true over TLS: cookie.Secure = false, want true")
+}
+
+func TestCSRFMiddleware_ExemptsBearerTokenRequests(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/clients", nil)
+	req = withAuthMethod(req, authToken)
+	rr := httptest.NewRecorder()
+	csrfTestHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (bearer requests carry no ambient authority)", rr.Code)
 	}
 }
 
@@ -180,6 +171,75 @@ func TestAuthMiddleware_RejectsEmptyTokenConfig(t *testing.T) {
 	_, err := AuthMiddleware(AuthConfig{Token: ""}, nil)
 	if err == nil {
 		t.Errorf("expected error when token is empty and not anonymous")
+	}
+}
+
+// stubSessionResolver returns a fixed session for every request.
+type stubSessionResolver struct {
+	sess *domain.Session
+	err  error
+}
+
+func (s stubSessionResolver) Resolve(*http.Request) (*domain.Session, error) {
+	return s.sess, s.err
+}
+
+func TestAuthMiddleware_AcceptsSessionWithAdminRole(t *testing.T) {
+	users := memory.NewUserStore()
+	now := time.Unix(1700000000, 0)
+	_ = users.CreateUser(context.Background(), &domain.User{ID: "u-admin", Username: "root", CreatedAt: now, UpdatedAt: now}, "pw")
+	_ = users.AddToRoles(context.Background(), "u-admin", []string{"admin"})
+	mw, err := AuthMiddleware(AuthConfig{
+		AdminRole: "admin",
+		Sessions:  stubSessionResolver{sess: &domain.Session{ID: uuid.New(), UserID: "u-admin"}},
+		Users:     users,
+	}, nil)
+	if err != nil {
+		t.Fatalf("AuthMiddleware: %v", err)
+	}
+	rr := httptest.NewRecorder()
+	mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/admin/api/clients", nil))
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 for admin-role session", rr.Code)
+	}
+	if got := rr.Header().Get("X-Admin-Auth"); got != "session" {
+		t.Errorf("X-Admin-Auth = %q, want session", got)
+	}
+}
+
+func TestAuthMiddleware_ForbidsSessionWithoutAdminRole(t *testing.T) {
+	users := memory.NewUserStore()
+	now := time.Unix(1700000000, 0)
+	_ = users.CreateUser(context.Background(), &domain.User{ID: "u-plain", Username: "bob", CreatedAt: now, UpdatedAt: now}, "pw")
+	_ = users.AddToRoles(context.Background(), "u-plain", []string{"user"})
+	mw, _ := AuthMiddleware(AuthConfig{
+		AdminRole: "admin",
+		Sessions:  stubSessionResolver{sess: &domain.Session{ID: uuid.New(), UserID: "u-plain"}},
+		Users:     users,
+	}, nil)
+	rr := httptest.NewRecorder()
+	mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/admin/api/clients", nil))
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for non-admin session", rr.Code)
+	}
+}
+
+func TestAuthMiddleware_NoSessionFallsThroughTo401(t *testing.T) {
+	mw, _ := AuthMiddleware(AuthConfig{
+		Token:    testAdminToken,
+		Sessions: stubSessionResolver{sess: nil},
+		Users:    memory.NewUserStore(),
+	}, nil)
+	rr := httptest.NewRecorder()
+	mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/admin/api/clients", nil))
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 when there is no session and no token", rr.Code)
 	}
 }
 

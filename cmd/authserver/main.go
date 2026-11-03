@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"html/template"
 	"log/slog"
 	"net/http"
 	"os"
@@ -239,7 +238,7 @@ func run(logger *slog.Logger) error {
 	// cookies decode after a key rotation.
 	dpManager := session.NewDPKeyManager(bundle.DataProtection, clk)
 	dpCtx, dpCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	dpKeys, dpActive, err := dpManager.Keyset(dpCtx)
+	dpKeys, _, err := dpManager.Keyset(dpCtx)
 	dpCancel()
 	if err != nil {
 		return err
@@ -251,24 +250,16 @@ func run(logger *slog.Logger) error {
 		MaxAge:       8 * time.Hour,
 	}, clk)
 
-	loginTmpl := template.Must(template.New("login").Parse(oidc.LoginTemplate()))
-	registerTmpl := template.Must(template.New("register").Parse(oidc.RegisterTemplate()))
-	logoutTmpl := template.Must(template.New("logout").Parse(oidc.LogoutTemplate()))
-
 	sessionResolver := &oidc.SessionResolver{Cookies: cookieMgr, Sessions: bundle.Sessions, Clock: clk}
-	homeTmpl := template.Must(template.New("home").Parse(oidc.HomeTemplate()))
-	homeHandler := sessionResolver.RequireSession(cfg.LoginPath, &oidc.HomeHandler{
-		Cfg:       oidc.HomeConfig{ProfilePath: cfg.ProfilePath, LogoutPath: cfg.LogoutPath},
+	homeHandler := sessionResolver.RequireSession(&oidc.HomeHandler{
 		Users:     bundle.Users,
 		AuditLogs: bundle.AuditLogs,
 		Logger:    logger,
-		Template:  homeTmpl,
 	})
 
-	profileHandler := sessionResolver.RequireSession(cfg.LoginPath, &oidc.ProfileHandler{
+	profileHandler := sessionResolver.RequireSession(&oidc.ProfileHandler{
 		Cfg: oidc.ProfileConfig{
-			ProfilePath:  cfg.ProfilePath,
-			LogoutPath:   cfg.LogoutPath,
+			BasePath:     "/api/account/profile",
 			RequireHTTPS: cfg.RequireHTTPS,
 		},
 		Users:         bundle.Users,
@@ -278,7 +269,6 @@ func run(logger *slog.Logger) error {
 		Tracker:       bundle.Tracker,
 		Clock:         clk,
 		Logger:        logger,
-		Template:      template.Must(template.New("profile").Parse(oidc.ProfileTemplate())),
 		ClientIP:      server.ClientIP,
 	})
 
@@ -288,9 +278,7 @@ func run(logger *slog.Logger) error {
 	}
 	forgotHandler := &oidc.ForgotPasswordHandler{
 		Cfg: oidc.ForgotPasswordConfig{
-			ForgotPath:    cfg.ForgotPasswordPath,
 			ResetPath:     cfg.ResetPasswordPath,
-			LoginPath:     cfg.LoginPath,
 			PublicURL:     cfg.PublicURL,
 			TokenLifetime: cfg.PasswordResetLifetime,
 			RequireHTTPS:  cfg.RequireHTTPS,
@@ -302,13 +290,10 @@ func run(logger *slog.Logger) error {
 		AuditLogs: bundle.AuditLogs,
 		Clock:     clk,
 		Logger:    logger,
-		Template:  template.Must(template.New("forgot").Parse(oidc.ForgotPasswordTemplate())),
 		ClientIP:  server.ClientIP,
 	}
 	resetHandler := &oidc.ResetPasswordHandler{
 		Cfg: oidc.ResetPasswordConfig{
-			ResetPath:    cfg.ResetPasswordPath,
-			ForgotPath:   cfg.ForgotPasswordPath,
 			LoginPath:    cfg.LoginPath,
 			RequireHTTPS: cfg.RequireHTTPS,
 		},
@@ -319,19 +304,16 @@ func run(logger *slog.Logger) error {
 		AuditLogs:     bundle.AuditLogs,
 		Clock:         clk,
 		Logger:        logger,
-		Template:      template.Must(template.New("reset").Parse(oidc.ResetPasswordTemplate())),
 		ClientIP:      server.ClientIP,
 	}
 
 	loginHandler := &oidc.LoginHandler{
 		Cfg: oidc.LoginConfig{
-			IssuerURL:          cfg.Issuer,
-			LoginPath:          cfg.LoginPath,
-			RegisterPath:       cfg.RegisterPath,
-			ProfilePath:        cfg.ProfilePath,
-			ForgotPasswordPath: cfg.ForgotPasswordPath,
-			AuthorizePath:      "/connect/authorize",
-			SessionLifetime:    8 * time.Hour,
+			IssuerURL:       cfg.Issuer,
+			ProfilePath:     cfg.ProfilePath,
+			AuthorizePath:   "/connect/authorize",
+			RequireHTTPS:    cfg.RequireHTTPS,
+			SessionLifetime: 8 * time.Hour,
 		},
 		Users:     bundle.Users,
 		Sessions:  bundle.Sessions,
@@ -339,21 +321,24 @@ func run(logger *slog.Logger) error {
 		Tracker:   bundle.Tracker,
 		Clock:     clk,
 		Logger:    logger,
-		Template:  loginTmpl,
 		ClientIP:  server.ClientIP,
 		AuditLogs: bundle.AuditLogs,
-		Resolver:  sessionResolver,
 	}
 	registerHandler := &oidc.RegisterHandler{
 		Cfg: oidc.RegisterConfig{
-			RegisterPath: cfg.RegisterPath,
 			LoginPath:    cfg.LoginPath,
-			IssuerURL:    cfg.Issuer,
+			RequireHTTPS: cfg.RequireHTTPS,
 		},
-		Users:    bundle.Users,
-		Clock:    clk,
-		Logger:   logger,
-		Template: registerTmpl,
+		Users:  bundle.Users,
+		Clock:  clk,
+		Logger: logger,
+	}
+	csrfHandler := &oidc.CSRFHandler{RequireHTTPS: cfg.RequireHTTPS, Logger: logger}
+	sessionHandler := &oidc.SessionHandler{
+		Resolver:  sessionResolver,
+		Users:     bundle.Users,
+		AdminRole: cfg.AdminRole,
+		Logger:    logger,
 	}
 	// Single assertion cache shared by /connect/token and
 	// /connect/revoke so a client_assertion JWT cannot be replayed
@@ -458,18 +443,19 @@ func run(logger *slog.Logger) error {
 		Issuer:        issuer,
 		Clock:         clk,
 		Logger:        logger,
-		Confirm:       logoutTmpl,
 	}
 
-	// --- Admin API + SPA ---
+	// --- Admin API (the console UI is the SPA in web/) ---
 	authMW, err := admin.AuthMiddleware(admin.AuthConfig{
 		Token:          cfg.AdminToken,
 		AllowAnonymous: cfg.AdminAllowAnonymous,
+		AdminRole:      cfg.AdminRole,
+		Sessions:       sessionResolver,
+		Users:          bundle.Users,
 	}, logger)
 	if err != nil {
 		return err
 	}
-	csrfMW := admin.CSRFMiddleware(dpActive.CSRFKey, cfg.RequireHTTPS)
 	apiMux := http.NewServeMux()
 	(&admin.API{
 		Clients:       bundle.Clients,
@@ -483,16 +469,7 @@ func run(logger *slog.Logger) error {
 		Clock:         clk,
 		Logger:        logger,
 	}).Mount(apiMux)
-	// The API requires bearer auth; the SPA shell does not (it's
-	// public HTML — the JS sends the token on API calls).
-	apiHandler := authMW(csrfMW(apiMux))
-	uiHandler := csrfMW(http.HandlerFunc(
-		(&admin.UI{Template: template.Must(template.New("admin").Parse(admin.IndexPage())), Logger: logger}).ServeIndex,
-	))
-	adminMount := &server.AdminMount{
-		Root: uiHandler,
-		API:  apiHandler,
-	}
+	adminHandler := authMW(admin.CSRFMiddleware()(apiMux))
 
 	// EnsureActiveKey so discovery/JWKS have a key to publish on first boot.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -503,6 +480,8 @@ func run(logger *slog.Logger) error {
 	cancel()
 
 	handlers := server.Handlers{
+		CSRF:           csrfHandler,
+		Session:        sessionHandler,
 		Login:          loginHandler,
 		Register:       registerHandler,
 		Logout:         logoutHandler,
@@ -517,27 +496,20 @@ func run(logger *slog.Logger) error {
 		Profile:        profileHandler,
 		ForgotPassword: forgotHandler,
 		ResetPassword:  resetHandler,
-		Admin:          adminMount,
+		Admin:          adminHandler,
 	}
 	router := server.NewRouter(
 		server.RouterConfig{
-			IssuerURL:          cfg.Issuer,
-			RequireHTTPS:       cfg.RequireHTTPS,
-			LoginPath:          cfg.LoginPath,
-			RegisterPath:       cfg.RegisterPath,
-			LogoutPath:         cfg.LogoutPath,
-			ProfilePath:        cfg.ProfilePath,
-			ForgotPasswordPath: cfg.ForgotPasswordPath,
-			ResetPasswordPath:  cfg.ResetPasswordPath,
-			AuthorizePath:      "/connect/authorize",
-			TokenPath:          "/connect/token",
-			UserInfoPath:       "/connect/userinfo",
-			RevokePath:         "/connect/revoke",
-			JWKSPath:           "/.well-known/jwks.json",
-			DiscoveryPath:      "/.well-known/openid-configuration",
-			HealthPath:         "/healthz",
-			LoginRateLimitRPS:  cfg.LoginRateLimit,
-			LoginRateBurst:     cfg.LoginRateLimit, // burst == rps for the default config
+			RequireHTTPS:      cfg.RequireHTTPS,
+			AuthorizePath:     "/connect/authorize",
+			TokenPath:         "/connect/token",
+			UserInfoPath:      "/connect/userinfo",
+			RevokePath:        "/connect/revoke",
+			JWKSPath:          "/.well-known/jwks.json",
+			DiscoveryPath:     "/.well-known/openid-configuration",
+			HealthPath:        "/healthz",
+			LoginRateLimitRPS: cfg.LoginRateLimit,
+			LoginRateBurst:    cfg.LoginRateLimit, // burst == rps for the default config
 		},
 		server.RouterOptions{Logger: logger},
 		handlers,

@@ -2,11 +2,10 @@ package oidc
 
 import (
 	"errors"
-	"html/template"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strconv"
+	"time"
 
 	"go-authserver/internal/clock"
 	"go-authserver/internal/domain"
@@ -15,7 +14,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Profile page status/error codes, surfaced through ?status= / ?error=.
+// Profile API status/error codes returned in the JSON body.
 const (
 	profileStatusSessionOut  = "session_revoked"
 	profileStatusOthersOut   = "other_sessions_revoked"
@@ -23,6 +22,7 @@ const (
 
 	profileErrAntiforgery = "antiforgery_failed"
 	profileErrServer      = "server_error"
+	profileErrCurrent     = "current_session"
 
 	profileErrPasswordMissing  = "password_missing"
 	profileErrPasswordMismatch = "password_mismatch"
@@ -32,17 +32,18 @@ const (
 	profileErrLocked           = "account_locked"
 )
 
-// ProfileConfig bundles the paths and flags the profile page needs.
+// ProfileConfig bundles the paths and flags the profile API needs.
 type ProfileConfig struct {
-	ProfilePath  string
-	LogoutPath   string
+	// BasePath is the API path the handler is mounted at
+	// ("/api/account/profile"); subpaths hang off it.
+	BasePath     string
 	RequireHTTPS bool
 }
 
-// ProfileHandler serves the signed-in user's profile page: view the
-// account fields, change the password, and list/revoke their own active sessions. It must be
-// mounted behind SessionResolver.RequireSession and serves both
-// ProfilePath (GET) and the POST endpoints under it.
+// ProfileHandler implements the signed-in user's profile API: view the
+// account fields, change the password, and list/revoke their own active
+// sessions. It must be mounted behind SessionResolver.RequireSession and
+// serves BasePath plus the POST endpoints under it.
 type ProfileHandler struct {
 	Cfg           ProfileConfig
 	Users         store.UserStore
@@ -51,56 +52,42 @@ type ProfileHandler struct {
 	AuditLogs     store.AuditLogStore
 	// Tracker throttles wrong "current password" guesses on the change
 	// password form. Optional, but production wiring should set it.
-	Tracker  store.LoginAttemptTracker
-	Clock    clock.Clock
-	Logger   *slog.Logger
-	Template *template.Template
+	Tracker store.LoginAttemptTracker
+	Clock   clock.Clock
+	Logger  *slog.Logger
 	// ClientIP extracts the source IP for audit entries. Optional.
 	ClientIP func(*http.Request) string
 }
 
-type profileSession struct {
-	ID      string
-	Created string
-	Expires string
-	Current bool
+type profileSessionView struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Current   bool      `json:"current"`
 }
 
-type profileData struct {
-	Nav                appNav
-	CSRFToken          string
-	RevokeAction       string
-	RevokeOthersAction string
-	PasswordAction     string
-	HasOtherSessions   bool
-	Username           string
-	Email              string
-	Sessions           []profileSession
-	Status             string
-	StatusLabel        string
-	Error              string
-	ErrorLabel         string
+type profileView struct {
+	Username         string               `json:"username"`
+	Email            string               `json:"email"`
+	HasOtherSessions bool                 `json:"has_other_sessions"`
+	Sessions         []profileSessionView `json:"sessions"`
 }
 
-func (h *ProfileHandler) csrf() CSRFGuard {
-	return CSRFGuard{CookieName: "_csrf_profile", Path: h.Cfg.ProfilePath, RequireHTTPS: h.Cfg.RequireHTTPS}
-}
-
-func (h *ProfileHandler) revokePath() string { return h.Cfg.ProfilePath + "/sessions/revoke" }
+func (h *ProfileHandler) revokePath() string { return h.Cfg.BasePath + "/sessions/revoke" }
 func (h *ProfileHandler) revokeOthersPath() string {
-	return h.Cfg.ProfilePath + "/sessions/revoke-others"
+	return h.Cfg.BasePath + "/sessions/revoke-others"
 }
-func (h *ProfileHandler) passwordPath() string { return h.Cfg.ProfilePath + "/password" }
+func (h *ProfileHandler) passwordPath() string { return h.Cfg.BasePath + "/password" }
 
 func (h *ProfileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sess, ok := SessionFromContext(r.Context())
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONError(w, http.StatusUnauthorized, ErrLoginRequired, "login required")
 		return
 	}
 	switch {
-	case r.URL.Path == h.Cfg.ProfilePath && r.Method == http.MethodGet:
-		h.render(w, r, sess)
+	case r.URL.Path == h.Cfg.BasePath && r.Method == http.MethodGet:
+		h.getProfile(w, r, sess)
 	case r.URL.Path == h.revokePath() && r.Method == http.MethodPost:
 		h.revokeSession(w, r, sess)
 	case r.URL.Path == h.revokeOthersPath() && r.Method == http.MethodPost:
@@ -117,29 +104,31 @@ func (h *ProfileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *ProfileHandler) render(w http.ResponseWriter, r *http.Request, sess *domain.Session) {
+func (h *ProfileHandler) csrfOK(w http.ResponseWriter, r *http.Request) bool {
+	if APICSRFGuard(h.Cfg.RequireHTTPS).VerifyHeader(r) {
+		return true
+	}
+	h.respondWithError(w, http.StatusForbidden, profileErrAntiforgery)
+	return false
+}
+
+func (h *ProfileHandler) respondWithError(w http.ResponseWriter, status int, code string) {
+	writeJSONError(w, status, code, profileErrorLabel(code))
+}
+
+func (h *ProfileHandler) getProfile(w http.ResponseWriter, r *http.Request, sess *domain.Session) {
 	ctx := r.Context()
 	user, err := h.Users.FindUserByID(ctx, sess.UserID)
 	if err != nil {
 		h.Logger.Error("profile: user lookup failed", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	token, err := h.csrf().Issue(w)
-	if err != nil {
-		h.Logger.Error("profile: csrf issue failed", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
 
-	data := profileData{
-		Nav:                appNav{HomePath: homePath, ProfilePath: h.Cfg.ProfilePath, LogoutPath: h.Cfg.LogoutPath, Active: "profile"},
-		CSRFToken:          token,
-		RevokeAction:       h.revokePath(),
-		RevokeOthersAction: h.revokeOthersPath(),
-		PasswordAction:     h.passwordPath(),
-		Username:           user.Username,
-		Email:              user.Email,
+	view := profileView{
+		Username: user.Username,
+		Email:    user.Email,
+		Sessions: []profileSessionView{},
 	}
 	active, err := h.Sessions.ListByUserID(ctx, sess.UserID, h.Clock.Now())
 	if err != nil {
@@ -147,83 +136,72 @@ func (h *ProfileHandler) render(w http.ResponseWriter, r *http.Request, sess *do
 	}
 	for _, s := range active {
 		if s.ID != sess.ID {
-			data.HasOtherSessions = true
+			view.HasOtherSessions = true
 		}
-		data.Sessions = append(data.Sessions, profileSession{
-			ID:      s.ID.String(),
-			Created: s.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"),
-			Expires: s.ExpiresAt.UTC().Format("2006-01-02 15:04 UTC"),
-			Current: s.ID == sess.ID,
+		view.Sessions = append(view.Sessions, profileSessionView{
+			ID:        s.ID.String(),
+			CreatedAt: s.CreatedAt.UTC(),
+			ExpiresAt: s.ExpiresAt.UTC(),
+			Current:   s.ID == sess.ID,
 		})
 	}
+	writeJSON(w, http.StatusOK, view)
+}
 
-	q := r.URL.Query()
-	if label := profileStatusLabel(q.Get("status")); label != "" {
-		data.Status, data.StatusLabel = q.Get("status"), label
-	}
-	if code := q.Get("error"); code != "" {
-		data.Error, data.ErrorLabel = code, profileErrorLabel(code)
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	if err := h.Template.Execute(w, data); err != nil {
-		h.Logger.Error("profile render failed", "err", err)
-	}
+type revokeSessionRequest struct {
+	SessionID string `json:"session_id"`
 }
 
 func (h *ProfileHandler) revokeSession(w http.ResponseWriter, r *http.Request, sess *domain.Session) {
-	if err := r.ParseForm(); err != nil || !h.csrf().Verify(r) {
-		h.redirect(w, r, "error", profileErrAntiforgery)
+	if !h.csrfOK(w, r) {
 		return
 	}
-	id, err := uuid.Parse(r.FormValue("session_id"))
+	var body revokeSessionRequest
+	if err := decodeJSON(r, &body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, ErrInvalidRequest, "invalid request body")
+		return
+	}
+	id, err := uuid.Parse(body.SessionID)
 	if err != nil {
-		http.NotFound(w, r)
+		writeJSONError(w, http.StatusNotFound, "not_found", "session not found")
 		return
 	}
 	ctx := r.Context()
 	target, err := h.Sessions.Find(ctx, id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			http.NotFound(w, r)
+			writeJSONError(w, http.StatusNotFound, "not_found", "session not found")
 			return
 		}
 		h.Logger.Error("profile: session lookup failed", "err", err)
-		h.redirect(w, r, "error", profileErrServer)
+		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
 	// A session that is not the caller's looks exactly like a missing one.
 	if target.UserID != sess.UserID {
-		http.NotFound(w, r)
+		writeJSONError(w, http.StatusNotFound, "not_found", "session not found")
 		return
 	}
 	// Signing out the current session is what the logout flow is for; it
 	// also clears the cookie.
 	if target.ID == sess.ID {
-		http.Redirect(w, r, h.Cfg.LogoutPath, http.StatusSeeOther)
+		h.respondWithError(w, http.StatusBadRequest, profileErrCurrent)
 		return
 	}
 
 	now := h.Clock.Now().UTC()
 	if err := h.Sessions.Revoke(ctx, target.ID, now); err != nil && !errors.Is(err, store.ErrNotFound) {
 		h.Logger.Error("profile: session revoke failed", "err", err)
-		h.redirect(w, r, "error", profileErrServer)
+		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
 	if err := h.RefreshTokens.RevokeBySessionID(ctx, target.ID, now); err != nil {
 		h.Logger.Error("profile: refresh token revoke failed", "err", err)
-		h.redirect(w, r, "error", profileErrServer)
+		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
 	h.audit(r, sess.UserID, domain.AuditSessionRevoked, "Session", target.ID.String(), "")
-	h.redirect(w, r, "status", profileStatusSessionOut)
-}
-
-func (h *ProfileHandler) redirect(w http.ResponseWriter, r *http.Request, key, code string) {
-	q := url.Values{}
-	q.Set(key, code)
-	http.Redirect(w, r, h.Cfg.ProfilePath+"?"+q.Encode(), http.StatusSeeOther)
+	writeJSON(w, http.StatusOK, map[string]any{"status": profileStatusSessionOut})
 }
 
 // audit appends an entry; like login history it is informational, so a
@@ -272,6 +250,8 @@ func profileErrorLabel(code string) string {
 	switch code {
 	case profileErrAntiforgery:
 		return "Your page expired. Please reload and try again."
+	case profileErrCurrent:
+		return "Use sign out to end the current session."
 	case profileErrPasswordMissing:
 		return "Please fill out all password fields."
 	case profileErrPasswordMismatch:
@@ -291,18 +271,17 @@ func profileErrorLabel(code string) string {
 
 // revokeOthers signs out every session of the user except the current one.
 func (h *ProfileHandler) revokeOthers(w http.ResponseWriter, r *http.Request, sess *domain.Session) {
-	if err := r.ParseForm(); err != nil || !h.csrf().Verify(r) {
-		h.redirect(w, r, "error", profileErrAntiforgery)
+	if !h.csrfOK(w, r) {
 		return
 	}
 	n, err := h.revokeOtherSessions(r, sess)
 	if err != nil {
 		h.Logger.Error("profile: revoke other sessions failed", "err", err)
-		h.redirect(w, r, "error", profileErrServer)
+		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
 	h.audit(r, sess.UserID, domain.AuditSessionRevoked, "User", sess.UserID, `{"scope":"others","count":`+strconv.Itoa(n)+`}`)
-	h.redirect(w, r, "status", profileStatusOthersOut)
+	writeJSON(w, http.StatusOK, map[string]any{"status": profileStatusOthersOut, "count": n})
 }
 
 // revokeOtherSessions revokes the user's sessions other than sess, plus
@@ -336,16 +315,26 @@ func (h *ProfileHandler) passwordLockoutKey(r *http.Request, userID string) stri
 	return "pwchange:" + userID + "|" + ip
 }
 
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+	PasswordConfirm string `json:"new_password_confirm"`
+}
+
 func (h *ProfileHandler) changePassword(w http.ResponseWriter, r *http.Request, sess *domain.Session) {
-	if err := r.ParseForm(); err != nil || !h.csrf().Verify(r) {
-		h.redirect(w, r, "error", profileErrAntiforgery)
+	if !h.csrfOK(w, r) {
 		return
 	}
-	current := r.FormValue("current_password")
-	next := r.FormValue("new_password")
-	confirm := r.FormValue("new_password_confirm")
+	var body changePasswordRequest
+	if err := decodeJSON(r, &body); err != nil {
+		h.respondWithError(w, http.StatusBadRequest, profileErrPasswordMissing)
+		return
+	}
+	current := body.CurrentPassword
+	next := body.NewPassword
+	confirm := body.PasswordConfirm
 	if current == "" || next == "" || confirm == "" {
-		h.redirect(w, r, "error", profileErrPasswordMissing)
+		h.respondWithError(w, http.StatusBadRequest, profileErrPasswordMissing)
 		return
 	}
 
@@ -353,7 +342,7 @@ func (h *ProfileHandler) changePassword(w http.ResponseWriter, r *http.Request, 
 	user, err := h.Users.FindUserByID(ctx, sess.UserID)
 	if err != nil {
 		h.Logger.Error("profile: user lookup failed", "err", err)
-		h.redirect(w, r, "error", profileErrServer)
+		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
 
@@ -367,21 +356,21 @@ func (h *ProfileHandler) changePassword(w http.ResponseWriter, r *http.Request, 
 			h.Logger.Error("profile: tracker lookup failed", "err", err)
 		}
 		if locked {
-			h.redirect(w, r, "error", profileErrLocked)
+			h.respondWithError(w, http.StatusTooManyRequests, profileErrLocked)
 			return
 		}
 	}
 	info, err := h.Users.ValidateCredentials(ctx, user.Username, current)
 	if err != nil {
 		h.Logger.Error("profile: credential check failed", "err", err)
-		h.redirect(w, r, "error", profileErrServer)
+		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
 	if info == nil {
 		if h.Tracker != nil {
 			_ = h.Tracker.RecordFailure(ctx, key)
 		}
-		h.redirect(w, r, "error", profileErrCurrentWrong)
+		h.respondWithError(w, http.StatusBadRequest, profileErrCurrentWrong)
 		return
 	}
 	if h.Tracker != nil {
@@ -392,19 +381,19 @@ func (h *ProfileHandler) changePassword(w http.ResponseWriter, r *http.Request, 
 
 	switch {
 	case next != confirm:
-		h.redirect(w, r, "error", profileErrPasswordMismatch)
+		h.respondWithError(w, http.StatusBadRequest, profileErrPasswordMismatch)
 		return
 	case ValidatePassword(next) != nil:
-		h.redirect(w, r, "error", profileErrPasswordWeak)
+		h.respondWithError(w, http.StatusBadRequest, profileErrPasswordWeak)
 		return
 	case next == current:
-		h.redirect(w, r, "error", profileErrPasswordSame)
+		h.respondWithError(w, http.StatusBadRequest, profileErrPasswordSame)
 		return
 	}
 
 	if err := h.Users.SetPassword(ctx, user.ID, next); err != nil {
 		h.Logger.Error("profile: set password failed", "err", err)
-		h.redirect(w, r, "error", profileErrServer)
+		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
 	// The password is already changed; a failure below must not report the
@@ -419,5 +408,5 @@ func (h *ProfileHandler) changePassword(w http.ResponseWriter, r *http.Request, 
 		h.Logger.Error("profile: revoking other sessions after password change failed", "err", err)
 	}
 	h.audit(r, user.ID, domain.AuditPasswordChanged, "User", user.ID, `{"sessions_revoked":`+strconv.Itoa(n)+`}`)
-	h.redirect(w, r, "status", profileStatusPasswordSet)
+	writeJSON(w, http.StatusOK, map[string]any{"status": profileStatusPasswordSet})
 }

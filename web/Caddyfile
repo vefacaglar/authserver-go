@@ -1,0 +1,17 @@
+# Static file server for the SPA build. Runs behind the main Caddy,
+# which terminates TLS and routes API paths to the Go server; every
+# other path lands here. Unknown paths fall back to index.html so
+# client-side routing works on refresh/deep links.
+:8080 {
+	root * /srv
+	encode gzip
+
+	@immutable path /assets/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	@html path / /index.html
+	header @html Cache-Control "no-store"
+
+	try_files {path} /index.html
+	file_server
+}

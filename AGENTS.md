@@ -50,7 +50,7 @@ Turkish is allowed only in chat replies to the author, never in repo content.
 - `internal/token` — hashing, PKCE, RSA keys, JWT issuance, client-assertion validation. Depends on `domain` + `store` + `jwx`.
 - `internal/oidc` — HTTP handlers (minimal `net/http` + chi). Depends on `token`, `session`, `store`, `domain`.
 - `internal/session` — encrypted SSO cookie only.
-- `internal/admin` — admin JSON API + SPA, mounted behind an auth-required chi group.
+- `internal/admin` — admin JSON API only, mounted behind an auth-required chi group. All HTML (login/account pages and the admin console) is the separate SPA in `web/`; the Go server is API-only.
 - `internal/server` — router wiring + middleware. `cmd/authserver` — composition root.
 - Handlers are **minimal API style** (chi `http.HandlerFunc`), not a heavy framework.
 - The user directory is host-owned behind `store.UserStore`; never hardcode a user table.

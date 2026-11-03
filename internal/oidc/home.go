@@ -1,55 +1,41 @@
 package oidc
 
 import (
-	"html/template"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"go-authserver/internal/domain"
 	"go-authserver/internal/store"
 )
 
-// homePath is the signed-in landing page.
+// homePath is the signed-in landing page in the SPA.
 const homePath = "/"
 
 // recentLoginsLimit caps the sign-in history shown on the home page.
 const recentLoginsLimit = 10
 
-// HomeConfig bundles the paths the home page links to.
-type HomeConfig struct {
-	ProfilePath string
-	LogoutPath  string
-}
-
-// HomeHandler renders the signed-in landing page: who you are and your
-// most recent sign-ins. Mount it behind SessionResolver.RequireSession.
+// HomeHandler serves GET /api/account/home: who you are and your most
+// recent sign-ins. Mount it behind SessionResolver.RequireSession.
 type HomeHandler struct {
-	Cfg       HomeConfig
 	Users     store.UserStore
 	AuditLogs store.AuditLogStore
 	Logger    *slog.Logger
-	Template  *template.Template
 }
 
-type homeLogin struct {
-	When    string
-	IP      string
-	Device  string
-	Current bool
+type homeLoginView struct {
+	When    time.Time `json:"when"`
+	IP      string    `json:"ip"`
+	Device  string    `json:"device"`
+	Current bool      `json:"current"`
 }
 
-type homeData struct {
-	Nav          appNav
-	ProfilePath  string
-	Username     string
-	Email        string
-	Logins       []homeLogin
-	FailedLogins []homeLogin
-	Status       string
-	StatusLabel  string
-	Error        string
-	ErrorLabel   string
+type homeView struct {
+	Username     string          `json:"username"`
+	Email        string          `json:"email"`
+	Logins       []homeLoginView `json:"logins"`
+	FailedLogins []homeLoginView `json:"failed_logins"`
 }
 
 func (h *HomeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +46,7 @@ func (h *HomeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, ok := SessionFromContext(r.Context())
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONError(w, http.StatusUnauthorized, ErrLoginRequired, "login required")
 		return
 	}
 	ctx := r.Context()
@@ -68,41 +54,32 @@ func (h *HomeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	user, err := h.Users.FindUserByID(ctx, sess.UserID)
 	if err != nil {
 		h.Logger.Error("home: user lookup failed", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, ErrServerError, "internal error")
 		return
 	}
-	data := homeData{
-		Nav:         appNav{HomePath: homePath, ProfilePath: h.Cfg.ProfilePath, LogoutPath: h.Cfg.LogoutPath, Active: "home"},
-		ProfilePath: h.Cfg.ProfilePath,
-		Username:    user.Username,
-		Email:       user.Email,
-	}
-
-	data.Logins = h.history(r, sess.UserID, domain.AuditLoginSucceeded, true)
-	data.FailedLogins = h.history(r, sess.UserID, domain.AuditLoginFailed, false)
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	if err := h.Template.Execute(w, data); err != nil {
-		h.Logger.Error("home render failed", "err", err)
-	}
+	writeJSON(w, http.StatusOK, homeView{
+		Username:     user.Username,
+		Email:        user.Email,
+		Logins:       h.history(r, sess.UserID, domain.AuditLoginSucceeded, true),
+		FailedLogins: h.history(r, sess.UserID, domain.AuditLoginFailed, false),
+	})
 }
 
 // history loads the user's recent entries for one audit action. markFirst
 // flags the newest entry as the current sign-in.
-func (h *HomeHandler) history(r *http.Request, userID, action string, markFirst bool) []homeLogin {
+func (h *HomeHandler) history(r *http.Request, userID, action string, markFirst bool) []homeLoginView {
+	out := []homeLoginView{}
 	if h.AuditLogs == nil {
-		return nil
+		return out
 	}
 	logs, err := h.AuditLogs.ListByActor(r.Context(), userID, action, recentLoginsLimit)
 	if err != nil {
 		h.Logger.Warn("home: history lookup failed", "action", action, "err", err)
-		return nil
+		return out
 	}
-	out := make([]homeLogin, 0, len(logs))
 	for i, l := range logs {
-		out = append(out, homeLogin{
-			When:    l.Timestamp.UTC().Format("2006-01-02 15:04 UTC"),
+		out = append(out, homeLoginView{
+			When:    l.Timestamp.UTC(),
 			IP:      l.IPAddress,
 			Device:  describeUserAgent(l.UserAgent),
 			Current: markFirst && i == 0,

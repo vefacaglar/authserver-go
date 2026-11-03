@@ -14,6 +14,17 @@ if [[ -f .current-image ]]; then
   [[ "$previous_image" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]] || exit 1
 fi
 
+web_image=${3:-}
+if [[ -z "$web_image" && -f .current-web-image ]]; then
+  web_image=$(cat .current-web-image)
+fi
+[[ "$web_image" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]] || exit 1
+previous_web_image=""
+if [[ -f .current-web-image ]]; then
+  previous_web_image=$(cat .current-web-image)
+  [[ "$previous_web_image" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]] || exit 1
+fi
+
 # Install configuration only after acquiring the deployment lock. Keep a private
 # copy so failed migrations/deployments also restore the previous environment.
 backup=""
@@ -59,18 +70,23 @@ fi
 test -f .env && test -f authserver.env
 
 export AUTH_IMAGE="$image"
+export AUTH_WEB_IMAGE="$web_image"
 docker compose --env-file .env -f compose.yml config --quiet
-docker compose --env-file .env -f compose.yml pull authserver
+docker compose --env-file .env -f compose.yml pull authserver web
 # Migrate before replacing the running service. AUTH_SEED=false also applies here.
 # Database backups and backward-compatible migrations are required: image rollback
 # cannot undo a database migration.
 docker compose --env-file .env -f compose.yml run --rm --no-deps authserver migrate
-if ! docker compose --env-file .env -f compose.yml up -d --wait --wait-timeout 120 authserver; then
+if ! docker compose --env-file .env -f compose.yml up -d --wait --wait-timeout 120 authserver web; then
   echo "Auth server health check failed."
   restore_config
   if [[ -n "$previous_image" && -f .last-good-compose.yml ]]; then
     echo "Restoring the previous healthy deployment."
-    AUTH_IMAGE="$previous_image" docker compose --env-file .env -f .last-good-compose.yml up -d --wait --wait-timeout 120 authserver
+    # The previous compose may predate the web service; only bring it
+    # back when there is a previous web image to run.
+    rollback_services=(authserver)
+    [[ -n "$previous_web_image" ]] && rollback_services+=(web)
+    AUTH_IMAGE="$previous_image" AUTH_WEB_IMAGE="${previous_web_image:-$web_image}" docker compose --env-file .env -f .last-good-compose.yml up -d --wait --wait-timeout 120 "${rollback_services[@]}"
   fi
   exit 1
 fi
@@ -81,6 +97,10 @@ fi
 if [[ -n "$previous_image" ]]; then
   printf '%s\n' "$previous_image" > .previous-image
 fi
+if [[ -n "$previous_web_image" ]]; then
+  printf '%s\n' "$previous_web_image" > .previous-web-image
+fi
 cp compose.yml .last-good-compose.yml
 printf '%s\n' "$image" > .current-image
+printf '%s\n' "$web_image" > .current-web-image
 echo "Auth server deployment is healthy."

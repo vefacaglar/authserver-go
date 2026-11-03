@@ -18,15 +18,18 @@ SPEC.loader.exec_module(CADDY)
 class CaddyTest(unittest.TestCase):
     def test_preserves_existing_sites_and_is_idempotent(self):
         original = "{\n    email ops@example.test\n}\n\nother.example.test {\n    reverse_proxy other:3000\n}\n"
-        first = CADDY.updated_config(original, "authserver:5175", False)
+        first = CADDY.updated_config(original, "authserver:5175", "web:8080", False)
         self.assertIn(original.rstrip(), first)
         self.assertIn("reverse_proxy authserver:5175", first)
+        self.assertIn("reverse_proxy web:8080", first)
+        self.assertIn("@api path /api/* /admin/api/* /connect/* /.well-known/* /healthz", first)
         self.assertIn("header_up -True-Client-IP", first)
-        second = CADDY.updated_config(first, "authserver:5175", True)
+        second = CADDY.updated_config(first, "authserver:5175", "web:8080", True)
         self.assertEqual(first, second)
-        changed = CADDY.updated_config(second, "127.0.0.1:5176", True)
+        changed = CADDY.updated_config(second, "127.0.0.1:5176", "127.0.0.1:5177", True)
         self.assertEqual(changed.count(CADDY.DOMAIN), 1)
         self.assertIn("reverse_proxy 127.0.0.1:5176", changed)
+        self.assertIn("reverse_proxy 127.0.0.1:5177", changed)
 
     def test_refuses_existing_unmanaged_or_imported_auth_route(self):
         for original, routed in (
@@ -34,7 +37,7 @@ class CaddyTest(unittest.TestCase):
             ("import sites/*", True),
         ):
             with self.assertRaises(RuntimeError):
-                CADDY.updated_config(original, "authserver:5175", routed)
+                CADDY.updated_config(original, "authserver:5175", "web:8080", routed)
         self.assertTrue(CADDY.routed({"routes": [{"match": [{"host": [CADDY.DOMAIN]}]}]}))
 
     def test_persistent_mount_resolution(self):
@@ -67,7 +70,7 @@ class CaddyTest(unittest.TestCase):
 
                 with patch.object(CADDY, "run", side_effect=command):
                     with self.assertRaisesRegex(RuntimeError, "original Caddyfile was restored"):
-                        CADDY.apply_config(source, ["caddy"], str(source), "authserver:5175", directory)
+                        CADDY.apply_config(source, ["caddy"], str(source), "authserver:5175", "web:8080", directory)
                 self.assertEqual(source.read_text(), original)
                 self.assertEqual(source.stat().st_ino, inode)
 
@@ -87,27 +90,29 @@ class CaddyTest(unittest.TestCase):
             return ""
 
         with patch.object(CADDY, "run", side_effect=command):
-            source, cmd, config, upstream = CADDY.target({}, "auth-network", "5175")
+            source, cmd, config, upstream, web_upstream = CADDY.target({}, "auth-network", "5175", "5176")
         self.assertEqual(source, Path("/srv/caddy/Caddyfile"))
         self.assertEqual(cmd, ["docker", "exec", "abc", "caddy"])
         self.assertEqual(config, "/etc/caddy/Caddyfile")
         self.assertEqual(upstream, "authserver:5175")
+        self.assertEqual(web_upstream, "web:8080")
         self.assertIn(["docker", "network", "connect", "auth-network", "abc"], calls)
 
     def test_multiple_containers_require_explicit_selection(self):
         with patch.object(CADDY, "run", return_value="a\tcaddy:2\tproxy1\nb\tcaddy:2\tproxy2\n"):
             with self.assertRaisesRegex(RuntimeError, "Multiple Caddy containers"):
-                CADDY.target({}, "network", "5175")
+                CADDY.target({}, "network", "5175", "5176")
 
     def test_host_service_uses_loopback_port(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "Caddyfile"
             config.write_text("other.example.test {\n    respond ok\n}\n")
             with patch.object(CADDY, "run", return_value="") as command, patch.object(CADDY.shutil, "which", return_value="/usr/bin/caddy"):
-                source, cmd, _, upstream = CADDY.target({"config_path": str(config)}, "network", "5176")
+                source, cmd, _, upstream, web_upstream = CADDY.target({"config_path": str(config)}, "network", "5176", "5177")
             self.assertEqual(source, config)
             self.assertEqual(cmd, ["/usr/bin/caddy"])
             self.assertEqual(upstream, "127.0.0.1:5176")
+            self.assertEqual(web_upstream, "127.0.0.1:5177")
             command.assert_any_call(["systemctl", "is-active", "--quiet", "caddy"])
 
     def test_successful_apply_validates_before_reload_and_preserves_inode(self):
@@ -116,7 +121,7 @@ class CaddyTest(unittest.TestCase):
             source.write_text("other.example.test {\n    respond ok\n}\n")
             inode = source.stat().st_ino
             with patch.object(CADDY, "run", side_effect=["{}", "", ""]) as command:
-                CADDY.apply_config(source, ["caddy"], str(source), "authserver:5175", directory)
+                CADDY.apply_config(source, ["caddy"], str(source), "authserver:5175", "web:8080", directory)
             self.assertEqual(command.call_args_list[1].args[0][1], "validate")
             self.assertEqual(command.call_args_list[2].args[0][1], "reload")
             self.assertIn(CADDY.DOMAIN, source.read_text())

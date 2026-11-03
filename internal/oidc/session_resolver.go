@@ -3,7 +3,6 @@ package oidc
 import (
 	"context"
 	"net/http"
-	"net/url"
 
 	"go-authserver/internal/clock"
 	"go-authserver/internal/domain"
@@ -48,21 +47,17 @@ func SessionFromContext(ctx context.Context) (*domain.Session, bool) {
 }
 
 // RequireSession wraps next so it only runs for a signed-in user and
-// stores the session in the request context. Anonymous requests are
-// redirected to loginPath; GET requests carry their own path and query
-// as returnUrl (the login handler still validates it).
-func (s *SessionResolver) RequireSession(loginPath string, next http.Handler) http.Handler {
+// stores the session in the request context. It guards JSON APIs, so
+// anonymous requests get a 401 JSON error instead of a redirect; the
+// SPA decides how to route the user to its login page.
+func (s *SessionResolver) RequireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sess, err := s.Resolve(r)
 		if err != nil || sess == nil {
 			if err != nil && err != session.ErrNoSession {
 				s.Cookies.ClearCookie(w)
 			}
-			target := loginPath
-			if r.Method == http.MethodGet {
-				target += "?returnUrl=" + url.QueryEscape(r.URL.RequestURI())
-			}
-			http.Redirect(w, r, target, http.StatusSeeOther)
+			writeJSONError(w, http.StatusUnauthorized, ErrLoginRequired, "login required")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionCtxKey{}, sess)))

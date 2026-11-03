@@ -41,6 +41,37 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # The browser SPA (web/), served as static files by its own Caddy.
+  # The main Caddy routes non-API paths on auth.vefacaglar.com here.
+  web:
+    image: ${AUTH_WEB_IMAGE:?Set AUTH_WEB_IMAGE to the published web image digest}
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:${AUTH_WEB_BIND_PORT:-5176}:8080"
+    networks:
+      backend:
+        aliases: [web]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /data:size=16m
+      - /config:size=16m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 10s
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 networks:
   backend:
     external: true

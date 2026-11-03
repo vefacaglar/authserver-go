@@ -1,58 +1,129 @@
-// Package admin owns the auth-server's administrative API and the
-// single-page admin console. The package is mounted under /admin and
-// gated by an auth middleware plus gorilla/csrf for state-changing
-// requests. The JSON contract is the real surface; the SPA is a thin
-// vanilla-JS shell that consumes it.
 package admin
 
 import (
+	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"go-authserver/internal/domain"
+	"go-authserver/internal/store"
 )
+
+// SessionResolver identifies the signed-in browser session on a
+// request. The oidc package's SessionResolver satisfies it.
+type SessionResolver interface {
+	Resolve(r *http.Request) (*domain.Session, error)
+}
+
+// authMethod records how a request passed AuthMiddleware. The CSRF
+// middleware needs it: cookie-authenticated requests carry ambient
+// authority and require the double-submit check, Bearer requests do
+// not.
+type authMethod int
+
+const (
+	authAnonymous authMethod = iota
+	authToken
+	authSession
+)
+
+type authMethodCtxKey struct{}
+
+func withAuthMethod(r *http.Request, m authMethod) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), authMethodCtxKey{}, m))
+}
+
+func authMethodFrom(r *http.Request) authMethod {
+	m, _ := r.Context().Value(authMethodCtxKey{}).(authMethod)
+	return m
+}
 
 // AuthConfig captures the policy inputs for the admin auth middleware.
 type AuthConfig struct {
-	// Token is the static bearer shared with admin operators. The
+	// Token is the static Bearer token shared with admin scripts. The
 	// client sends it as `Authorization: Bearer <token>` (preferred)
-	// or `X-Admin-Token: <token>` (legacy convenience).
+	// or `X-Admin-Token: <token>` (legacy convenience). Browser users
+	// do not use it; they sign in normally (see Sessions).
 	Token string
 	// AllowAnonymous bypasses the check. Intended for local dev
-	// only; production must set Token and leave AllowAnonymous
-	// false.
+	// only; production must leave AllowAnonymous false.
 	AllowAnonymous bool
+	// AdminRole is the role name that grants a signed-in user access
+	// to the admin API. Empty means "admin".
+	AdminRole string
+	// Sessions resolves the SSO session cookie. When set (with
+	// Users), a signed-in user holding AdminRole is authorized.
+	Sessions SessionResolver
+	// Users is used to look up the session user's roles.
+	Users store.UserStore
 }
 
-// AuthMiddleware returns the HTTP middleware that gates the /admin
-// route group. On any failure it writes a 401 with a Bearer
-// challenge so curl/scripts fail loudly.
+// AuthMiddleware returns the HTTP middleware that gates the admin API.
+// A request passes when any of these holds, in order: anonymous mode is
+// on (dev only), a valid Bearer token is presented, or the SSO session
+// belongs to a user with the admin role. Signed-in non-admins get 403;
+// everyone else gets 401.
 func AuthMiddleware(cfg AuthConfig, logger *slog.Logger) (func(http.Handler) http.Handler, error) {
-	if !cfg.AllowAnonymous {
-		if strings.TrimSpace(cfg.Token) == "" {
-			return nil, errors.New("admin: AUTH_ADMIN_TOKEN must be set unless AUTH_ADMIN_ALLOW_ANONYMOUS=true")
-		}
+	if !cfg.AllowAnonymous && strings.TrimSpace(cfg.Token) == "" && cfg.Sessions == nil {
+		return nil, errors.New("admin: AUTH_ADMIN_TOKEN must be set unless AUTH_ADMIN_ALLOW_ANONYMOUS=true")
+	}
+	adminRole := cfg.AdminRole
+	if adminRole == "" {
+		adminRole = "admin"
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if cfg.AllowAnonymous {
 				w.Header().Set("X-Admin-Auth", "anonymous")
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, withAuthMethod(r, authAnonymous))
 				return
 			}
-			provided := extractAdminToken(r)
-			if subtle.ConstantTimeCompare([]byte(provided), []byte(cfg.Token)) != 1 {
-				if logger != nil {
-					logger.Warn("admin auth failed", "remote", r.RemoteAddr, "path", r.URL.Path)
+			if provided := extractAdminToken(r); provided != "" && cfg.Token != "" &&
+				subtle.ConstantTimeCompare([]byte(provided), []byte(cfg.Token)) == 1 {
+				w.Header().Set("X-Admin-Auth", "token")
+				next.ServeHTTP(w, withAuthMethod(r, authToken))
+				return
+			}
+			if cfg.Sessions != nil && cfg.Users != nil {
+				if sess, err := cfg.Sessions.Resolve(r); err == nil && sess != nil {
+					roles, err := cfg.Users.GetUserRoles(r.Context(), sess.UserID)
+					if err != nil {
+						if logger != nil {
+							logger.Warn("admin auth: role lookup failed", "err", err)
+						}
+						writeAuthError(w, http.StatusInternalServerError, "server_error")
+						return
+					}
+					if containsString(roles, adminRole) {
+						w.Header().Set("X-Admin-Auth", "session")
+						next.ServeHTTP(w, withAuthMethod(r, authSession))
+						return
+					}
+					if logger != nil {
+						logger.Warn("admin auth: non-admin session", "remote", r.RemoteAddr, "path", r.URL.Path)
+					}
+					writeAuthError(w, http.StatusForbidden, "admin role required")
+					return
 				}
-				w.Header().Set("WWW-Authenticate", `Bearer realm="auth-server-admin"`)
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
 			}
-			next.ServeHTTP(w, r)
+			if logger != nil {
+				logger.Warn("admin auth failed", "remote", r.RemoteAddr, "path", r.URL.Path)
+			}
+			w.Header().Set("WWW-Authenticate", `Bearer realm="auth-server-admin"`)
+			writeAuthError(w, http.StatusUnauthorized, "unauthorized")
 		})
 	}, nil
+}
+
+func writeAuthError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": msg})
 }
 
 // extractAdminToken reads the token from the request. Authorization:
