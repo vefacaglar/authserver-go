@@ -71,6 +71,10 @@ curl --fail --silent --show-error http://127.0.0.1:15175/.well-known/openid-conf
 curl --fail --silent --show-error http://127.0.0.1:15175/.well-known/jwks.json \
   | jq -e '(.keys | length) > 0 and all(.keys[]; has("d") | not)' > /dev/null
 curl --fail --silent --show-error http://127.0.0.1:15176/login | grep -q '<div id="root">'
+# Both containers must run unprivileged.
+for service in authserver web; do
+  [[ "$(compose exec -T "$service" id -u)" == 10001 ]]
+done
 
 # Exercise the generated production path split through one origin. Only TLS
 # termination is replaced with HTTP in this isolated, loopback-only test.
@@ -86,7 +90,7 @@ PY
 docker run -d --name "$proxy" --network "$network" \
   -p 127.0.0.1:15177:8080 --read-only --cap-drop ALL \
   --security-opt no-new-privileges:true \
-  --tmpfs /tmp:size=16m,mode=1777 --tmpfs /data:size=16m --tmpfs /config:size=16m \
+  --tmpfs /tmp:size=16m,mode=1777 \
   --mount "type=bind,source=$work/Caddyfile,target=/etc/caddy/Caddyfile,readonly" \
   "$web_image" > /dev/null
 curl --fail --silent --show-error --retry 15 --retry-delay 1 --retry-all-errors --max-time 5 \

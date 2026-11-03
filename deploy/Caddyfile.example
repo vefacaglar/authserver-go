@@ -1,6 +1,8 @@
 # Add this block to the existing Caddyfile; preserve the other sites.
 # API paths go to the Go server; everything else serves the SPA.
 auth.vefacaglar.com {
+    # Default only: the Go API already sends HSTS, the SPA does not.
+    header ?Strict-Transport-Security "max-age=31536000; includeSubDomains"
     @api path /api/* /admin/api/* /connect/* /.well-known/* /healthz
     handle @api {
         reverse_proxy authserver-go-api:5175 {

@@ -4,7 +4,31 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="dark" />
     <title>authserver</title>
+    <!-- Start the UI font download in parallel with the bundle; main.tsx waits for it before the first render. -->
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      crossorigin
+      href="/node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2"
+    />
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      crossorigin
+      href="/node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-700-normal.woff2"
+    />
+    <!-- Paint the shell color before any stylesheet or script arrives (no white flash). -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #121212;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

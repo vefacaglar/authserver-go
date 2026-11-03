@@ -927,6 +927,49 @@ func TestAPI_SetUserPassword_EnforcesPolicyAndRevokesEverything(t *testing.T) {
 	}
 }
 
+func TestAPI_DeleteUser_RevokesSessionsAndRefreshTokens(t *testing.T) {
+	ctx := context.Background()
+	a := newTestAPI(t)
+	mux := http.NewServeMux()
+	a.Mount(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	now := a.Clock.Now().UTC()
+	if err := a.Users.CreateUser(ctx, &domain.User{ID: "u-1", Username: "alice", CreatedAt: now, UpdatedAt: now}, "Password123"); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	sid := uuid.New()
+	if err := a.Sessions.Store(ctx, &domain.Session{ID: sid, UserID: "u-1", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatalf("store session: %v", err)
+	}
+	if err := a.RefreshTokens.Store(ctx, &domain.RefreshToken{
+		ID: uuid.New(), TokenHash: "rt-hash", ClientID: "c", UserID: "u-1", SessionID: &sid,
+		ExpiresAt: now.Add(time.Hour), AbsoluteExpiresAt: now.Add(24 * time.Hour), CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("store refresh token: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/users/u-1", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+	if s, _ := a.Sessions.Find(ctx, sid); s == nil || s.RevokedAt == nil {
+		t.Error("session of deleted user not revoked")
+	}
+	if rt, _ := a.RefreshTokens.FindByHash(ctx, "rt-hash"); rt == nil || rt.RevokedAt == nil {
+		t.Error("refresh token of deleted user not revoked")
+	}
+	if _, err := a.Users.FindUserByID(ctx, "u-1"); err == nil {
+		t.Error("user still exists")
+	}
+}
+
 func TestAPI_CreateUser_EnforcesPasswordPolicy(t *testing.T) {
 	srv := newTestAPIServer(t)
 	defer srv.Close()

@@ -47,6 +47,8 @@ def updated_config(original, upstream, web_upstream, already_routed):
         raise RuntimeError("An unmanaged auth route already exists; refusing to overwrite it")
     return original.rstrip() + "\n\n" + f"""{BEGIN}
 {DOMAIN} {{
+    # Default only: the Go API already sends HSTS, the SPA does not.
+    header ?Strict-Transport-Security "max-age=31536000; includeSubDomains"
     @api path /api/* /admin/api/* /connect/* /.well-known/* /healthz
     handle @api {{
         reverse_proxy {upstream} {{

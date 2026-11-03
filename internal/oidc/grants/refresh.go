@@ -5,6 +5,7 @@ package grants
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -121,6 +122,10 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client
 
 	info, err := g.Users.FindByID(ctx, existing.UserID)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			g.writeError(w, http.StatusBadRequest, "invalid_grant", "user no longer exists")
+			return
+		}
 		g.writeError(w, http.StatusInternalServerError, "server_error", "user lookup failed")
 		return
 	}

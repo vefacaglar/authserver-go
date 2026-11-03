@@ -118,6 +118,25 @@ func fakeSMTP(t *testing.T) (port string, got chan string) {
 	return port, got
 }
 
+func TestIsLoopbackHost(t *testing.T) {
+	for host, want := range map[string]bool{
+		"localhost":        true,
+		"LOCALHOST":        true,
+		"127.0.0.1":        true,
+		"127.0.0.2":        true,
+		"::1":              true,
+		"[::1]":            true,
+		"smtp.example.com": false,
+		"10.0.0.5":         false,
+		"localhost.evil":   false,
+		"":                 false,
+	} {
+		if got := isLoopbackHost(host); got != want {
+			t.Errorf("isLoopbackHost(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
 func TestSMTPMailer_Send(t *testing.T) {
 	port, got := fakeSMTP(t)
 	m, err := NewSMTPMailer(SMTPConfig{Host: "127.0.0.1", Port: port, From: "Auth <no-reply@example.com>"}, time.Now)

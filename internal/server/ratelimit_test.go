@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -36,22 +37,50 @@ func TestLoginRateLimiter_PerIPIsolation(t *testing.T) {
 	}
 }
 
+type fakeNow struct{ t time.Time }
+
+func (f *fakeNow) now() time.Time          { return f.t }
+func (f *fakeNow) advance(d time.Duration) { f.t = f.t.Add(d) }
+
 func TestLoginRateLimiter_RefillsOverTime(t *testing.T) {
-	// Use a slow clock for deterministic testing: rate = 1/s,
-	// burst = 1, advance 1.1s between requests.
+	clk := &fakeNow{t: time.Unix(1700000000, 0)}
 	l := NewLoginRateLimiter(1, 1)
+	l.now = clk.now
 	if !l.allow("ip") {
 		t.Fatal("first request must pass")
 	}
 	if l.allow("ip") {
 		t.Fatal("second request immediately should be rejected")
 	}
-	// Manually wait via the limiter's internal refill. We don't
-	// have a hook for "advance the clock" in golang.org/x/time/rate
-	// without time.Sleep, so this test just confirms the limiter
-	// returns the correct boolean. The production behaviour is
-	// covered by the integration test below.
-	_ = time.Second
+	clk.advance(1100 * time.Millisecond)
+	if !l.allow("ip") {
+		t.Fatal("request after refill should pass")
+	}
+}
+
+func TestLoginRateLimiter_EvictsIdleBuckets(t *testing.T) {
+	clk := &fakeNow{t: time.Unix(1700000000, 0)}
+	l := NewLoginRateLimiter(1, 1)
+	l.now = clk.now
+	for i := range 1000 {
+		l.allow(fmt.Sprintf("10.0.%d.%d", i/256, i%256))
+	}
+	if len(l.buckets) != 1000 {
+		t.Fatalf("buckets = %d, want 1000", len(l.buckets))
+	}
+
+	// One IP stays active; everyone else goes idle past maxIdle.
+	clk.advance(l.maxIdle / 2)
+	l.allow("203.0.113.9")
+	clk.advance(l.maxIdle/2 + time.Second)
+	l.allow("203.0.113.9")
+
+	if len(l.buckets) != 1 {
+		t.Fatalf("buckets after sweep = %d, want 1", len(l.buckets))
+	}
+	if _, ok := l.buckets["203.0.113.9"]; !ok {
+		t.Fatal("active bucket was evicted")
+	}
 }
 
 func TestLoginRateLimiter_Middleware_OverLimitReturns429(t *testing.T) {

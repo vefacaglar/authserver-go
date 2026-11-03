@@ -30,9 +30,10 @@ type SMTPConfig struct {
 }
 
 // SMTPMailer sends mail over SMTP. Port 465 uses implicit TLS; any other
-// port uses STARTTLS when the server offers it. Credentials are only ever
-// sent over TLS (net/smtp refuses PLAIN auth on an unencrypted link to a
-// non-local host).
+// port requires STARTTLS. Messages carry password-reset links, so a server
+// that does not offer STARTTLS (or an attacker stripping it) is a hard
+// error rather than a silent plaintext fallback. Only loopback hosts,
+// i.e. a local relay or a development catcher, may be used without TLS.
 type SMTPMailer struct {
 	cfg SMTPConfig
 	now func() time.Time
@@ -91,9 +92,13 @@ func (m *SMTPMailer) Send(ctx context.Context, msg Message) error {
 		return fmt.Errorf("smtp: handshake: %w", err)
 	}
 	defer c.Close()
-	if ok, _ := c.Extension("STARTTLS"); ok && m.cfg.Port != "465" {
-		if err := c.StartTLS(&tls.Config{ServerName: m.cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
-			return fmt.Errorf("smtp: starttls: %w", err)
+	if m.cfg.Port != "465" {
+		if ok, _ := c.Extension("STARTTLS"); ok {
+			if err := c.StartTLS(&tls.Config{ServerName: m.cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
+				return fmt.Errorf("smtp: starttls: %w", err)
+			}
+		} else if !isLoopbackHost(m.cfg.Host) {
+			return errors.New("smtp: server does not offer STARTTLS; refusing to send over plaintext")
 		}
 	}
 	if m.cfg.Username != "" {
@@ -122,6 +127,17 @@ func (m *SMTPMailer) Send(ctx context.Context, msg Message) error {
 
 // parseAddress returns the bare address of a single RFC 5322 mailbox and
 // rejects anything containing line breaks (header injection).
+// isLoopbackHost reports whether host is "localhost" or a loopback IP.
+// Names other than localhost are not resolved: a DNS answer is exactly
+// what an attacker able to strip STARTTLS could also forge.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
+}
+
 func parseAddress(s string) (string, error) {
 	if strings.ContainsAny(s, "\r\n") {
 		return "", errors.New("address contains a line break")

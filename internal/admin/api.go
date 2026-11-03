@@ -828,7 +828,29 @@ func (a *API) unlockUser(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) deleteUser(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := a.Users.DeleteUser(r.Context(), id); err != nil {
+	ctx := r.Context()
+	// Revoke before deleting: if revocation fails the user still exists
+	// and the admin can retry, instead of leaving live sessions and
+	// refresh tokens behind for an account that is gone.
+	now := a.Clock.Now().UTC()
+	revoked, err := a.Sessions.RevokeByUserIDExcept(ctx, id, uuid.Nil, now)
+	if err != nil {
+		a.writeError(w, http.StatusInternalServerError, "revoking sessions failed", err)
+		return
+	}
+	for _, sid := range revoked {
+		if err := a.RefreshTokens.RevokeBySessionID(ctx, sid, now); err != nil {
+			a.writeError(w, http.StatusInternalServerError, "revoking refresh tokens failed", err)
+			return
+		}
+	}
+	if a.PasswordResets != nil {
+		if err := a.PasswordResets.InvalidateForUser(ctx, id, now); err != nil {
+			a.writeError(w, http.StatusInternalServerError, "invalidating reset tokens failed", err)
+			return
+		}
+	}
+	if err := a.Users.DeleteUser(ctx, id); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return

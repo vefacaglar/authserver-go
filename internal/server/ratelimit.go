@@ -19,12 +19,18 @@ import (
 // bucket is used so a small burst of legitimate retries is OK but
 // sustained hammering is throttled.
 type LoginRateLimiter struct {
-	mu      sync.Mutex
-	buckets map[string]*rate.Limiter
-	rate    rate.Limit
-	burst   int
-	maxIdle time.Duration
-	now     func() time.Time
+	mu        sync.Mutex
+	buckets   map[string]*ipBucket
+	rate      rate.Limit
+	burst     int
+	maxIdle   time.Duration
+	lastSweep time.Time
+	now       func() time.Time
+}
+
+type ipBucket struct {
+	lim      *rate.Limiter
+	lastSeen time.Time
 }
 
 // NewLoginRateLimiter returns a limiter that allows `rps` requests
@@ -38,7 +44,7 @@ func NewLoginRateLimiter(rps int, burst int) *LoginRateLimiter {
 		burst = 5
 	}
 	return &LoginRateLimiter{
-		buckets: make(map[string]*rate.Limiter),
+		buckets: make(map[string]*ipBucket),
 		rate:    rate.Limit(rps),
 		burst:   burst,
 		maxIdle: 10 * time.Minute,
@@ -54,12 +60,31 @@ func (l *LoginRateLimiter) allow(ip string) bool {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	lim, ok := l.buckets[ip]
+	now := l.now()
+	l.sweep(now)
+	b, ok := l.buckets[ip]
 	if !ok {
-		lim = rate.NewLimiter(l.rate, l.burst)
-		l.buckets[ip] = lim
+		b = &ipBucket{lim: rate.NewLimiter(l.rate, l.burst)}
+		l.buckets[ip] = b
 	}
-	return lim.Allow()
+	b.lastSeen = now
+	return b.lim.AllowN(now, 1)
+}
+
+// sweep drops buckets idle for at least maxIdle, at most once per
+// maxIdle, so the cost stays amortized O(1) per request. Dropping is
+// lossless: an idle bucket has long since refilled to its full burst,
+// which is exactly what a fresh bucket starts with. Caller holds l.mu.
+func (l *LoginRateLimiter) sweep(now time.Time) {
+	if now.Sub(l.lastSweep) < l.maxIdle {
+		return
+	}
+	l.lastSweep = now
+	for ip, b := range l.buckets {
+		if now.Sub(b.lastSeen) >= l.maxIdle {
+			delete(l.buckets, ip)
+		}
+	}
 }
 
 // Middleware returns the http middleware that enforces the rate

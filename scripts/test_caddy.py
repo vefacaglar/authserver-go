@@ -24,6 +24,7 @@ class CaddyTest(unittest.TestCase):
         self.assertIn("reverse_proxy authserver-go-web:8080", first)
         self.assertIn("@api path /api/* /admin/api/* /connect/* /.well-known/* /healthz", first)
         self.assertIn("header_up -True-Client-IP", first)
+        self.assertIn('header ?Strict-Transport-Security "max-age=31536000; includeSubDomains"', first)
         second = CADDY.updated_config(first, "authserver-go-api:5175", "authserver-go-web:8080", True)
         self.assertEqual(first, second)
         changed = CADDY.updated_config(second, "127.0.0.1:5176", "127.0.0.1:5177", True)

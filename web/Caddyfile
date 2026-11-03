@@ -6,6 +6,19 @@
 	root * /srv
 	encode gzip
 
+	# Same baseline as the Go server's securityHeadersMiddleware, so the
+	# login/consent pages cannot be framed (clickjacking) or sniffed. HSTS
+	# is set by the TLS-terminating edge proxy, not here.
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		Cross-Origin-Opener-Policy same-origin
+		Cross-Origin-Resource-Policy same-origin
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		-Server
+	}
+
 	# Missing bundles must return 404, never cache the SPA HTML as JavaScript.
 	handle /assets/* {
 		@existing file

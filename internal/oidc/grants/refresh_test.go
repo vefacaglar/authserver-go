@@ -315,6 +315,30 @@ func TestRefresh_Handle_RejectsRevokedToken(t *testing.T) {
 	}
 }
 
+func TestRefresh_Handle_RejectsDeletedUser(t *testing.T) {
+	g, rt, _, client := newTestRefresh(t)
+	raw := mintRefresh(t, rt, g.Clock, id1())
+	if err := g.Users.(*memory.UserStore).DeleteUser(context.Background(), "u-1"); err != nil {
+		t.Fatalf("delete user: %v", err)
+	}
+
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", raw)
+	form.Set("client_id", "client-1")
+
+	rr := httptest.NewRecorder()
+	g.Handle(context.Background(), rr, client, form)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+	var body ErrorResponse
+	_ = json.NewDecoder(rr.Body).Decode(&body)
+	if body.Error != "invalid_grant" {
+		t.Errorf("error = %q, want invalid_grant", body.Error)
+	}
+}
+
 func TestRefresh_Handle_RejectsUnknownToken(t *testing.T) {
 	g, _, _, client := newTestRefresh(t)
 	form := url.Values{}
