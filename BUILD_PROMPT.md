@@ -387,7 +387,10 @@ images are published to GHCR and optionally deployed over SSH to the Docker host
 serving `https://auth.vefacaglar.com`, behind Caddy. Deployment is gated by the
 repository variable `AUTH_DEPLOY_ENABLED=true`.
 
-Store the complete runtime environment in the GitHub Actions secret `AUTH_ENV`.
+Accept separate GitHub Actions secrets `AUTH_DB_DSN`, `AUTH_ADMIN_TOKEN`, and
+optional `AUTH_SMTP_*` settings. Also accept an optional complete runtime file in
+`AUTH_ENV`; nonempty individual secrets override the matching bundled values.
+Reject multiline individual values and require a database DSN and admin token.
 CD creates the server directory and transfers private configuration on each
 deployment, without manual SSH setup of application files. Network and bind-port
 settings come from repository variables. Use the job-scoped, package-read

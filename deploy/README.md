@@ -36,10 +36,17 @@ In repository **Settings → Secrets and variables → Actions**, add these secr
 | `VPS_PASSWORD` | Existing SSH password; no new server-side key installation needed |
 | `VPS_SSH_KEY` | Alternative to the password: private key already authorized for this user; takes precedence when set |
 | `VPS_KNOWN_HOSTS` | Verified SSH host-key entry; use `[host]:port` for a nonstandard port |
-| `AUTH_ENV` | Complete production runtime env file, including database, admin and SMTP settings |
+| `AUTH_DB_DSN` | Production PostgreSQL connection string reachable from the VPS |
+| `AUTH_ADMIN_TOKEN` | Production admin token |
+| `AUTH_SMTP_HOST`, `AUTH_SMTP_PORT`, `AUTH_SMTP_USERNAME`, `AUTH_SMTP_PASSWORD`, `AUTH_SMTP_FROM` | Optional mail settings, each as a separate secret |
+| `AUTH_ENV` | Optional complete runtime env file for additional settings or as an alternative to individual secrets |
 
-Start `AUTH_ENV` with the contents of `authserver.env.example`, replacing the
-sample values with the current production values from Render. For example:
+The simplest setup is to add `AUTH_DB_DSN` and `AUTH_ADMIN_TOKEN` separately,
+using only the value in each secret (no `NAME=` prefix). `AUTH_ENV` is not required
+when those two secrets exist. Optional SMTP secrets work the same way.
+
+For a complete env file instead, start `AUTH_ENV` with the contents of
+`authserver.env.example`, replacing sample values with production values. For example:
 
 ```dotenv
 AUTH_DB_DSN=postgres://USER:PASSWORD@DB_HOST:5432/DB_NAME?sslmode=require
@@ -55,7 +62,9 @@ Include other runtime settings, such as custom paths and token lifetimes, in the
 same secret. Use raw `NAME=value` lines: no `export`, shell substitutions or
 surrounding quotes. Literal spaces, dollar signs and quotes are preserved, not
 executed. `AUTH_DB_DSN` and `AUTH_ADMIN_TOKEN` are required; duplicate or malformed
-entries are rejected without printing their contents. The Compose file still
+entries are rejected without printing their contents. Nonempty individual secrets
+override matching entries in `AUTH_ENV`; unset individual secrets preserve the
+bundled value. Individual secrets must be single-line values. The Compose file still
 fixes the production issuer, listening address and security flags (HTTPS on,
 seeding/anonymous admin/email-body logging off); these cannot be weakened by the
 runtime file.
@@ -71,7 +80,8 @@ Add these **repository Actions variables**:
 Push to `main` or select **Actions → CI and deploy → Run workflow → main**.
 Updating a secret alone does not start a deployment; run the workflow to apply it.
 Every deploy replaces the complete runtime file, so removing a setting from
-`AUTH_ENV` also removes it on the server. Files have owner-only permissions.
+GitHub also removes it on the server, unless it remains set in the optional
+`AUTH_ENV` file. Files have owner-only permissions.
 GitHub is the source of truth; manual server edits would be replaced next time.
 
 No separate registry PAT or server-side `docker login` is needed. The deploy job

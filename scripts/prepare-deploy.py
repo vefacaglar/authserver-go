@@ -8,6 +8,12 @@ import shutil
 import sys
 
 
+INDIVIDUAL_SECRETS = (
+    "AUTH_DB_DSN", "AUTH_ADMIN_TOKEN", "AUTH_SMTP_HOST", "AUTH_SMTP_PORT",
+    "AUTH_SMTP_USERNAME", "AUTH_SMTP_PASSWORD", "AUTH_SMTP_FROM",
+)
+
+
 def prepare(destination: Path) -> None:
     runtime = os.environ.get("AUTH_ENV", "").replace("\r\n", "\n")
     values = {}
@@ -20,9 +26,16 @@ def prepare(destination: Path) -> None:
         if key in values:
             raise ValueError("AUTH_ENV contains a duplicate setting")
         values[key] = value
+    for key in INDIVIDUAL_SECRETS:
+        value = os.environ.get(key, "")
+        if value:
+            if any(character in value for character in ("\r", "\n", "\0")):
+                raise ValueError(f"{key} must be a single-line value")
+            values[key] = value
     for key in ("AUTH_DB_DSN", "AUTH_ADMIN_TOKEN"):
         if not values.get(key, "").strip():
-            raise ValueError(f"AUTH_ENV must include {key}")
+            raise ValueError(f"Set the {key} secret or include it in AUTH_ENV")
+    runtime = "".join(f"{key}={value}\n" for key, value in values.items())
 
     network = os.environ.get("AUTH_DOCKER_NETWORK", "databases_default")
     port = os.environ.get("AUTH_BIND_PORT", "5175")

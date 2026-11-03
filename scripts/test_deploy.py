@@ -31,6 +31,7 @@ class DeployTest(unittest.TestCase):
             "AUTH_SMTP_PASSWORD=spaces and $dollars='quotes'\r\n"
         )
         self.environment = {
+            **dict.fromkeys(PREPARE.INDIVIDUAL_SECRETS, ""),
             "AUTH_ENV": self.runtime,
             "AUTH_IMAGE": NEW_IMAGE,
             "AUTH_DOCKER_NETWORK": "existing-network",
@@ -60,12 +61,36 @@ class DeployTest(unittest.TestCase):
             ("AUTH_DOCKER_NETWORK", "network\nINJECT=value"),
             ("AUTH_BIND_PORT", "65536"),
             ("AUTH_IMAGE", "ghcr.io/vefacaglar/authserver-go:latest"),
+            ("AUTH_ADMIN_TOKEN", "token\nINJECTED=value"),
         ):
             with self.subTest(key=key):
                 with patch.dict(os.environ, self.environment | {key: value}):
                     with self.assertRaises(ValueError):
                         PREPARE.prepare(self.bundle)
                 self.assertFalse(self.bundle.exists())
+
+    def test_individual_secrets_without_auth_env(self):
+        self.environment.update(
+            AUTH_ENV="",
+            AUTH_DB_DSN="postgres://example/new-db?sslmode=require",
+            AUTH_ADMIN_TOKEN="literal-$value-`echo secret`",
+            AUTH_SMTP_PASSWORD="spaces and $dollars='quotes'",
+        )
+        self.prepare()
+        content = (self.bundle / "authserver.env").read_text()
+        self.assertEqual(content, (
+            "AUTH_DB_DSN=postgres://example/new-db?sslmode=require\n"
+            "AUTH_ADMIN_TOKEN=literal-$value-`echo secret`\n"
+            "AUTH_SMTP_PASSWORD=spaces and $dollars='quotes'\n"
+        ))
+
+    def test_individual_secret_overrides_bundle_without_duplicate_setting(self):
+        self.environment["AUTH_DB_DSN"] = "postgres://example/new-db"
+        self.prepare()
+        content = (self.bundle / "authserver.env").read_text()
+        self.assertIn("AUTH_DB_DSN=postgres://example/new-db\n", content)
+        self.assertEqual(content.count("AUTH_DB_DSN="), 1)
+        self.assertIn("AUTH_ADMIN_TOKEN=literal-$value-`echo secret`\n", content)
 
     def run_receiver(self, failure=""):
         bindir = self.root / "bin"

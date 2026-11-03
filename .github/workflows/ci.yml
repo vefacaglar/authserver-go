@@ -133,6 +133,13 @@ jobs:
       - name: Prepare configuration from GitHub secrets
         env:
           AUTH_ENV: ${{ secrets.AUTH_ENV }}
+          AUTH_DB_DSN: ${{ secrets.AUTH_DB_DSN }}
+          AUTH_ADMIN_TOKEN: ${{ secrets.AUTH_ADMIN_TOKEN }}
+          AUTH_SMTP_HOST: ${{ secrets.AUTH_SMTP_HOST }}
+          AUTH_SMTP_PORT: ${{ secrets.AUTH_SMTP_PORT }}
+          AUTH_SMTP_USERNAME: ${{ secrets.AUTH_SMTP_USERNAME }}
+          AUTH_SMTP_PASSWORD: ${{ secrets.AUTH_SMTP_PASSWORD }}
+          AUTH_SMTP_FROM: ${{ secrets.AUTH_SMTP_FROM }}
           AUTH_DOCKER_NETWORK: ${{ vars.AUTH_DOCKER_NETWORK || 'databases_default' }}
           AUTH_BIND_PORT: ${{ vars.AUTH_BIND_PORT || '5175' }}
           REGISTRY_USER: ${{ github.actor }}

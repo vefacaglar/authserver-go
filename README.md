@@ -98,7 +98,8 @@ Optional SSH deployment targets `https://auth.vefacaglar.com`, with a migration
 step, container health checks and image rollback. See
 [deploy/README.md](deploy/README.md) for server setup, GitHub secrets and the
 `AUTH_DEPLOY_ENABLED` switch. CD creates the application directory and sends the
-complete `AUTH_ENV` secret on every deployment; no manual copying, server env
+runtime configuration from individual `AUTH_DB_DSN` / `AUTH_ADMIN_TOKEN` secrets
+and optional `AUTH_ENV` settings on every deployment; no manual copying, server env
 editing or registry login is needed. Existing Docker, SSH access and reverse proxy
 configuration are prerequisites. DNS is not modified by the workflow.
 
