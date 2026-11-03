@@ -8,11 +8,13 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"go-authserver/internal/clock"
 	"go-authserver/internal/domain"
 	"go-authserver/internal/store"
+	"go-authserver/internal/token"
 
 	"github.com/google/uuid"
 )
@@ -29,6 +31,10 @@ type API struct {
 	Roles         store.RoleStore
 	Clock         clock.Clock
 	Logger        *slog.Logger
+
+	// rotateMu serializes signing key rotations; KeyManager.Rotate is not
+	// safe to run concurrently.
+	rotateMu sync.Mutex
 }
 
 // Mount wires the admin API onto the supplied mux. The caller is
@@ -37,6 +43,7 @@ type API struct {
 func (a *API) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clients", a.listClients)
 	mux.HandleFunc("POST /api/clients", a.createClient)
+	mux.HandleFunc("POST /api/clients/generate-jwks", a.generateClientJWKS)
 	mux.HandleFunc("GET /api/clients/{id}", a.getClient)
 	mux.HandleFunc("PUT /api/clients/{id}", a.updateClient)
 	mux.HandleFunc("DELETE /api/clients/{id}", a.deleteClient)
@@ -49,12 +56,14 @@ func (a *API) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/refresh-tokens", a.listRefreshTokens)
 	mux.HandleFunc("POST /api/refresh-tokens/{id}/revoke", a.revokeRefreshToken)
 	mux.HandleFunc("GET /api/keys", a.listSigningKeys)
+	mux.HandleFunc("POST /api/keys/rotate", a.rotateSigningKey)
 	mux.HandleFunc("GET /api/audit", a.listAuditLogs)
 	mux.HandleFunc("GET /api/users", a.listUsers)
 	mux.HandleFunc("POST /api/users", a.createUser)
 	mux.HandleFunc("GET /api/users/{id}", a.getUser)
 	mux.HandleFunc("PUT /api/users/{id}", a.updateUser)
 	mux.HandleFunc("DELETE /api/users/{id}", a.deleteUser)
+	mux.HandleFunc("POST /api/users/{id}/unlock", a.unlockUser)
 	mux.HandleFunc("GET /api/users/{id}/claims", a.getUserClaims)
 	mux.HandleFunc("PUT /api/users/{id}/claims", a.setUserClaims)
 	mux.HandleFunc("GET /api/users/{id}/roles", a.getUserRoles)
@@ -75,6 +84,7 @@ func (a *API) Mount(mux *http.ServeMux) {
 type clientView struct {
 	ClientID                            string            `json:"client_id"`
 	DisplayName                         string            `json:"display_name"`
+	Profile                             string            `json:"profile,omitempty"`
 	RedirectURIs                        []string          `json:"redirect_uris"`
 	PostLogoutRedirectURIs              []string          `json:"post_logout_redirect_uris"`
 	AllowedScopes                       []string          `json:"allowed_scopes"`
@@ -95,6 +105,7 @@ func toClientView(c *domain.Client) clientView {
 	return clientView{
 		ClientID:                            c.ClientID,
 		DisplayName:                         c.DisplayName,
+		Profile:                             string(c.Profile()),
 		RedirectURIs:                        c.RedirectURIs,
 		PostLogoutRedirectURIs:              c.PostLogoutRedirectURIs,
 		AllowedScopes:                       c.AllowedScopes,
@@ -109,6 +120,19 @@ func toClientView(c *domain.Client) clientView {
 		RefreshTokenExpiration:              int(c.RefreshTokenExpiration),
 		Properties:                          c.Properties,
 	}
+}
+
+func (a *API) generateClientJWKS(w http.ResponseWriter, _ *http.Request) {
+	kid, jwksJSON, privPEM, err := token.GenerateClientKeyPair()
+	if err != nil {
+		a.writeError(w, http.StatusInternalServerError, "keygen failed", err)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, map[string]any{
+		"kid":             kid,
+		"jwks_json":       jwksJSON,
+		"private_key_pem": privPEM,
+	})
 }
 
 func (a *API) listClients(w http.ResponseWriter, r *http.Request) {
@@ -130,24 +154,7 @@ func (a *API) createClient(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, http.StatusBadRequest, "invalid json", err)
 		return
 	}
-	if body.ClientID == "" {
-		a.writeError(w, http.StatusBadRequest, "client_id is required", nil)
-		return
-	}
 	method := domain.TokenEndpointAuthMethod(body.TokenEndpointAuthMethod)
-	if method == "" {
-		method = domain.TokenEndpointAuthMethodNone
-	}
-	if !method.Valid() {
-		a.writeError(w, http.StatusBadRequest, "unknown token_endpoint_auth_method", nil)
-		return
-	}
-	if method == domain.TokenEndpointAuthMethodPrivateKeyJWT {
-		if err := validateJWKS(body.JWKSJSON); err != nil {
-			a.writeError(w, http.StatusBadRequest, "jwks_json", err)
-			return
-		}
-	}
 	c := &domain.Client{
 		ClientID:                            body.ClientID,
 		DisplayName:                         body.DisplayName,
@@ -165,8 +172,19 @@ func (a *API) createClient(w http.ResponseWriter, r *http.Request) {
 		RefreshTokenExpiration:              domain.TokenExpiration(body.RefreshTokenExpiration),
 		Properties:                          body.Properties,
 	}
-	if c.AllowRefreshTokens && !containsString(c.AllowedScopes, "offline_access") {
-		c.AllowedScopes = append(c.AllowedScopes, "offline_access")
+	if body.Profile != "" {
+		c.ApplyProfile(domain.ClientProfile(body.Profile))
+	}
+	c.Normalize()
+	if err := c.Validate(); err != nil {
+		a.writeError(w, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	if c.TokenEndpointAuthMethod == domain.TokenEndpointAuthMethodPrivateKeyJWT {
+		if err := validateJWKS(c.JWKSJSON); err != nil {
+			a.writeError(w, http.StatusBadRequest, "jwks_json", err)
+			return
+		}
 	}
 	if err := a.Clients.Store(r.Context(), c); err != nil {
 		a.writeError(w, http.StatusBadRequest, "store failed", err)
@@ -207,20 +225,6 @@ func (a *API) updateClient(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
 		return
 	}
-	method := domain.TokenEndpointAuthMethod(body.TokenEndpointAuthMethod)
-	if method == "" {
-		method = domain.TokenEndpointAuthMethodNone
-	}
-	if !method.Valid() {
-		a.writeError(w, http.StatusBadRequest, "unknown token_endpoint_auth_method", nil)
-		return
-	}
-	if method == domain.TokenEndpointAuthMethodPrivateKeyJWT {
-		if err := validateJWKS(body.JWKSJSON); err != nil {
-			a.writeError(w, http.StatusBadRequest, "jwks_json", err)
-			return
-		}
-	}
 	existing.DisplayName = body.DisplayName
 	existing.RedirectURIs = body.RedirectURIs
 	existing.PostLogoutRedirectURIs = body.PostLogoutRedirectURIs
@@ -228,15 +232,26 @@ func (a *API) updateClient(w http.ResponseWriter, r *http.Request) {
 	existing.RequirePKCE = body.RequirePKCE
 	existing.AllowRefreshTokens = body.AllowRefreshTokens
 	existing.AllowClientCredentials = body.AllowClientCredentials
-	existing.TokenEndpointAuthMethod = method
+	existing.TokenEndpointAuthMethod = domain.TokenEndpointAuthMethod(body.TokenEndpointAuthMethod)
 	existing.JWKSJSON = body.JWKSJSON
 	existing.AccessTokenLifetimeSeconds = body.AccessTokenLifetimeSeconds
 	existing.RefreshTokenLifetimeSeconds = body.RefreshTokenLifetimeSeconds
 	existing.RefreshTokenAbsoluteLifetimeSeconds = body.RefreshTokenAbsoluteLifetimeSeconds
 	existing.RefreshTokenExpiration = domain.TokenExpiration(body.RefreshTokenExpiration)
 	existing.Properties = body.Properties
-	if existing.AllowRefreshTokens && !containsString(existing.AllowedScopes, "offline_access") {
-		existing.AllowedScopes = append(existing.AllowedScopes, "offline_access")
+	if body.Profile != "" {
+		existing.ApplyProfile(domain.ClientProfile(body.Profile))
+	}
+	existing.Normalize()
+	if err := existing.Validate(); err != nil {
+		a.writeError(w, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	if existing.TokenEndpointAuthMethod == domain.TokenEndpointAuthMethodPrivateKeyJWT {
+		if err := validateJWKS(existing.JWKSJSON); err != nil {
+			a.writeError(w, http.StatusBadRequest, "jwks_json", err)
+			return
+		}
 	}
 	if err := a.Clients.Store(r.Context(), existing); err != nil {
 		a.writeError(w, http.StatusBadRequest, "store failed", err)
@@ -530,6 +545,18 @@ func (a *API) listSigningKeys(w http.ResponseWriter, r *http.Request) {
 	a.writeJSON(w, http.StatusOK, map[string]any{"items": items, "total_count": len(items)})
 }
 
+func (a *API) rotateSigningKey(w http.ResponseWriter, r *http.Request) {
+	a.rotateMu.Lock()
+	defer a.rotateMu.Unlock()
+	km := token.NewKeyManager(a.SigningKeys, a.Clock)
+	k, err := km.Rotate(r.Context())
+	if err != nil {
+		a.writeError(w, http.StatusInternalServerError, "rotate failed", err)
+		return
+	}
+	a.writeJSON(w, http.StatusCreated, toKeyView(k))
+}
+
 // --- Audit ---
 
 type auditView struct {
@@ -688,11 +715,17 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, http.StatusBadRequest, "invalid json", err)
 		return
 	}
-	if body.ID == "" || body.Password == "" {
-		a.writeError(w, http.StatusBadRequest, "id and password are required", nil)
+	body.ID = strings.TrimSpace(body.ID)
+	body.Username = strings.TrimSpace(body.Username)
+	body.Email = strings.TrimSpace(body.Email)
+	if body.Username == "" || body.Password == "" {
+		a.writeError(w, http.StatusBadRequest, "username and password are required", nil)
 		return
 	}
-	now := time.Now().UTC()
+	if body.ID == "" {
+		body.ID = uuid.NewString()
+	}
+	now := a.Clock.Now().UTC()
 	user := &domain.User{
 		ID:        body.ID,
 		Username:  body.Username,
@@ -754,9 +787,30 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 	existing.LockoutEnd = body.LockoutEnd
 	existing.LockoutEnabled = body.LockoutEnabled
 	existing.AccessFailedCount = body.AccessFailedCount
-	existing.UpdatedAt = time.Now().UTC()
+	existing.UpdatedAt = a.Clock.Now().UTC()
 	if err := a.Users.UpdateUser(r.Context(), existing); err != nil {
 		a.writeError(w, http.StatusBadRequest, "update failed", err)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, toUserView(existing))
+}
+
+func (a *API) unlockUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	existing, err := a.Users.FindUserByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "not found", err)
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		return
+	}
+	existing.LockoutEnd = nil
+	existing.AccessFailedCount = 0
+	existing.UpdatedAt = a.Clock.Now().UTC()
+	if err := a.Users.UpdateUser(r.Context(), existing); err != nil {
+		a.writeError(w, http.StatusBadRequest, "unlock failed", err)
 		return
 	}
 	a.writeJSON(w, http.StatusOK, toUserView(existing))
@@ -958,9 +1012,14 @@ func (a *API) createRole(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, http.StatusBadRequest, "invalid json", err)
 		return
 	}
-	if body.ID == "" || body.Name == "" {
-		a.writeError(w, http.StatusBadRequest, "id and name are required", nil)
+	body.ID = strings.TrimSpace(body.ID)
+	body.Name = strings.TrimSpace(body.Name)
+	if body.Name == "" {
+		a.writeError(w, http.StatusBadRequest, "name is required", nil)
 		return
+	}
+	if body.ID == "" {
+		body.ID = uuid.NewString()
 	}
 	role := &domain.Role{ID: body.ID, Name: body.Name}
 	if err := a.Roles.CreateRole(r.Context(), role); err != nil {

@@ -1,13 +1,21 @@
 import { useState } from "react";
-import { Badge, DataTable, Pagination, Th, usePagedList, useToast } from "./shared";
+import { Badge, CopyButton, DataTable, ListHeader, Pagination, Th, usePagedList, useToast } from "./shared";
 import { ConfirmDialog, ErrorBanner, Loading, errorMessage } from "../components/ui";
 import { apiPost } from "../lib/api";
 import { formatUTC } from "../lib/format";
 import type { AdminSessionView } from "../lib/types";
 
+function sessionState(s: AdminSessionView): { key: "active" | "expired" | "revoked"; label: string; tone: "emerald" | "zinc" | "red" } {
+  if (s.revoked_at) return { key: "revoked", label: "revoked", tone: "red" };
+  if (new Date(s.expires_at).getTime() <= Date.now()) return { key: "expired", label: "expired", tone: "zinc" };
+  return { key: "active", label: "active", tone: "emerald" };
+}
+
 export default function Sessions() {
   const list = usePagedList<AdminSessionView>("/admin/api/sessions");
   const toast = useToast();
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<"all" | "active" | "expired" | "revoked">("all");
   const [revoking, setRevoking] = useState<AdminSessionView | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -16,7 +24,7 @@ export default function Sessions() {
     setBusy(true);
     try {
       await apiPost(`/admin/api/sessions/${encodeURIComponent(revoking.id)}/revoke`);
-      toast(`session revoked`);
+      toast("session revoked");
       setRevoking(null);
       list.reload();
     } catch (e) {
@@ -26,10 +34,45 @@ export default function Sessions() {
     }
   }
 
+  const visible = list.items.filter((s) => {
+    const st = sessionState(s);
+    if (filter !== "all" && st.key !== filter) return false;
+    const q = search.toLowerCase();
+    return s.id.toLowerCase().includes(q) || s.user_id.toLowerCase().includes(q);
+  });
+
   return (
     <>
-      <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">sessions</h1>
+      <div>
+        <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">sessions</h1>
+        <p className="text-xs text-zinc-500 lowercase mt-0.5">
+          browser single sign-on sessions ({list.total} total)
+        </p>
+      </div>
       <ErrorBanner error={list.error} />
+      <ListHeader
+        search={search}
+        onSearch={setSearch}
+        searchPlaceholder="filter by user_id or session_id…"
+        filters={
+          <div className="flex items-center gap-1">
+            {(["all", "active", "expired", "revoked"] as const).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setFilter(k)}
+                className={`px-2.5 py-1 text-xs border lowercase transition-colors ${
+                  filter === k
+                    ? "bg-zinc-300 text-zinc-950 border-zinc-300 font-bold"
+                    : "bg-[#1a1a1a] text-zinc-400 border-zinc-800 hover:border-zinc-600"
+                }`}
+              >
+                {k}
+              </button>
+            ))}
+          </div>
+        }
+      />
       {list.loading && <Loading text="loading sessions…" />}
       {!list.loading && (
         <>
@@ -41,30 +84,36 @@ export default function Sessions() {
                 <Th>created</Th>
                 <Th>expires</Th>
                 <Th>state</Th>
-                <Th right></Th>
+                <Th right>actions</Th>
               </>
             }
           >
-            {list.items.map((s) => (
-              <tr key={s.id} className="hover:bg-zinc-800/20">
-                <td className="p-4 text-zinc-300 break-all">{s.id}</td>
-                <td className="p-4 text-zinc-200 break-all">{s.user_id}</td>
-                <td className="p-4 text-xs text-zinc-400 whitespace-nowrap">{formatUTC(s.created_at)}</td>
-                <td className="p-4 text-xs text-zinc-400 whitespace-nowrap">{formatUTC(s.expires_at)}</td>
-                <td className="p-4">{s.revoked_at ? <Badge tone="red">revoked</Badge> : <Badge tone="emerald">active</Badge>}</td>
-                <td className="p-4 text-right">
-                  {!s.revoked_at && (
-                    <button type="button" className="admin-btn admin-btn-danger" onClick={() => setRevoking(s)}>
-                      revoke
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-            {list.items.length === 0 && (
+            {visible.map((s) => {
+              const st = sessionState(s);
+              return (
+                <tr key={s.id} className="hover:bg-zinc-800/20">
+                  <td className="p-4 text-zinc-300 text-xs break-all">{s.id}</td>
+                  <td className="p-4 text-zinc-100 text-xs break-all">{s.user_id}</td>
+                  <td className="p-4 text-xs text-zinc-400 whitespace-nowrap">{formatUTC(s.created_at)}</td>
+                  <td className="p-4 text-xs text-zinc-400 whitespace-nowrap">{formatUTC(s.expires_at)}</td>
+                  <td className="p-4">
+                    <Badge tone={st.tone}>{st.label}</Badge>
+                  </td>
+                  <td className="p-4 text-right whitespace-nowrap space-x-2">
+                    <CopyButton value={s.id} label="id" />
+                    {st.key === "active" && (
+                      <button type="button" className="admin-btn admin-btn-danger" onClick={() => setRevoking(s)}>
+                        revoke
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {visible.length === 0 && (
               <tr>
-                <td colSpan={6} className="p-4 text-sm text-zinc-500 lowercase">
-                  no sessions yet.
+                <td colSpan={6} className="p-6 text-sm text-zinc-500 lowercase text-center">
+                  no sessions match.
                 </td>
               </tr>
             )}

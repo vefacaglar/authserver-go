@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -769,5 +771,143 @@ func TestAPI_RoleUpdateAndClaims(t *testing.T) {
 
 	if len(getClaimsRes.Claims) != 2 || getClaimsRes.Claims[0].Value != "read" {
 		t.Errorf("get role claims failed: %+v", getClaimsRes.Claims)
+	}
+}
+
+func TestAPI_GenerateClientJWKSAndProfile(t *testing.T) {
+	srv := newTestAPIServer(t)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/clients/generate-jwks", "application/json", nil)
+	if err != nil {
+		t.Fatalf("generate-jwks: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("generate-jwks status = %d, want 200", resp.StatusCode)
+	}
+	var gen struct {
+		Kid           string `json:"kid"`
+		JWKSJSON      string `json:"jwks_json"`
+		PrivateKeyPEM string `json:"private_key_pem"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&gen)
+	resp.Body.Close()
+	if gen.Kid == "" || gen.JWKSJSON == "" || !strings.Contains(gen.PrivateKeyPEM, "BEGIN PRIVATE KEY") {
+		t.Fatalf("unexpected generated keypair: %+v", gen)
+	}
+
+	// Register an M2M client using the generated JWKS and profile="m2m".
+	body, _ := json.Marshal(clientView{
+		ClientID:    "m2m-worker",
+		DisplayName: "M2M Worker",
+		Profile:     string(domain.ClientProfileM2M),
+		JWKSJSON:    gen.JWKSJSON,
+	})
+	resp, err = http.Post(srv.URL+"/api/clients", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("create m2m: %v", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := readAll(resp.Body)
+		t.Fatalf("create m2m status = %d, want 201; body=%s", resp.StatusCode, b)
+	}
+	var created clientView
+	_ = json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
+	if created.Profile != "m2m" || !created.AllowClientCredentials || created.RequirePKCE {
+		t.Errorf("unexpected m2m client profile state: %+v", created)
+	}
+}
+
+func TestAPI_ConcurrentRotateLeavesOneActiveKey(t *testing.T) {
+	a := newTestAPI(t)
+	mux := http.NewServeMux()
+	a.Mount(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	const rotations = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, rotations)
+	for range rotations {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := http.Post(srv.URL+"/api/keys/rotate", "application/json", nil)
+			if err != nil {
+				errs <- err
+				return
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusCreated {
+				errs <- fmt.Errorf("rotate status = %d, want 201", resp.StatusCode)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+
+	all, err := a.SigningKeys.GetAll(context.Background())
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != rotations {
+		t.Errorf("key count = %d, want %d", len(all), rotations)
+	}
+	active := 0
+	for _, k := range all {
+		if k.IsActive {
+			active++
+		}
+	}
+	if active != 1 {
+		t.Errorf("active key count = %d, want 1", active)
+	}
+}
+
+func TestAPI_RotateSigningKeyAndUnlockUser(t *testing.T) {
+	srv := newTestAPIServer(t)
+	defer srv.Close()
+
+	// Rotate signing key creates an active key and strips private PEM.
+	resp, err := http.Post(srv.URL+"/api/keys/rotate", "application/json", nil)
+	if err != nil {
+		t.Fatalf("rotate key: %v", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("rotate status = %d, want 201", resp.StatusCode)
+	}
+	raw, _ := readAll(resp.Body)
+	resp.Body.Close()
+	if strings.Contains(string(raw), "PRIVATE KEY") {
+		t.Errorf("rotate leaked private key: %s", raw)
+	}
+
+	// Create user without explicit ID (auto-UUID) and unlock them.
+	uBody, _ := json.Marshal(createUserRequest{Username: "alice", Email: "alice@example.com", Password: "Password123!"})
+	resp, err = http.Post(srv.URL+"/api/users", "application/json", bytes.NewReader(uBody))
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create user status = %d, want 201", resp.StatusCode)
+	}
+	var u userView
+	_ = json.NewDecoder(resp.Body).Decode(&u)
+	resp.Body.Close()
+	if u.ID == "" {
+		t.Fatal("expected auto-generated user ID")
+	}
+
+	resp, err = http.Post(srv.URL+"/api/users/"+u.ID+"/unlock", "application/json", nil)
+	if err != nil {
+		t.Fatalf("unlock user: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("unlock status = %d, want 200", resp.StatusCode)
 	}
 }

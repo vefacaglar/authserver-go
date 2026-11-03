@@ -4,13 +4,19 @@
 /*
  * Theme carried over from the former Go-rendered auth pages:
  * #121212 page, #1a1a1a panels, JetBrains Mono everywhere, lowercase
- * labels, square corners, light slate inputs on the dark shell.
+ * labels, square corners. Form fields are inset into the panel: shell
+ * background, hairline border, brighter border on focus.
  */
 @theme {
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
   --color-shell: #121212;
   --color-panel: #1a1a1a;
-  --color-field: #cbd5e1;
+  --color-field-bg: #121212;
+  --color-field-border: rgb(39 39 42 / 0.9);
+  --color-field-border-hover: var(--color-zinc-700);
+  --color-field-border-focus: var(--color-zinc-500);
+  --color-field-text: var(--color-zinc-200);
+  --color-field-placeholder: var(--color-zinc-600);
 }
 
 html {
@@ -27,8 +33,9 @@ body {
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
 input:-webkit-autofill:focus {
-  -webkit-text-fill-color: #09090b !important;
-  -webkit-box-shadow: 0 0 0px 1000px #cbd5e1 inset !important;
+  -webkit-text-fill-color: var(--color-field-text) !important;
+  -webkit-box-shadow: 0 0 0px 1000px var(--color-field-bg) inset !important;
+  caret-color: var(--color-field-text);
   transition: background-color 5000s ease-in-out 0s;
 }
 
@@ -53,20 +60,61 @@ input:-webkit-autofill:focus {
     letter-spacing: 0.025em;
     margin-bottom: 0.5rem;
   }
-  .auth-input {
+  /*
+   * The single form-field style for every <input>, <textarea> and
+   * <select> in the app. Only density varies: .input is the default
+   * (admin forms), .input-lg for the standalone auth cards, .input-sm
+   * for inline controls. Layout (width, height, icon padding) is left
+   * to utilities; colors and borders must not be overridden per page.
+   */
+  .input {
     display: block;
     width: 100%;
-    border: 0;
+    border: 1px solid var(--color-field-border);
     border-radius: 0;
-    padding: 0.75rem 1rem;
-    background: #cbd5e1;
-    color: var(--color-zinc-950);
+    padding: 0.5rem 0.75rem;
+    background: var(--color-field-bg);
+    color: var(--color-field-text);
+    caret-color: var(--color-field-text);
+    color-scheme: dark;
     font-family: inherit;
-    font-size: 0.875rem;
+    font-size: 0.8125rem;
+    line-height: 1.25rem;
     outline: none;
+    transition: border-color 0.15s;
   }
-  .auth-input::placeholder {
+  .input:hover:not(:disabled):not(:focus) {
+    border-color: var(--color-field-border-hover);
+  }
+  .input:focus {
+    border-color: var(--color-field-border-focus);
+  }
+  .input::placeholder {
+    color: var(--color-field-placeholder);
+  }
+  .input:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  /* Locked identifiers (edit mode): still selectable for copying. */
+  .input:read-only:not(:disabled) {
     color: var(--color-zinc-500);
+    cursor: default;
+  }
+  .input[aria-invalid="true"] {
+    border-color: var(--color-red-800);
+  }
+  textarea.input {
+    resize: vertical;
+  }
+  .input-lg {
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem;
+  }
+  .input-sm {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    line-height: 1rem;
   }
   .auth-btn {
     display: flex;
@@ -125,24 +173,6 @@ input:-webkit-autofill:focus {
     text-underline-offset: 8px;
   }
   /* Admin surfaces reuse the same language at a denser scale. */
-  .admin-input {
-    display: block;
-    width: 100%;
-    border: 1px solid rgb(39 39 42 / 0.9);
-    border-radius: 0;
-    padding: 0.45rem 0.6rem;
-    background: #121212;
-    color: var(--color-zinc-200);
-    font-family: inherit;
-    font-size: 0.8125rem;
-    outline: none;
-  }
-  .admin-input:focus {
-    border-color: var(--color-zinc-500);
-  }
-  .admin-input::placeholder {
-    color: var(--color-zinc-600);
-  }
   .admin-btn {
     display: inline-flex;
     align-items: center;

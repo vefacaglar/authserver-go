@@ -45,9 +45,12 @@ export interface Paged<T> {
   total_count: number;
 }
 
+export type ClientProfile = "spa" | "web" | "m2m" | "custom";
+
 export interface ClientView {
   client_id: string;
   display_name: string;
+  profile?: ClientProfile;
   redirect_uris: string[];
   post_logout_redirect_uris: string[];
   allowed_scopes: string[];
@@ -62,6 +65,12 @@ export interface ClientView {
   refresh_token_absolute_lifetime_seconds: number;
   refresh_token_expiration: number;
   properties?: Record<string, string>;
+}
+
+export interface GeneratedJWKSView {
+  kid: string;
+  jwks_json: string;
+  private_key_pem: string;
 }
 
 export interface ScopeView {

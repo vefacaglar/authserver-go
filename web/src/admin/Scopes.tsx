@@ -1,5 +1,17 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Badge, DataTable, ListHeader, Th, useToast } from "./shared";
+import { Plus } from "lucide-react";
+import {
+  Badge,
+  DataTable,
+  KeyValueEditor,
+  ListHeader,
+  Th,
+  ToggleCard,
+  recordToRows,
+  rowsToRecord,
+  useToast,
+  type KeyValueRow,
+} from "./shared";
 import { ConfirmDialog, ErrorBanner, Loading, Modal, errorMessage } from "../components/ui";
 import { apiDelete, apiGet, apiPost, apiPut } from "../lib/api";
 import type { Paged, ScopeView } from "../lib/types";
@@ -12,9 +24,17 @@ interface ScopeFormState {
   description: string;
   required: boolean;
   emphasize: boolean;
+  property_rows: KeyValueRow[];
 }
 
-const emptyForm: ScopeFormState = { name: "", display_name: "", description: "", required: false, emphasize: false };
+const emptyForm: ScopeFormState = {
+  name: "",
+  display_name: "",
+  description: "",
+  required: false,
+  emphasize: false,
+  property_rows: [],
+};
 
 export default function Scopes() {
   const toast = useToast();
@@ -45,12 +65,20 @@ export default function Scopes() {
     if (!editing) return;
     setBusy(true);
     setFormError(null);
+    const payload: ScopeView = {
+      name: editing.form.name.trim(),
+      display_name: editing.form.display_name.trim(),
+      description: editing.form.description.trim(),
+      required: editing.form.required,
+      emphasize: editing.form.emphasize,
+      properties: rowsToRecord(editing.form.property_rows),
+    };
     try {
       if (editing.isEdit) {
-        await apiPut(`/admin/api/scopes/${encodeURIComponent(editing.form.name)}`, editing.form);
+        await apiPut(`/admin/api/scopes/${encodeURIComponent(payload.name)}`, payload);
         toast("scope updated");
       } else {
-        await apiPost("/admin/api/scopes", editing.form);
+        await apiPost("/admin/api/scopes", payload);
         toast("scope registered");
       }
       setEditing(null);
@@ -80,50 +108,69 @@ export default function Scopes() {
   const visible = (items ?? []).filter(
     (s) =>
       s.name.toLowerCase().includes(search.toLowerCase()) ||
-      (s.display_name ?? "").toLowerCase().includes(search.toLowerCase()),
+      (s.display_name ?? "").toLowerCase().includes(search.toLowerCase()) ||
+      (s.description ?? "").toLowerCase().includes(search.toLowerCase()),
   );
 
   return (
     <>
-      <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">scopes</h1>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">scopes</h1>
+          <p className="text-xs text-zinc-500 lowercase mt-0.5">
+            oauth2 permission scopes and openid connect claim bundles
+          </p>
+        </div>
+        <button
+          type="button"
+          className="admin-btn"
+          onClick={() => {
+            setFormError(null);
+            setEditing({ form: { ...emptyForm }, isEdit: false });
+          }}
+        >
+          <Plus className="w-3.5 h-3.5" />
+          new scope
+        </button>
+      </div>
       <ErrorBanner error={error} />
-      <ListHeader
-        search={search}
-        onSearch={setSearch}
-        searchPlaceholder="search scopes…"
-        action={
-          <button type="button" className="admin-btn" onClick={() => setEditing({ form: { ...emptyForm }, isEdit: false })}>
-            + new scope
-          </button>
-        }
-      />
+      <ListHeader search={search} onSearch={setSearch} searchPlaceholder="search scopes…" />
       {!items && !error && <Loading text="loading scopes…" />}
       {items && (
         <DataTable
           head={
             <>
-              <Th>name</Th>
+              <Th>scope key</Th>
               <Th>display name</Th>
               <Th>description</Th>
-              <Th>required</Th>
-              <Th right></Th>
+              <Th>flags</Th>
+              <Th right>actions</Th>
             </>
           }
         >
           {visible.map((s) => (
             <tr key={s.name} className="hover:bg-zinc-800/20">
-              <td className="p-4 text-zinc-100">{s.name}</td>
-              <td className="p-4 text-zinc-300">{s.display_name}</td>
-              <td className="p-4 text-zinc-500 text-xs">{s.description}</td>
-              <td className="p-4">
-                {s.required ? <Badge tone="amber">required</Badge> : <span className="text-zinc-600 text-xs">—</span>}
+              <td className="p-4 text-zinc-100 font-bold">
+                {s.name}
+                {STANDARD_SCOPES.has(s.name) && (
+                  <span className="ml-2 text-[10px] font-normal text-zinc-500 border border-zinc-800 px-1.5 py-0.5">
+                    standard
+                  </span>
+                )}
+              </td>
+              <td className="p-4 text-zinc-300">{s.display_name || "—"}</td>
+              <td className="p-4 text-zinc-500 text-xs">{s.description || "—"}</td>
+              <td className="p-4 space-x-1.5">
+                {s.required && <Badge tone="amber">required</Badge>}
                 {s.emphasize && <Badge tone="zinc">emphasize</Badge>}
+                {!s.required && !s.emphasize && <span className="text-zinc-600 text-xs">—</span>}
               </td>
               <td className="p-4 text-right whitespace-nowrap space-x-2">
                 <button
                   type="button"
                   className="admin-btn admin-btn-ghost"
-                  onClick={() =>
+                  onClick={() => {
+                    setFormError(null);
                     setEditing({
                       isEdit: true,
                       form: {
@@ -132,9 +179,10 @@ export default function Scopes() {
                         description: s.description,
                         required: s.required,
                         emphasize: s.emphasize,
+                        property_rows: recordToRows(s.properties),
                       },
-                    })
-                  }
+                    });
+                  }}
                 >
                   edit
                 </button>
@@ -148,7 +196,7 @@ export default function Scopes() {
           ))}
           {visible.length === 0 && (
             <tr>
-              <td colSpan={5} className="p-4 text-sm text-zinc-500 lowercase">
+              <td colSpan={5} className="p-6 text-sm text-zinc-500 lowercase text-center">
                 no scopes match.
               </td>
             </tr>
@@ -157,57 +205,62 @@ export default function Scopes() {
       )}
 
       {editing && (
-        <Modal title={editing.isEdit ? "edit scope" : "register new scope"} onClose={() => setEditing(null)}>
+        <Modal wide title={editing.isEdit ? `edit scope — ${editing.form.name}` : "register new scope"} onClose={() => setEditing(null)}>
           <ErrorBanner error={formError} />
           <form className="space-y-4" onSubmit={onSubmit}>
-            <div>
-              <label className="auth-label">scope key *</label>
-              <input
-                className="admin-input"
-                placeholder="e.g. read_profile"
-                required
-                readOnly={editing.isEdit}
-                value={editing.form.name}
-                onChange={(e) => setEditing({ ...editing, form: { ...editing.form, name: e.target.value } })}
-              />
-            </div>
-            <div>
-              <label className="auth-label">display name</label>
-              <input
-                className="admin-input"
-                placeholder="e.g. Read Profile Details"
-                value={editing.form.display_name}
-                onChange={(e) => setEditing({ ...editing, form: { ...editing.form, display_name: e.target.value } })}
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="auth-label">scope key (token identifier) *</label>
+                <input
+                  className="input"
+                  placeholder="e.g. billing:read"
+                  required
+                  readOnly={editing.isEdit}
+                  value={editing.form.name}
+                  onChange={(e) => setEditing({ ...editing, form: { ...editing.form, name: e.target.value } })}
+                />
+              </div>
+              <div>
+                <label className="auth-label">display name</label>
+                <input
+                  className="input"
+                  placeholder="e.g. Read Billing Data"
+                  value={editing.form.display_name}
+                  onChange={(e) => setEditing({ ...editing, form: { ...editing.form, display_name: e.target.value } })}
+                />
+              </div>
             </div>
             <div>
               <label className="auth-label">description</label>
               <input
-                className="admin-input"
-                placeholder="Allows the client to read profile metadata"
+                className="input"
+                placeholder="shown on consent screens to explain what access this scope grants"
                 value={editing.form.description}
                 onChange={(e) => setEditing({ ...editing, form: { ...editing.form, description: e.target.value } })}
               />
             </div>
-            <div className="space-y-2">
-              <label className="flex items-center gap-2 text-sm lowercase text-zinc-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={editing.form.required}
-                  onChange={(e) => setEditing({ ...editing, form: { ...editing.form, required: e.target.checked } })}
-                />
-                required (consent screen cannot skip this)
-              </label>
-              <label className="flex items-center gap-2 text-sm lowercase text-zinc-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={editing.form.emphasize}
-                  onChange={(e) => setEditing({ ...editing, form: { ...editing.form, emphasize: e.target.checked } })}
-                />
-                emphasize on the consent screen
-              </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <ToggleCard
+                checked={editing.form.required}
+                onChange={(required) => setEditing({ ...editing, form: { ...editing.form, required } })}
+                title="required scope"
+                description="users cannot uncheck this scope on the consent screen."
+              />
+              <ToggleCard
+                checked={editing.form.emphasize}
+                onChange={(emphasize) => setEditing({ ...editing, form: { ...editing.form, emphasize } })}
+                title="emphasize on consent"
+                description="highlights this scope visually for high-privilege access."
+              />
             </div>
-            <div className="flex justify-end gap-2 pt-2">
+            <div>
+              <label className="auth-label">metadata properties</label>
+              <KeyValueEditor
+                rows={editing.form.property_rows}
+                onChange={(property_rows) => setEditing({ ...editing, form: { ...editing.form, property_rows } })}
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-3 border-t border-zinc-800/60">
               <button type="button" className="admin-btn admin-btn-ghost" onClick={() => setEditing(null)}>
                 cancel
               </button>

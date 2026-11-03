@@ -64,7 +64,7 @@ export default function ResetPassword() {
               autoFocus
               minLength={8}
               maxLength={72}
-              className="auth-input"
+              className="input input-lg"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
@@ -81,7 +81,7 @@ export default function ResetPassword() {
               required
               minLength={8}
               maxLength={72}
-              className="auth-input"
+              className="input input-lg"
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
             />

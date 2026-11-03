@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -55,26 +56,38 @@ func (m *KeyManager) EnsureActiveKey(ctx context.Context) (*domain.SigningKey, e
 // the new key. Intended to be run periodically by an operator via the
 // `rotate-keys` command.
 //
-// The retire-then-create is two store writes rather than one transaction:
-// run it from a single operator process (not concurrently), so the brief
-// window is not a concern in practice. New signing happens with whichever
-// key GetActive returns.
+// The new key is stored before the previous one is retired, so there is
+// never a moment without an active key; otherwise a concurrent token
+// issuance would see no active key and EnsureActiveKey would bootstrap an
+// extra one. During the short overlap GetActive may return either key;
+// both are valid signers and both are published in JWKS.
+//
+// The two writes are not one transaction, so concurrent Rotate calls can
+// leave more than one active key. Callers must serialize rotations (the
+// admin API holds a mutex; the CLI runs as a single operator process).
 func (m *KeyManager) Rotate(ctx context.Context) (*domain.SigningKey, error) {
-	active, err := m.Keys.GetActive(ctx)
+	previous, err := m.Keys.GetActive(ctx)
 	switch {
 	case err == nil:
-		now := m.Clock.Now().UTC()
-		active.IsActive = false
-		active.RetiredAt = &now
-		if err := m.Keys.Store(ctx, active); err != nil {
-			return nil, fmt.Errorf("keys: retire active: %w", err)
-		}
 	case errors.Is(err, store.ErrNotFound):
 		// Nothing to retire; this becomes the first key.
+		previous = nil
 	default:
 		return nil, fmt.Errorf("keys: get active: %w", err)
 	}
-	return m.generateActive(ctx)
+	next, err := m.generateActive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if previous != nil {
+		now := m.Clock.Now().UTC()
+		previous.IsActive = false
+		previous.RetiredAt = &now
+		if err := m.Keys.Store(ctx, previous); err != nil {
+			return nil, fmt.Errorf("keys: retire previous %s: %w", previous.KeyID, err)
+		}
+	}
+	return next, nil
 }
 
 // generateActive creates a fresh RSA keypair, stores it as the active key,
@@ -234,4 +247,42 @@ func PublicKeyFromPEM(s string) (*rsa.PublicKey, error) {
 		return nil, fmt.Errorf("keys: not an RSA public key (got %T)", raw)
 	}
 	return pub, nil
+}
+
+// GenerateClientKeyPair creates an ephemeral RSA-2048 keypair for a client
+// using private_key_jwt. The server never persists the private key; it returns
+// the public JWKS JSON (to store on the Client) and the PKCS#8 private PEM
+// (for the developer to copy/download once).
+func GenerateClientKeyPair() (kid string, jwksJSON string, privateKeyPEM string, err error) {
+	priv, err := GenerateRSAKey(RSAKeyBits)
+	if err != nil {
+		return "", "", "", err
+	}
+	privPEM, err := PrivateKeyToPEM(priv)
+	if err != nil {
+		return "", "", "", err
+	}
+	kid = uuid.NewString()
+	pubKey, err := jwk.FromRaw(&priv.PublicKey)
+	if err != nil {
+		return "", "", "", fmt.Errorf("keys: jwk from raw: %w", err)
+	}
+	if err := pubKey.Set(jwk.KeyIDKey, kid); err != nil {
+		return "", "", "", fmt.Errorf("keys: set kid: %w", err)
+	}
+	if err := pubKey.Set(jwk.AlgorithmKey, string(DefaultAlgorithm)); err != nil {
+		return "", "", "", fmt.Errorf("keys: set alg: %w", err)
+	}
+	if err := pubKey.Set(jwk.KeyUsageKey, jwk.ForSignature); err != nil {
+		return "", "", "", fmt.Errorf("keys: set use: %w", err)
+	}
+	set := jwk.NewSet()
+	if err := set.AddKey(pubKey); err != nil {
+		return "", "", "", fmt.Errorf("keys: add key: %w", err)
+	}
+	rawJWKS, err := json.MarshalIndent(set, "", "  ")
+	if err != nil {
+		return "", "", "", fmt.Errorf("keys: marshal jwks: %w", err)
+	}
+	return kid, string(rawJWKS), privPEM, nil
 }

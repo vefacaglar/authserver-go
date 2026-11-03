@@ -13,6 +13,7 @@
 *.out
 coverage.txt
 coverage.html
+.govulncheck-report.txt
 
 # Common Go build directories
 /bin/

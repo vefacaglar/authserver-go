@@ -81,6 +81,68 @@ func TestKeyManager_EnsureActiveKey_Bootstraps(t *testing.T) {
 	}
 }
 
+func TestKeyManager_Rotate_RetiresPreviousAndKeepsOneActive(t *testing.T) {
+	ctx := context.Background()
+	keys := memory.NewSigningKeyStore()
+	m := NewKeyManager(keys, clock.NewFakeClock(time.Unix(0, 0)))
+	first, err := m.EnsureActiveKey(ctx)
+	if err != nil {
+		t.Fatalf("EnsureActiveKey: %v", err)
+	}
+
+	next, err := m.Rotate(ctx)
+	if err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+	if next.KeyID == first.KeyID {
+		t.Fatal("Rotate returned the previous key")
+	}
+
+	all, err := keys.GetAll(ctx)
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("key count = %d, want 2", len(all))
+	}
+	for _, k := range all {
+		switch k.KeyID {
+		case first.KeyID:
+			if k.IsActive || k.RetiredAt == nil {
+				t.Errorf("previous key not retired: active=%v retired_at=%v", k.IsActive, k.RetiredAt)
+			}
+		case next.KeyID:
+			if !k.IsActive || k.RetiredAt != nil {
+				t.Errorf("new key not active: active=%v retired_at=%v", k.IsActive, k.RetiredAt)
+			}
+		}
+	}
+	active, err := keys.GetActive(ctx)
+	if err != nil {
+		t.Fatalf("GetActive: %v", err)
+	}
+	if active.KeyID != next.KeyID {
+		t.Errorf("active key = %s, want %s", active.KeyID, next.KeyID)
+	}
+}
+
+func TestKeyManager_Rotate_WithoutActiveKeyCreatesOne(t *testing.T) {
+	ctx := context.Background()
+	keys := memory.NewSigningKeyStore()
+	m := NewKeyManager(keys, clock.NewFakeClock(time.Unix(0, 0)))
+	k, err := m.Rotate(ctx)
+	if err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+	all, err := keys.GetAll(ctx)
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 1 || all[0].KeyID != k.KeyID || !all[0].IsActive {
+		t.Errorf("unexpected keys after first rotate: %+v", all)
+	}
+}
+
 func TestKeyManager_PrivateJWK_HasKid(t *testing.T) {
 	ctx := context.Background()
 	m := NewKeyManager(memory.NewSigningKeyStore(), clock.NewFakeClock(time.Unix(0, 0)))

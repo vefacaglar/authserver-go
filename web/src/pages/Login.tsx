@@ -63,7 +63,7 @@ export default function Login() {
             autoComplete="username"
             required
             autoFocus
-            className="auth-input"
+            className="input input-lg"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
           />
@@ -78,7 +78,7 @@ export default function Login() {
             type="password"
             autoComplete="current-password"
             required
-            className="auth-input"
+            className="input input-lg"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />

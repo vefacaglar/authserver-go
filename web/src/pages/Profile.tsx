@@ -106,7 +106,7 @@ export default function Profile() {
                   type="password"
                   autoComplete="current-password"
                   required
-                  className="auth-input"
+                  className="input input-lg"
                   value={current}
                   onChange={(e) => setCurrent(e.target.value)}
                 />
@@ -122,7 +122,7 @@ export default function Profile() {
                   required
                   minLength={8}
                   maxLength={72}
-                  className="auth-input"
+                  className="input input-lg"
                   value={next}
                   onChange={(e) => setNext(e.target.value)}
                 />
@@ -138,7 +138,7 @@ export default function Profile() {
                   required
                   minLength={8}
                   maxLength={72}
-                  className="auth-input"
+                  className="input input-lg"
                   value={confirm}
                   onChange={(e) => setConfirm(e.target.value)}
                 />

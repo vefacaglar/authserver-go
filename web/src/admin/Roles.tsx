@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Plus } from "lucide-react";
 import { ClaimsEditor, DataTable, ListHeader, Th, useToast, type ClaimRow } from "./shared";
 import { ConfirmDialog, ErrorBanner, Loading, Modal, errorMessage } from "../components/ui";
 import { apiDelete, apiGet, apiPost, apiPut } from "../lib/api";
@@ -8,6 +9,15 @@ type View =
   | { kind: "list" }
   | { kind: "form"; role: RoleView | null }
   | { kind: "claims"; role: RoleView; rows: ClaimRow[] };
+
+function slugifyRoleId(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+}
 
 export default function Roles() {
   const toast = useToast();
@@ -20,6 +30,7 @@ export default function Roles() {
   const [busy, setBusy] = useState(false);
   const [formId, setFormId] = useState("");
   const [formName, setFormName] = useState("");
+  const [idTouched, setIdTouched] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -38,6 +49,7 @@ export default function Roles() {
   function openForm(role: RoleView | null) {
     setFormId(role?.id ?? "");
     setFormName(role?.name ?? "");
+    setIdTouched(!!role);
     setFormError(null);
     setView({ kind: "form", role });
   }
@@ -59,10 +71,10 @@ export default function Roles() {
     setFormError(null);
     try {
       if (view.role) {
-        await apiPut(`/admin/api/roles/${encodeURIComponent(view.role.id)}`, { id: view.role.id, name: formName });
+        await apiPut(`/admin/api/roles/${encodeURIComponent(view.role.id)}`, { id: view.role.id, name: formName.trim() });
         toast("role updated");
       } else {
-        await apiPost("/admin/api/roles", { id: formId, name: formName });
+        await apiPost("/admin/api/roles", { id: formId.trim(), name: formName.trim() });
         toast("role created");
       }
       setView({ kind: "list" });
@@ -111,19 +123,39 @@ export default function Roles() {
 
   if (view.kind === "claims") {
     return (
-      <>
-        <div className="flex items-center justify-between">
-          <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">
-            role claims — <span className="text-zinc-100">{view.role.name}</span>
-          </h1>
-          <button type="button" className="admin-btn admin-btn-ghost" onClick={() => setView({ kind: "list" })}>
-            ← back to roles
-          </button>
+      <div className="space-y-6 max-w-2xl">
+        <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
+          <div>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                className="text-xs text-zinc-500 hover:text-zinc-200 lowercase"
+                onClick={() => setView({ kind: "list" })}
+              >
+                ← roles
+              </button>
+              <span className="text-zinc-700">/</span>
+              <h1 className="text-lg font-bold text-zinc-200 tracking-tight lowercase">
+                role claims — <span className="text-zinc-100">{view.role.name}</span>
+              </h1>
+            </div>
+            <p className="text-xs text-zinc-500 lowercase mt-0.5">
+              claims attached to this role are inherited by every user assigned to it.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button type="button" className="admin-btn admin-btn-ghost" onClick={() => setView({ kind: "list" })}>
+              cancel
+            </button>
+            <button type="button" className="admin-btn" disabled={busy} onClick={() => void onSaveClaims()}>
+              {busy ? "saving…" : "save claims"}
+            </button>
+          </div>
         </div>
-        <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 max-w-2xl space-y-5">
+        <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-5">
           <ErrorBanner error={formError} />
           <ClaimsEditor rows={view.rows} onChange={(rows) => setView({ ...view, rows })} />
-          <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800/60">
+          <div className="flex justify-end gap-2 pt-3 border-t border-zinc-800/60">
             <button type="button" className="admin-btn admin-btn-ghost" onClick={() => setView({ kind: "list" })}>
               cancel
             </button>
@@ -132,7 +164,7 @@ export default function Roles() {
             </button>
           </div>
         </section>
-      </>
+      </div>
     );
   }
 
@@ -142,39 +174,41 @@ export default function Roles() {
 
   return (
     <>
-      <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">roles</h1>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">roles</h1>
+          <p className="text-xs text-zinc-500 lowercase mt-0.5">
+            role-based access groups and inherited claim sets
+          </p>
+        </div>
+        <button type="button" className="admin-btn" onClick={() => openForm(null)}>
+          <Plus className="w-3.5 h-3.5" />
+          new role
+        </button>
+      </div>
       <ErrorBanner error={error} />
-      <ListHeader
-        search={search}
-        onSearch={setSearch}
-        searchPlaceholder="search roles…"
-        action={
-          <button type="button" className="admin-btn" onClick={() => openForm(null)}>
-            + new role
-          </button>
-        }
-      />
+      <ListHeader search={search} onSearch={setSearch} searchPlaceholder="search roles…" />
       {!items && !error && <Loading text="loading roles…" />}
       {items && (
         <DataTable
           head={
             <>
+              <Th>role name</Th>
               <Th>role id</Th>
-              <Th>name</Th>
-              <Th right></Th>
+              <Th right>actions</Th>
             </>
           }
         >
           {visible.map((r) => (
             <tr key={r.id} className="hover:bg-zinc-800/20">
-              <td className="p-4 text-zinc-300 break-all">{r.id}</td>
-              <td className="p-4 text-zinc-100">{r.name}</td>
+              <td className="p-4 text-zinc-100 font-bold">{r.name}</td>
+              <td className="p-4 text-zinc-400 text-xs break-all">{r.id}</td>
               <td className="p-4 text-right whitespace-nowrap space-x-2">
-                <button type="button" className="admin-btn admin-btn-ghost" onClick={() => openForm(r)}>
-                  edit
-                </button>
                 <button type="button" className="admin-btn admin-btn-ghost" onClick={() => void openClaims(r)}>
                   claims
+                </button>
+                <button type="button" className="admin-btn admin-btn-ghost" onClick={() => openForm(r)}>
+                  rename
                 </button>
                 <button type="button" className="admin-btn admin-btn-danger" onClick={() => setDeleting(r)}>
                   delete
@@ -184,7 +218,7 @@ export default function Roles() {
           ))}
           {visible.length === 0 && (
             <tr>
-              <td colSpan={3} className="p-4 text-sm text-zinc-500 lowercase">
+              <td colSpan={3} className="p-6 text-sm text-zinc-500 lowercase text-center">
                 no roles match.
               </td>
             </tr>
@@ -197,18 +231,33 @@ export default function Roles() {
           <ErrorBanner error={formError} />
           <form className="space-y-4" onSubmit={onSubmit}>
             <div>
-              <label className="auth-label">role id *</label>
+              <label className="auth-label">role name *</label>
               <input
-                className="admin-input"
+                className="input"
+                placeholder="e.g. admin, editor, billing-manager"
                 required
-                readOnly={!!view.role}
-                value={formId}
-                onChange={(e) => setFormId(e.target.value)}
+                value={formName}
+                onChange={(e) => {
+                  const name = e.target.value;
+                  setFormName(name);
+                  if (!view.role && !idTouched) {
+                    setFormId(slugifyRoleId(name));
+                  }
+                }}
               />
             </div>
             <div>
-              <label className="auth-label">name *</label>
-              <input className="admin-input" required value={formName} onChange={(e) => setFormName(e.target.value)} />
+              <label className="auth-label">role id (auto-filled if empty)</label>
+              <input
+                className="input"
+                readOnly={!!view.role}
+                placeholder="auto-generated from role name"
+                value={formId}
+                onChange={(e) => {
+                  setIdTouched(true);
+                  setFormId(e.target.value);
+                }}
+              />
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" className="admin-btn admin-btn-ghost" onClick={() => setView({ kind: "list" })}>

@@ -51,7 +51,7 @@ export default function Register() {
             autoComplete="username"
             required
             autoFocus
-            className="auth-input"
+            className="input input-lg"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
           />
@@ -66,7 +66,7 @@ export default function Register() {
             type="email"
             autoComplete="email"
             required
-            className="auth-input"
+            className="input input-lg"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
           />
@@ -83,7 +83,7 @@ export default function Register() {
             required
             minLength={8}
             maxLength={72}
-            className="auth-input"
+            className="input input-lg"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
@@ -100,7 +100,7 @@ export default function Register() {
             required
             minLength={8}
             maxLength={72}
-            className="auth-input"
+            className="input input-lg"
             value={confirm}
             onChange={(e) => setConfirm(e.target.value)}
           />

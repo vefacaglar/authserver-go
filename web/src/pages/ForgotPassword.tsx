@@ -44,7 +44,7 @@ export default function ForgotPassword() {
             autoComplete="username"
             required
             autoFocus
-            className="auth-input"
+            className="input input-lg"
             value={identifier}
             onChange={(e) => setIdentifier(e.target.value)}
           />
