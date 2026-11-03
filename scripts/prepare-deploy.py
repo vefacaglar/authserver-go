@@ -50,6 +50,8 @@ def prepare(destination: Path) -> None:
         raise ValueError("Invalid AUTH_BIND_PORT")
     if not web_port.isascii() or not web_port.isdecimal() or not 1 <= int(web_port) <= 65535:
         raise ValueError("Invalid AUTH_WEB_BIND_PORT")
+    if int(port) == int(web_port):
+        raise ValueError("AUTH_BIND_PORT and AUTH_WEB_BIND_PORT must be different")
     if not re.fullmatch(r"ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}", image):
         raise ValueError("Invalid image digest")
     if not re.fullmatch(r"ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}", web_image):

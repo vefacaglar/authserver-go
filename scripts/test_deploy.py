@@ -66,6 +66,8 @@ class DeployTest(unittest.TestCase):
             ("AUTH_IMAGE", "ghcr.io/vefacaglar/authserver-go:latest"),
             ("AUTH_WEB_IMAGE", "ghcr.io/vefacaglar/authserver-go-web:latest"),
             ("AUTH_WEB_BIND_PORT", "65536"),
+            ("AUTH_WEB_BIND_PORT", "5175"),
+            ("AUTH_WEB_BIND_PORT", "05175"),
             ("AUTH_ADMIN_TOKEN", "token\nINJECTED=value"),
         ):
             with self.subTest(key=key):
@@ -104,6 +106,7 @@ class DeployTest(unittest.TestCase):
         (bindir / "flock").write_text("#!/bin/sh\nexit 0\n")
         (bindir / "python3").write_text(
             '#!/bin/sh\nprintf "configure-caddy\\n" >> "$TEST_LOG"\n'
+            'if [ "$FAILURE" = proxy ]; then exit 1; fi\n'
         )
         (bindir / "docker").write_text('''#!/usr/bin/env bash
 set -eu
@@ -115,6 +118,10 @@ if [[ "$1" == login ]]; then
   printf '%s' "$token" > "$DOCKER_CONFIG/config.json"
 fi
 if [[ "$FAILURE" == migration && "$*" == *'run --rm'* ]]; then exit 1; fi
+if [[ "$*" == *'up -d'* && "$AUTH_IMAGE" == "$OLD_IMAGE" ]]; then
+  [[ "$AUTH_WEB_IMAGE" == "$OLD_WEB_IMAGE" ]]
+  cmp authserver.env "$OLD_ENV_FILE"
+fi
 if [[ "$FAILURE" == health && "$*" == *'up -d'* ]]; then
   if [[ "$AUTH_IMAGE" == "$NEW_IMAGE" ]]; then exit 1; fi
   cmp authserver.env "$OLD_ENV_FILE"
@@ -127,6 +134,8 @@ fi
             "TEST_LOG": str(self.root / "calls"),
             "TEST_CONFIG_PATH": str(self.root / "registry-config-path"),
             "NEW_IMAGE": NEW_IMAGE,
+            "OLD_IMAGE": OLD_IMAGE,
+            "OLD_WEB_IMAGE": OLD_WEB_IMAGE,
             "FAILURE": failure,
             "OLD_ENV_FILE": str(self.root / "old-env"),
         }
@@ -188,6 +197,26 @@ fi
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(OLD_IMAGE + "|compose --env-file .env -f .last-good-compose.yml up", calls)
         self.assert_previous_release()
+
+    def test_failed_proxy_configuration_rolls_back_both_images(self):
+        self.setup_previous_release()
+        self.prepare()
+        result, calls = self.run_receiver("proxy")
+        self.assertNotEqual(result.returncode, 0)
+        rollback = OLD_IMAGE + "|compose --env-file .env -f .last-good-compose.yml up"
+        self.assertLess(calls.index("configure-caddy"), calls.index(rollback))
+        self.assertIn("authserver web", calls[calls.index(rollback):])
+        self.assert_previous_release()
+        self.assertFalse((self.root / ".previous-image").exists())
+
+    def test_failed_first_deployment_removes_candidate(self):
+        self.prepare()
+        result, calls = self.run_receiver("proxy")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("compose --env-file .env -f compose.yml down", calls)
+        self.assertFalse((self.root / ".current-image").exists())
+        self.assertFalse((self.root / ".last-good-compose.yml").exists())
+        self.assertFalse((self.root / "authserver.env").exists())
 
     def check_ssh_transfer(self, use_key, fail_upload=False):
         bindir = self.root / "ssh-bin"

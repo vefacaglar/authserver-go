@@ -3,7 +3,7 @@
 auth.vefacaglar.com {
     @api path /api/* /admin/api/* /connect/* /.well-known/* /healthz
     handle @api {
-        reverse_proxy authserver:5175 {
+        reverse_proxy authserver-go-api:5175 {
             # The application trusts proxy headers. Replace user-supplied values.
             header_up -True-Client-IP
             header_up X-Real-IP {remote_host}
@@ -11,7 +11,7 @@ auth.vefacaglar.com {
         }
     }
     handle {
-        reverse_proxy web:8080
+        reverse_proxy authserver-go-web:8080
     }
 }
 # Caddy must share AUTH_DOCKER_NETWORK with authserver and web.

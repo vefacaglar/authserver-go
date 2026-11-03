@@ -18,13 +18,13 @@ SPEC.loader.exec_module(CADDY)
 class CaddyTest(unittest.TestCase):
     def test_preserves_existing_sites_and_is_idempotent(self):
         original = "{\n    email ops@example.test\n}\n\nother.example.test {\n    reverse_proxy other:3000\n}\n"
-        first = CADDY.updated_config(original, "authserver:5175", "web:8080", False)
+        first = CADDY.updated_config(original, "authserver-go-api:5175", "authserver-go-web:8080", False)
         self.assertIn(original.rstrip(), first)
-        self.assertIn("reverse_proxy authserver:5175", first)
-        self.assertIn("reverse_proxy web:8080", first)
+        self.assertIn("reverse_proxy authserver-go-api:5175", first)
+        self.assertIn("reverse_proxy authserver-go-web:8080", first)
         self.assertIn("@api path /api/* /admin/api/* /connect/* /.well-known/* /healthz", first)
         self.assertIn("header_up -True-Client-IP", first)
-        second = CADDY.updated_config(first, "authserver:5175", "web:8080", True)
+        second = CADDY.updated_config(first, "authserver-go-api:5175", "authserver-go-web:8080", True)
         self.assertEqual(first, second)
         changed = CADDY.updated_config(second, "127.0.0.1:5176", "127.0.0.1:5177", True)
         self.assertEqual(changed.count(CADDY.DOMAIN), 1)
@@ -37,7 +37,7 @@ class CaddyTest(unittest.TestCase):
             ("import sites/*", True),
         ):
             with self.assertRaises(RuntimeError):
-                CADDY.updated_config(original, "authserver:5175", "web:8080", routed)
+                CADDY.updated_config(original, "authserver-go-api:5175", "authserver-go-web:8080", routed)
         self.assertTrue(CADDY.routed({"routes": [{"match": [{"host": [CADDY.DOMAIN]}]}]}))
 
     def test_persistent_mount_resolution(self):
@@ -59,10 +59,16 @@ class CaddyTest(unittest.TestCase):
                 original = "other.example.test {\n    respond ok\n}\n"
                 source.write_text(original)
                 inode = source.stat().st_ino
+                reloaded = []
 
                 def command(arguments):
                     if "adapt" in arguments:
                         return "{}"
+                    if "reload" in arguments:
+                        reloaded.append(source.read_text())
+                        if len(reloaded) == 2:
+                            self.assertEqual(source.read_text(), original)
+                            return ""
                     self.assertIn(CADDY.DOMAIN, source.read_text())
                     if failure in arguments:
                         raise RuntimeError("test failure")
@@ -70,9 +76,31 @@ class CaddyTest(unittest.TestCase):
 
                 with patch.object(CADDY, "run", side_effect=command):
                     with self.assertRaisesRegex(RuntimeError, "original Caddyfile was restored"):
-                        CADDY.apply_config(source, ["caddy"], str(source), "authserver:5175", "web:8080", directory)
+                        CADDY.apply_config(source, ["caddy"], str(source), "authserver-go-api:5175", "authserver-go-web:8080", directory)
                 self.assertEqual(source.read_text(), original)
                 self.assertEqual(source.stat().st_ino, inode)
+                self.assertEqual(len(reloaded), 2 if failure == "reload" else 0)
+
+    def test_failed_recovery_reload_retains_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "Caddyfile"
+            original = "other.example.test {\n    respond ok\n}\n"
+            source.write_text(original)
+
+            def command(arguments):
+                if "adapt" in arguments:
+                    return "{}"
+                if "reload" in arguments:
+                    raise RuntimeError("reload failed")
+                return ""
+
+            with patch.object(CADDY, "run", side_effect=command):
+                with self.assertRaisesRegex(RuntimeError, "reloading it failed; backup retained"):
+                    CADDY.apply_config(source, ["caddy"], str(source), "api:5175", "web:8080", directory)
+            self.assertEqual(source.read_text(), original)
+            backups = list(Path(directory).glob(".caddy-backup-*/Caddyfile"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(), original)
 
     def test_detects_container_config_and_connects_shared_network(self):
         calls = []
@@ -94,8 +122,8 @@ class CaddyTest(unittest.TestCase):
         self.assertEqual(source, Path("/srv/caddy/Caddyfile"))
         self.assertEqual(cmd, ["docker", "exec", "abc", "caddy"])
         self.assertEqual(config, "/etc/caddy/Caddyfile")
-        self.assertEqual(upstream, "authserver:5175")
-        self.assertEqual(web_upstream, "web:8080")
+        self.assertEqual(upstream, "authserver-go-api:5175")
+        self.assertEqual(web_upstream, "authserver-go-web:8080")
         self.assertIn(["docker", "network", "connect", "auth-network", "abc"], calls)
 
     def test_multiple_containers_require_explicit_selection(self):
@@ -121,7 +149,7 @@ class CaddyTest(unittest.TestCase):
             source.write_text("other.example.test {\n    respond ok\n}\n")
             inode = source.stat().st_ino
             with patch.object(CADDY, "run", side_effect=["{}", "", ""]) as command:
-                CADDY.apply_config(source, ["caddy"], str(source), "authserver:5175", "web:8080", directory)
+                CADDY.apply_config(source, ["caddy"], str(source), "authserver-go-api:5175", "authserver-go-web:8080", directory)
             self.assertEqual(command.call_args_list[1].args[0][1], "validate")
             self.assertEqual(command.call_args_list[2].args[0][1], "reload")
             self.assertIn(CADDY.DOMAIN, source.read_text())

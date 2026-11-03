@@ -12,7 +12,10 @@ Use Docker Compose 2.30+ (raw environment files).
 dispatches. It checks formatting, builds, vets, runs race-enabled tests and the
 real OIDC client smoke test. It then builds the container and tests the actual
 production Compose configuration against a disposable PostgreSQL database,
-including repeated migrations, disabled demo seeding, discovery, and JWKS.
+including repeated migrations, disabled demo seeding, discovery, and JWKS. It
+also runs the generated Caddy route against both images through one origin,
+checking API routing, SPA deep links, JavaScript/CSS responses, cache headers,
+and missing-asset errors under the production container restrictions.
 
 Successful `main` runs publish `ghcr.io/vefacaglar/authserver-go:<commit-sha>`.
 Deployment uses the immutable image digest. Pull requests never publish or deploy.
@@ -77,6 +80,7 @@ Add these **repository Actions variables**:
 | `AUTH_DEPLOY_ENABLED` | `true` to deploy after successful main-branch CI |
 | `AUTH_DOCKER_NETWORK` | Existing network shared with the reverse proxy; default `databases_default` |
 | `AUTH_BIND_PORT` | Optional loopback port; default `5175` |
+| `AUTH_WEB_BIND_PORT` | Optional web loopback port; default `5176`, must differ from `AUTH_BIND_PORT` |
 | `AUTH_CADDY_CONTAINER` | Optional Caddy container name/ID; automatically detected when exactly one running image contains `caddy` |
 | `AUTH_CADDY_CONFIG_PATH` | Optional configuration path inside the container or on the host; detected from container arguments or defaults to `/etc/caddy/Caddyfile` |
 
@@ -104,8 +108,10 @@ Caddy. CD adds a marked `auth.vefacaglar.com` block to the persistent Caddyfile,
 preserving all other sites, and validates before reloading. The original file is
 restored on validation/reload errors. The deployment user must be able to read and
 write that persistent file. Containerized Caddy is connected to the application
-network if needed and forwards to `authserver:5175`; a host systemd Caddy service
-forwards to `127.0.0.1:AUTH_BIND_PORT`.
+network if needed and forwards to `authserver-go-api:5175` and
+`authserver-go-web:8080`. These application-specific aliases avoid collisions
+with other projects' `web` services on the shared network. A host systemd Caddy
+service uses `127.0.0.1:AUTH_BIND_PORT` and `127.0.0.1:AUTH_WEB_BIND_PORT`.
 
 Automatic detection supports a single conventional Caddy container with a mounted
 Caddyfile, or a running host `caddy` service. Multiple containers need the optional
@@ -144,13 +150,18 @@ replace this cutover check.
 `deploy.sh` serializes deployments, pulls the requested digest, migrates, and
 waits for the JWKS endpoint (which reads persisted signing keys). A failed
 migration restores the previous environment and leaves the running service
-untouched. A failed container health check restores the previous environment,
-healthy image and Compose file if one exists. First deploys
-have no previous image. Public HTTPS checks run after this local health gate;
-DNS/proxy failures fail the workflow but do not trigger an image rollback.
+untouched. A failed container health check or Caddy configuration step restores
+the previous environment, both healthy images and Compose file if one exists.
+On a failed first deployment, the candidate containers are removed. Caddy setup
+runs inside the deployment lock, before recording the release as healthy. If a
+reload fails, its original file is restored and reloaded; a failed recovery keeps
+a private backup and reports its path. Public HTTPS checks run after this local
+health gate; certificate/DNS/reachability failures fail the workflow but do not
+trigger an image rollback.
 
-Successful deploys record `.current-image`, `.previous-image` and
-`.last-good-compose.yml`. To recover from a later application regression without
+Successful deploys record `.current-image`, `.previous-image`,
+`.current-web-image`, `.previous-web-image` and `.last-good-compose.yml`.
+To recover from a later application regression without
 SSH, revert the faulty application change in GitHub and deploy `main` again. For
 configuration regressions, restore the previous `AUTH_ENV` secret or repository
 variables and select **Run workflow**. Schema changes must remain backward

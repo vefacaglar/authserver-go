@@ -53,7 +53,7 @@ jobs:
           from pathlib import Path
           import runpy
           proxy = runpy.run_path('deploy/configure-caddy.py')
-          config = proxy['updated_config']('existing.example.test {\n    respond ok\n}\n', 'authserver:5175', 'web:8080', False)
+          config = proxy['updated_config']('existing.example.test {\n    respond ok\n}\n', 'authserver-go-api:5175', 'authserver-go-web:8080', False)
           (Path(os.environ['RUNNER_TEMP']) / 'authserver-test-Caddyfile').write_text(config)
           PY
           docker run --rm --mount "type=bind,src=$RUNNER_TEMP/authserver-test-Caddyfile,dst=/etc/caddy/Caddyfile,readonly" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
@@ -94,11 +94,6 @@ jobs:
           cache-to: type=gha,mode=max
       - name: Verify PostgreSQL migration and production container
         run: bash scripts/ci-container-smoke.sh authserver:ci authserver-web:ci
-      - name: Verify web container serves the SPA
-        run: |
-          docker run -d --name authserver-web-ci -p 127.0.0.1:8080:8080 authserver-web:ci
-          curl --fail --silent --show-error --retry 12 --retry-delay 2 --retry-all-errors --max-time 10 http://127.0.0.1:8080/login | grep -q '<div id="root">'
-          docker rm -f authserver-web-ci
       - name: Image name
         id: name
         env:

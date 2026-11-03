@@ -22,7 +22,7 @@ services:
       - "127.0.0.1:${AUTH_BIND_PORT:-5175}:5175"
     networks:
       backend:
-        aliases: [authserver]
+        aliases: [authserver-go-api]
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
@@ -51,7 +51,7 @@ services:
       - "127.0.0.1:${AUTH_WEB_BIND_PORT:-5176}:8080"
     networks:
       backend:
-        aliases: [web]
+        aliases: [authserver-go-web]
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777

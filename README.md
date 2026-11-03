@@ -100,11 +100,12 @@ export AUTH_ADMIN_TOKEN=$(head -c 32 /dev/urandom | base64)
 make build && ./authserver migrate && ./authserver serve
 ```
 
-On first boot the server bootstraps an RSA-2048 signing key, seeds the
-standard OIDC scopes (`openid`, `profile`, `email`, `offline_access`), a
-public demo client (`demo-public`), a confidential demo client
-(`demo-confidential`, fresh keypair each restart), and a demo user
-(`demo` / `demo`).
+On first boot the server bootstraps an RSA-2048 signing key. With `AUTH_SEED=true`,
+an empty database also receives the standard OIDC scopes (`openid`, `profile`,
+`email`, `offline_access`), two demo clients (`demo-public`, `demo-confidential`),
+and a demo user (`demo` / `demo`). If any user, client, scope, or role already
+exists, the entire demo seed is skipped. Restarts preserve customized records
+and client keys, and do not recreate deleted demo users.
 
 ### CI/CD and VPS deployment
 

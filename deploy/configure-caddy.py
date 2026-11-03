@@ -109,7 +109,7 @@ def target(settings, network, port, web_port):
         networks = json.loads(run(["docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", container]))
         if network not in networks:
             run(["docker", "network", "connect", network, container])
-        return source, ["docker", "exec", container, "caddy"], config, "authserver:5175", "web:8080"
+        return source, ["docker", "exec", container, "caddy"], config, "authserver-go-api:5175", "authserver-go-web:8080"
     if requested:
         raise RuntimeError("The configured Caddy container is not running")
     binary = shutil.which("caddy")
@@ -130,10 +130,12 @@ def apply_config(source, command, config, upstream, web_upstream, backup_directo
         backup = directory / "Caddyfile"
         backup.write_text(original)
         backup.chmod(0o600)
+        reload_attempted = False
         try:
             # Preserve the inode: Caddy may have the file itself bind-mounted.
             source.write_text(replacement)
             run(command + ["validate", "--config", config, "--adapter", "caddyfile"])
+            reload_attempted = True
             run(command + ["reload", "--config", config, "--adapter", "caddyfile", "--force"])
         except (RuntimeError, OSError):
             try:
@@ -141,6 +143,16 @@ def apply_config(source, command, config, upstream, web_upstream, backup_directo
             except OSError:
                 keep_backup = True
                 raise RuntimeError(f"Could not restore Caddyfile; original retained at {backup}") from None
+            if reload_attempted:
+                # A reload can apply the candidate before its client reports a
+                # failure. Restore the active configuration as well as the file.
+                try:
+                    run(command + ["reload", "--config", config, "--adapter", "caddyfile", "--force"])
+                except (RuntimeError, OSError):
+                    keep_backup = True
+                    raise RuntimeError(
+                        f"Original Caddyfile restored, but reloading it failed; backup retained at {backup}"
+                    ) from None
             raise RuntimeError("Caddy validation/reload failed; the original Caddyfile was restored") from None
     finally:
         if not keep_backup:
