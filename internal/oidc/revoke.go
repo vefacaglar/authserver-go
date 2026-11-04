@@ -68,7 +68,7 @@ func (h *RevokeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		cae := asClientAuthError(err)
 		if h.Logger != nil && cae.Cause != nil {
-			h.Logger.Warn("revoke: client auth failed", "err", cae.Cause)
+			h.Logger.WarnContext(r.Context(), "revoke: client auth failed", "err", cae.Cause)
 		}
 		writeClientAuthError(w, cae)
 		return

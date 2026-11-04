@@ -119,7 +119,7 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 6. Session resolve.
 	sess, err := h.resolveSession(r)
 	if err != nil && !errors.Is(err, session.ErrNoSession) {
-		h.Logger.Warn("session resolve failed, clearing cookie", "err", err)
+		h.Logger.WarnContext(r.Context(), "session resolve failed, clearing cookie", "err", err)
 		h.Cookies.ClearCookie(w)
 		sess = nil
 	}
@@ -159,7 +159,7 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 8. User resolve for ID token claims.
 	info, err := h.Users.FindByID(r.Context(), sess.UserID)
 	if err != nil {
-		h.Logger.Error("user lookup failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "user lookup failed", "err", err)
 		redirectErr(ErrServerError, "user lookup failed")
 		return
 	}
@@ -167,7 +167,7 @@ func (h *AuthorizeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 9. Mint auth code.
 	code, err := h.mintCode(r.Context(), client, sess, info, redirectURI, scope, nonce, codeChallenge, codeChallengeMethod)
 	if err != nil {
-		h.Logger.Error("auth code mint failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "auth code mint failed", "err", err)
 		redirectErr(ErrServerError, "could not mint code")
 		return
 	}

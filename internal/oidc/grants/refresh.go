@@ -108,7 +108,7 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client
 	// chain is compromised and must be revoked.
 	won, err := g.RefreshTokens.MarkConsumed(ctx, existing.ID, now)
 	if err != nil {
-		g.writeError(w, http.StatusInternalServerError, "server_error", "could not record refresh token consumption")
+		writeServerError(ctx, g.Logger, w, "could not record refresh token consumption", err)
 		return
 	}
 	if !won {
@@ -126,7 +126,7 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client
 			g.writeError(w, http.StatusBadRequest, "invalid_grant", "user no longer exists")
 			return
 		}
-		g.writeError(w, http.StatusInternalServerError, "server_error", "user lookup failed")
+		writeServerError(ctx, g.Logger, w, "user lookup failed", err)
 		return
 	}
 
@@ -151,7 +151,7 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client
 	// server because every refresh would push auth_time forward.
 	authTime, err := g.chainRootCreatedAt(ctx, existing)
 	if err != nil {
-		g.writeError(w, http.StatusInternalServerError, "server_error", "auth_time lookup failed")
+		writeServerError(ctx, g.Logger, w, "auth_time lookup failed", err)
 		return
 	}
 	access, err := g.Issuer.IssueAccessToken(ctx, token.AccessTokenClaims{
@@ -162,7 +162,7 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client
 		ExpiresIn: client.AccessTokenLifetime(),
 	})
 	if err != nil {
-		g.writeError(w, http.StatusInternalServerError, "server_error", "access token issuance failed")
+		writeServerError(ctx, g.Logger, w, "access token issuance failed", err)
 		return
 	}
 	atHash := token.HashAccessToken(access)
@@ -183,7 +183,7 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client
 			ExpiresIn: g.Cfg.IDTokenLifetime,
 		})
 		if err != nil {
-			g.writeError(w, http.StatusInternalServerError, "server_error", "id token issuance failed")
+			writeServerError(ctx, g.Logger, w, "id token issuance failed", err)
 			return
 		}
 		idToken = id
@@ -195,7 +195,7 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client
 	if client.AllowRefreshTokens && slices.Contains(granted, "offline_access") {
 		newRaw, newHash, err := token.NewOpaqueToken()
 		if err != nil {
-			g.writeError(w, http.StatusInternalServerError, "server_error", "refresh token mint failed")
+			writeServerError(ctx, g.Logger, w, "refresh token mint failed", err)
 			return
 		}
 		parent := existing.ID
@@ -229,7 +229,7 @@ func (g *RefreshGrant) Handle(ctx context.Context, w http.ResponseWriter, client
 			CreatedAt:         now,
 		}
 		if err := g.RefreshTokens.Store(ctx, rt); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "server_error", "refresh token store failed")
+			writeServerError(ctx, g.Logger, w, "refresh token store failed", err)
 			return
 		}
 		newRefresh = newRaw
@@ -253,7 +253,7 @@ func (g *RefreshGrant) handleReuse(ctx context.Context, w http.ResponseWriter, o
 	if old.SessionID != nil {
 		if err := g.RefreshTokens.RevokeBySessionID(ctx, *old.SessionID, now); err != nil {
 			if g.Logger != nil {
-				g.Logger.Warn("refresh chain revoke by session failed", "err", err)
+				g.Logger.WarnContext(ctx, "refresh chain revoke by session failed", "err", err)
 			}
 		}
 	} else {
@@ -282,7 +282,7 @@ func (g *RefreshGrant) handleReuse(ctx context.Context, w http.ResponseWriter, o
 	}
 
 	if g.Logger != nil {
-		g.Logger.Warn("refresh token reuse detected", "client_id", old.ClientID, "user_id", old.UserID)
+		g.Logger.WarnContext(ctx, "refresh token reuse detected")
 	}
 
 	g.writeError(w, http.StatusBadRequest, "invalid_grant", "refresh token reuse detected")

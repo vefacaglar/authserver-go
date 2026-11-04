@@ -12,6 +12,7 @@ services:
       AUTH_ISSUER: https://auth.vefacaglar.com
       AUTH_PUBLIC_URL: https://auth.vefacaglar.com
       AUTH_LISTEN_ADDR: :5175
+      AUTH_LOG_ENVIRONMENT: production
       AUTH_REQUIRE_HTTPS: "true"
       AUTH_DB_DRIVER: postgres
       AUTH_AUTO_MIGRATE: "false"

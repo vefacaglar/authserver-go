@@ -139,7 +139,7 @@ func (h *LogoutHandler) handleConfirm(w http.ResponseWriter, r *http.Request) {
 		if ok, _ := h.validatePostLogoutURI(r.Context(), clientID, target); ok {
 			allowed = target
 		} else if h.Logger != nil {
-			h.Logger.Warn("post_logout_redirect_uri not allowed", "client_id", clientID, "target", target)
+			h.Logger.WarnContext(r.Context(), "post_logout_redirect_uri not allowed")
 		}
 	}
 	http.Redirect(w, r, appendState(allowed, state), http.StatusFound)
@@ -162,7 +162,7 @@ func (h *LogoutHandler) terminateSession(w http.ResponseWriter, r *http.Request)
 		// No cookie: nothing to revoke, still clear it.
 	default:
 		if h.Logger != nil {
-			h.Logger.Warn("session decode failed on logout", "err", err)
+			h.Logger.WarnContext(r.Context(), "session decode failed on logout", "err", err)
 		}
 	}
 	h.Cookies.ClearCookie(w)

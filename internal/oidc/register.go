@@ -98,7 +98,7 @@ func (h *RegisterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.respondWithError(w, http.StatusConflict, RegisterErrDuplicateUser)
 			return
 		}
-		h.Logger.Error("user store error during registration", "err", err)
+		h.Logger.ErrorContext(r.Context(), "user store error during registration", "err", err)
 		h.respondWithError(w, http.StatusInternalServerError, RegisterErrServerError)
 		return
 	}

@@ -120,7 +120,7 @@ func (h *ProfileHandler) getProfile(w http.ResponseWriter, r *http.Request, sess
 	ctx := r.Context()
 	user, err := h.Users.FindUserByID(ctx, sess.UserID)
 	if err != nil {
-		h.Logger.Error("profile: user lookup failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "profile: user lookup failed", "err", err)
 		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
@@ -132,7 +132,7 @@ func (h *ProfileHandler) getProfile(w http.ResponseWriter, r *http.Request, sess
 	}
 	active, err := h.Sessions.ListByUserID(ctx, sess.UserID, h.Clock.Now())
 	if err != nil {
-		h.Logger.Warn("profile: session list failed", "err", err)
+		h.Logger.WarnContext(r.Context(), "profile: session list failed", "err", err)
 	}
 	for _, s := range active {
 		if s.ID != sess.ID {
@@ -173,7 +173,7 @@ func (h *ProfileHandler) revokeSession(w http.ResponseWriter, r *http.Request, s
 			writeJSONError(w, http.StatusNotFound, "not_found", "session not found")
 			return
 		}
-		h.Logger.Error("profile: session lookup failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "profile: session lookup failed", "err", err)
 		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
@@ -191,12 +191,12 @@ func (h *ProfileHandler) revokeSession(w http.ResponseWriter, r *http.Request, s
 
 	now := h.Clock.Now().UTC()
 	if err := h.Sessions.Revoke(ctx, target.ID, now); err != nil && !errors.Is(err, store.ErrNotFound) {
-		h.Logger.Error("profile: session revoke failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "profile: session revoke failed", "err", err)
 		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
 	if err := h.RefreshTokens.RevokeBySessionID(ctx, target.ID, now); err != nil {
-		h.Logger.Error("profile: refresh token revoke failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "profile: refresh token revoke failed", "err", err)
 		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
@@ -229,7 +229,7 @@ func (h *ProfileHandler) audit(r *http.Request, userID, action, targetType, targ
 		Metadata:    metadata,
 	})
 	if err != nil {
-		h.Logger.Warn("profile audit write failed", "action", action, "err", err)
+		h.Logger.WarnContext(r.Context(), "profile audit write failed", "action", action, "err", err)
 	}
 }
 
@@ -276,7 +276,7 @@ func (h *ProfileHandler) revokeOthers(w http.ResponseWriter, r *http.Request, se
 	}
 	n, err := h.revokeOtherSessions(r, sess)
 	if err != nil {
-		h.Logger.Error("profile: revoke other sessions failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "profile: revoke other sessions failed", "err", err)
 		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
@@ -341,7 +341,7 @@ func (h *ProfileHandler) changePassword(w http.ResponseWriter, r *http.Request, 
 	ctx := r.Context()
 	user, err := h.Users.FindUserByID(ctx, sess.UserID)
 	if err != nil {
-		h.Logger.Error("profile: user lookup failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "profile: user lookup failed", "err", err)
 		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
@@ -353,7 +353,7 @@ func (h *ProfileHandler) changePassword(w http.ResponseWriter, r *http.Request, 
 	if h.Tracker != nil {
 		locked, err := h.Tracker.IsLockedOut(ctx, key)
 		if err != nil {
-			h.Logger.Error("profile: tracker lookup failed", "err", err)
+			h.Logger.ErrorContext(r.Context(), "profile: tracker lookup failed", "err", err)
 		}
 		if locked {
 			h.respondWithError(w, http.StatusTooManyRequests, profileErrLocked)
@@ -362,7 +362,7 @@ func (h *ProfileHandler) changePassword(w http.ResponseWriter, r *http.Request, 
 	}
 	info, err := h.Users.ValidateCredentials(ctx, user.Username, current)
 	if err != nil {
-		h.Logger.Error("profile: credential check failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "profile: credential check failed", "err", err)
 		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
@@ -375,7 +375,7 @@ func (h *ProfileHandler) changePassword(w http.ResponseWriter, r *http.Request, 
 	}
 	if h.Tracker != nil {
 		if err := h.Tracker.Reset(ctx, key); err != nil {
-			h.Logger.Warn("profile: tracker reset failed", "err", err)
+			h.Logger.WarnContext(r.Context(), "profile: tracker reset failed", "err", err)
 		}
 	}
 
@@ -392,7 +392,7 @@ func (h *ProfileHandler) changePassword(w http.ResponseWriter, r *http.Request, 
 	}
 
 	if err := h.Users.SetPassword(ctx, user.ID, next); err != nil {
-		h.Logger.Error("profile: set password failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "profile: set password failed", "err", err)
 		h.respondWithError(w, http.StatusInternalServerError, profileErrServer)
 		return
 	}
@@ -401,11 +401,11 @@ func (h *ProfileHandler) changePassword(w http.ResponseWriter, r *http.Request, 
 	user.SecurityStamp = uuid.NewString()
 	user.UpdatedAt = h.Clock.Now().UTC()
 	if err := h.Users.UpdateUser(ctx, user); err != nil {
-		h.Logger.Error("profile: security stamp rotation failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "profile: security stamp rotation failed", "err", err)
 	}
 	n, err := h.revokeOtherSessions(r, sess)
 	if err != nil {
-		h.Logger.Error("profile: revoking other sessions after password change failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "profile: revoking other sessions after password change failed", "err", err)
 	}
 	h.audit(r, user.ID, domain.AuditPasswordChanged, "User", user.ID, `{"sessions_revoked":`+strconv.Itoa(n)+`}`)
 	writeJSON(w, http.StatusOK, map[string]any{"status": profileStatusPasswordSet})

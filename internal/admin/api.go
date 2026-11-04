@@ -128,10 +128,10 @@ func toClientView(c *domain.Client) clientView {
 	}
 }
 
-func (a *API) generateClientJWKS(w http.ResponseWriter, _ *http.Request) {
+func (a *API) generateClientJWKS(w http.ResponseWriter, r *http.Request) {
 	kid, jwksJSON, privPEM, err := token.GenerateClientKeyPair()
 	if err != nil {
-		a.writeError(w, http.StatusInternalServerError, "keygen failed", err)
+		a.writeServerError(r, w, "keygen failed", err)
 		return
 	}
 	a.writeJSON(w, http.StatusOK, map[string]any{
@@ -144,7 +144,7 @@ func (a *API) generateClientJWKS(w http.ResponseWriter, _ *http.Request) {
 func (a *API) listClients(w http.ResponseWriter, r *http.Request) {
 	res, err := a.Clients.GetPaged(r.Context(), parsePage(r))
 	if err != nil {
-		a.writeError(w, http.StatusInternalServerError, "list failed", err)
+		a.writeServerError(r, w, "list failed", err)
 		return
 	}
 	items := make([]clientView, 0, len(res.Items))
@@ -207,7 +207,7 @@ func (a *API) getClient(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		a.writeServerError(r, w, "lookup failed", err)
 		return
 	}
 	v := toClientView(c)
@@ -228,7 +228,7 @@ func (a *API) updateClient(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		a.writeServerError(r, w, "lookup failed", err)
 		return
 	}
 	existing.DisplayName = body.DisplayName
@@ -274,7 +274,7 @@ func (a *API) deleteClient(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "delete failed", err)
+		a.writeServerError(r, w, "delete failed", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -305,7 +305,7 @@ func toScopeView(s *domain.Scope) scopeView {
 func (a *API) listScopes(w http.ResponseWriter, r *http.Request) {
 	all, err := a.Scopes.GetAll(r.Context())
 	if err != nil {
-		a.writeError(w, http.StatusInternalServerError, "list failed", err)
+		a.writeServerError(r, w, "list failed", err)
 		return
 	}
 	items := make([]scopeView, 0, len(all))
@@ -353,7 +353,7 @@ func (a *API) updateScope(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		a.writeServerError(r, w, "lookup failed", err)
 		return
 	}
 	existing.DisplayName = body.DisplayName
@@ -375,7 +375,7 @@ func (a *API) deleteScope(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "delete failed", err)
+		a.writeServerError(r, w, "delete failed", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -404,7 +404,7 @@ func toSessionView(s *domain.Session) sessionView {
 func (a *API) listSessions(w http.ResponseWriter, r *http.Request) {
 	res, err := a.Sessions.GetPaged(r.Context(), parsePage(r))
 	if err != nil {
-		a.writeError(w, http.StatusInternalServerError, "list failed", err)
+		a.writeServerError(r, w, "list failed", err)
 		return
 	}
 	items := make([]sessionView, 0, len(res.Items))
@@ -427,7 +427,7 @@ func (a *API) revokeSession(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "revoke failed", err)
+		a.writeServerError(r, w, "revoke failed", err)
 		return
 	}
 	// Also revoke the refresh-token chain for this session so a
@@ -435,7 +435,7 @@ func (a *API) revokeSession(w http.ResponseWriter, r *http.Request) {
 	// session revocation.
 	if err := a.RefreshTokens.RevokeBySessionID(r.Context(), id, now); err != nil {
 		if a.Logger != nil {
-			a.Logger.Warn("session revoke: chain revoke failed", "err", err)
+			a.Logger.WarnContext(r.Context(), "session revoke: chain revoke failed", "err", err)
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -483,7 +483,7 @@ func toRefreshTokenView(t *domain.RefreshToken) refreshTokenView {
 func (a *API) listRefreshTokens(w http.ResponseWriter, r *http.Request) {
 	res, err := a.RefreshTokens.GetPaged(r.Context(), parsePage(r))
 	if err != nil {
-		a.writeError(w, http.StatusInternalServerError, "list failed", err)
+		a.writeServerError(r, w, "list failed", err)
 		return
 	}
 	items := make([]refreshTokenView, 0, len(res.Items))
@@ -507,7 +507,7 @@ func (a *API) revokeRefreshToken(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "revoke failed", err)
+		a.writeServerError(r, w, "revoke failed", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -541,7 +541,7 @@ func toKeyView(k *domain.SigningKey) keyView {
 func (a *API) listSigningKeys(w http.ResponseWriter, r *http.Request) {
 	all, err := a.SigningKeys.GetAll(r.Context())
 	if err != nil {
-		a.writeError(w, http.StatusInternalServerError, "list failed", err)
+		a.writeServerError(r, w, "list failed", err)
 		return
 	}
 	items := make([]keyView, 0, len(all))
@@ -557,7 +557,7 @@ func (a *API) rotateSigningKey(w http.ResponseWriter, r *http.Request) {
 	km := token.NewKeyManager(a.SigningKeys, a.Clock)
 	k, err := km.Rotate(r.Context())
 	if err != nil {
-		a.writeError(w, http.StatusInternalServerError, "rotate failed", err)
+		a.writeServerError(r, w, "rotate failed", err)
 		return
 	}
 	a.writeJSON(w, http.StatusCreated, toKeyView(k))
@@ -594,7 +594,7 @@ func toAuditView(l *domain.AuditLog) auditView {
 func (a *API) listAuditLogs(w http.ResponseWriter, r *http.Request) {
 	res, err := a.AuditLogs.GetPaged(r.Context(), parsePage(r))
 	if err != nil {
-		a.writeError(w, http.StatusInternalServerError, "list failed", err)
+		a.writeServerError(r, w, "list failed", err)
 		return
 	}
 	items := make([]auditView, 0, len(res.Items))
@@ -618,10 +618,19 @@ func (a *API) writeError(w http.ResponseWriter, status int, msg string, err erro
 	if err != nil {
 		body["detail"] = err.Error()
 	}
-	if a.Logger != nil && status >= 500 {
-		a.Logger.Error("admin api error", "status", status, "msg", msg, "err", err)
-	}
 	a.writeJSON(w, status, body)
+}
+
+func (a *API) writeServerError(r *http.Request, w http.ResponseWriter, msg string, err error) {
+	if a.Logger != nil {
+		_, route, _ := strings.Cut(r.Pattern, " ")
+		if route != "" {
+			route = "/admin" + route
+		}
+		a.Logger.ErrorContext(r.Context(), msg, "event", "admin_error",
+			"status", http.StatusInternalServerError, "route", route, "err", err)
+	}
+	a.writeError(w, http.StatusInternalServerError, msg, err)
 }
 
 func parsePage(r *http.Request) domain.PagedRequest {
@@ -698,7 +707,7 @@ func toUserView(u *domain.User) userView {
 func (a *API) listUsers(w http.ResponseWriter, r *http.Request) {
 	res, err := a.Users.GetPagedUsers(r.Context(), parsePage(r))
 	if err != nil {
-		a.writeError(w, http.StatusInternalServerError, "list failed", err)
+		a.writeServerError(r, w, "list failed", err)
 		return
 	}
 	items := make([]userView, len(res.Items))
@@ -758,7 +767,7 @@ func (a *API) getUser(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		a.writeServerError(r, w, "lookup failed", err)
 		return
 	}
 	a.writeJSON(w, http.StatusOK, toUserView(user))
@@ -787,7 +796,7 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		a.writeServerError(r, w, "lookup failed", err)
 		return
 	}
 	existing.Username = body.Username
@@ -813,7 +822,7 @@ func (a *API) unlockUser(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		a.writeServerError(r, w, "lookup failed", err)
 		return
 	}
 	existing.LockoutEnd = nil
@@ -835,18 +844,18 @@ func (a *API) deleteUser(w http.ResponseWriter, r *http.Request) {
 	now := a.Clock.Now().UTC()
 	revoked, err := a.Sessions.RevokeByUserIDExcept(ctx, id, uuid.Nil, now)
 	if err != nil {
-		a.writeError(w, http.StatusInternalServerError, "revoking sessions failed", err)
+		a.writeServerError(r, w, "revoking sessions failed", err)
 		return
 	}
 	for _, sid := range revoked {
 		if err := a.RefreshTokens.RevokeBySessionID(ctx, sid, now); err != nil {
-			a.writeError(w, http.StatusInternalServerError, "revoking refresh tokens failed", err)
+			a.writeServerError(r, w, "revoking refresh tokens failed", err)
 			return
 		}
 	}
 	if a.PasswordResets != nil {
 		if err := a.PasswordResets.InvalidateForUser(ctx, id, now); err != nil {
-			a.writeError(w, http.StatusInternalServerError, "invalidating reset tokens failed", err)
+			a.writeServerError(r, w, "invalidating reset tokens failed", err)
 			return
 		}
 	}
@@ -855,7 +864,7 @@ func (a *API) deleteUser(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "delete failed", err)
+		a.writeServerError(r, w, "delete failed", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -869,7 +878,7 @@ func (a *API) getUserClaims(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		a.writeServerError(r, w, "lookup failed", err)
 		return
 	}
 	a.writeJSON(w, http.StatusOK, map[string]any{"claims": claims})
@@ -891,7 +900,7 @@ func (a *API) setUserClaims(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "update failed", err)
+		a.writeServerError(r, w, "update failed", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -905,7 +914,7 @@ func (a *API) getUserRoles(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		a.writeServerError(r, w, "lookup failed", err)
 		return
 	}
 	a.writeJSON(w, http.StatusOK, map[string]any{"roles": roles})
@@ -928,7 +937,7 @@ func (a *API) setUserRoles(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		a.writeServerError(r, w, "lookup failed", err)
 		return
 	}
 	toRemove := make([]string, 0)
@@ -945,13 +954,13 @@ func (a *API) setUserRoles(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(toRemove) > 0 {
 		if err := a.Users.RemoveFromRoles(r.Context(), id, toRemove); err != nil {
-			a.writeError(w, http.StatusInternalServerError, "remove roles failed", err)
+			a.writeServerError(r, w, "remove roles failed", err)
 			return
 		}
 	}
 	if len(toAdd) > 0 {
 		if err := a.Users.AddToRoles(r.Context(), id, toAdd); err != nil {
-			a.writeError(w, http.StatusInternalServerError, "add roles failed", err)
+			a.writeServerError(r, w, "add roles failed", err)
 			return
 		}
 	}
@@ -966,7 +975,7 @@ func (a *API) getUserLogins(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		a.writeServerError(r, w, "lookup failed", err)
 		return
 	}
 	a.writeJSON(w, http.StatusOK, map[string]any{"logins": logins})
@@ -981,7 +990,7 @@ func (a *API) removeUserLogin(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "delete failed", err)
+		a.writeServerError(r, w, "delete failed", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1012,7 +1021,7 @@ func (a *API) setUserPassword(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "update failed", err)
+		a.writeServerError(r, w, "update failed", err)
 		return
 	}
 
@@ -1027,33 +1036,33 @@ func (a *API) setUserPassword(w http.ResponseWriter, r *http.Request) {
 		user.SecurityStamp = uuid.NewString()
 		user.UpdatedAt = now
 		if err := a.Users.UpdateUser(ctx, user); err != nil {
-			a.logError("admin password set: security stamp rotation failed", err)
+			a.logError(r.Context(), "admin password set: security stamp rotation failed", err)
 			cleanupFailed = true
 		}
 	} else {
-		a.logError("admin password set: user lookup failed", err)
+		a.logError(r.Context(), "admin password set: user lookup failed", err)
 		cleanupFailed = true
 	}
 	if a.PasswordResets != nil {
 		if err := a.PasswordResets.InvalidateForUser(ctx, id, now); err != nil {
-			a.logError("admin password set: invalidating reset tokens failed", err)
+			a.logError(r.Context(), "admin password set: invalidating reset tokens failed", err)
 			cleanupFailed = true
 		}
 	}
 	revoked, err := a.Sessions.RevokeByUserIDExcept(ctx, id, uuid.Nil, now)
 	if err != nil {
-		a.logError("admin password set: revoking sessions failed", err)
+		a.logError(r.Context(), "admin password set: revoking sessions failed", err)
 		cleanupFailed = true
 	}
 	for _, sid := range revoked {
 		if err := a.RefreshTokens.RevokeBySessionID(ctx, sid, now); err != nil {
-			a.logError("admin password set: revoking refresh tokens failed", err)
+			a.logError(r.Context(), "admin password set: revoking refresh tokens failed", err)
 			cleanupFailed = true
 		}
 	}
 	a.auditPasswordSet(r, id, len(revoked))
 	if cleanupFailed {
-		a.writeError(w, http.StatusInternalServerError,
+		a.writeServerError(r, w,
 			"password changed, but revoking existing sessions failed; revoke them manually", nil)
 		return
 	}
@@ -1083,13 +1092,13 @@ func (a *API) auditPasswordSet(r *http.Request, userID string, revoked int) {
 		Metadata:    fmt.Sprintf(`{"sessions_revoked":%d}`, revoked),
 	})
 	if err != nil {
-		a.logError("admin password set: audit write failed", err)
+		a.logError(r.Context(), "admin password set: audit write failed", err)
 	}
 }
 
-func (a *API) logError(msg string, err error) {
+func (a *API) logError(ctx context.Context, msg string, err error) {
 	if a.Logger != nil {
-		a.Logger.Error(msg, "err", err)
+		a.Logger.ErrorContext(ctx, msg, "err", err)
 	}
 }
 
@@ -1110,7 +1119,7 @@ type roleView struct {
 func (a *API) listRoles(w http.ResponseWriter, r *http.Request) {
 	roles, err := a.Roles.GetAllRoles(r.Context())
 	if err != nil {
-		a.writeError(w, http.StatusInternalServerError, "list failed", err)
+		a.writeServerError(r, w, "list failed", err)
 		return
 	}
 	items := make([]roleView, len(roles))
@@ -1161,7 +1170,7 @@ func (a *API) updateRole(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		a.writeServerError(r, w, "lookup failed", err)
 		return
 	}
 	existing.Name = body.Name
@@ -1179,7 +1188,7 @@ func (a *API) deleteRole(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "delete failed", err)
+		a.writeServerError(r, w, "delete failed", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1193,7 +1202,7 @@ func (a *API) getRoleClaims(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "lookup failed", err)
+		a.writeServerError(r, w, "lookup failed", err)
 		return
 	}
 	a.writeJSON(w, http.StatusOK, map[string]any{"claims": claims})
@@ -1215,7 +1224,7 @@ func (a *API) setRoleClaims(w http.ResponseWriter, r *http.Request) {
 			a.writeError(w, http.StatusNotFound, "not found", err)
 			return
 		}
-		a.writeError(w, http.StatusInternalServerError, "update failed", err)
+		a.writeServerError(r, w, "update failed", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

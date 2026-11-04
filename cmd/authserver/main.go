@@ -20,6 +20,7 @@ import (
 	"go-authserver/internal/clock"
 	"go-authserver/internal/config"
 	"go-authserver/internal/domain"
+	"go-authserver/internal/errlog"
 	"go-authserver/internal/mail"
 	"go-authserver/internal/oidc"
 	"go-authserver/internal/oidc/grants"
@@ -35,7 +36,27 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	os.Exit(runCommand())
+}
+
+func runCommand() int {
+	local := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	sink, err := errlog.NewTypesenseSink(os.Getenv("AUTH_LOG_TYPESENSE_URL"), os.Getenv("AUTH_LOG_TYPESENSE_API_KEY"), local)
+	if err != nil {
+		local.Warn("Typesense log export disabled", "reason", err.Error())
+	}
+	if sink != nil {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			sink.Close(ctx)
+		}()
+	}
+	environment := os.Getenv("AUTH_LOG_ENVIRONMENT")
+	if environment == "" {
+		environment = "development"
+	}
+	logger := slog.New(errlog.NewHandler(os.Stdout, environment, sink))
 	slog.SetDefault(logger)
 
 	// Subcommands. The default (no arg, or "serve") starts the HTTP
@@ -47,7 +68,6 @@ func main() {
 		cmd = os.Args[1]
 	}
 
-	var err error
 	switch cmd {
 	case "serve":
 		err = run(logger)
@@ -58,13 +78,19 @@ func main() {
 	case "rotate-dp-keys":
 		err = runRotateDPKeys(logger)
 	default:
-		logger.Error("unknown command", "cmd", cmd, "want", "serve|migrate|rotate-keys|rotate-dp-keys")
-		os.Exit(2)
+		logger.Error("unknown command; expected serve, migrate, rotate-keys, or rotate-dp-keys")
+		return 2
 	}
 	if err != nil {
-		logger.Error("startup failed", "cmd", cmd, "err", err)
-		os.Exit(1)
+		var invalidConfig *config.ValidationError
+		if errors.As(err, &invalidConfig) {
+			logger.Error(invalidConfig.Error(), "event", "configuration_error")
+		} else {
+			logger.Error("authserver command failed", "err", err)
+		}
+		return 1
 	}
+	return 0
 }
 
 // runMigrate opens the configured PostgreSQL database, applies the GORM
@@ -365,6 +391,7 @@ func run(logger *slog.Logger) error {
 	}
 	tokenHandler := &oidc.TokenHandler{
 		AuthCode: &grants.AuthCodeGrant{
+			Logger:        logger,
 			AuthCodes:     bundle.AuthCodes,
 			RefreshTokens: bundle.RefreshTokens,
 			Clients:       bundle.Clients,
@@ -396,6 +423,7 @@ func run(logger *slog.Logger) error {
 			},
 		},
 		ClientCredentials: &grants.ClientCredentialsGrant{
+			Logger:  logger,
 			Clients: bundle.Clients,
 			Issuer:  issuer,
 			Clock:   clk,
@@ -526,7 +554,7 @@ func run(logger *slog.Logger) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("listening", "addr", cfg.Listen, "issuer", cfg.Issuer, "driver", cfg.DBDriver)
+		logger.Info("authserver listening", "event", "service_started")
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}

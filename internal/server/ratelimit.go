@@ -91,13 +91,23 @@ func (l *LoginRateLimiter) sweep(now time.Time) {
 // limit. When over the limit, the response is 429 with a
 // Retry-After header.
 func (l *LoginRateLimiter) Middleware(next http.Handler) http.Handler {
+	return l.middleware(next, nil)
+}
+
+const rateLimitCode = "too_many_requests"
+const rateLimitMessage = "rate limit exceeded"
+
+func (l *LoginRateLimiter) middleware(next http.Handler, onReject func(*http.Request)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := ClientIP(r)
 		if !l.allow(ip) {
+			if onReject != nil {
+				onReject(r)
+			}
 			w.Header().Set("Retry-After", "60")
 			w.Header().Set("Content-Type", "application/json;charset=UTF-8")
 			w.WriteHeader(http.StatusTooManyRequests)
-			_, _ = w.Write([]byte(`{"error":"too_many_requests","error_description":"rate limit exceeded"}`))
+			_, _ = w.Write([]byte(`{"error":"` + rateLimitCode + `","error_description":"` + rateLimitMessage + `"}`))
 			return
 		}
 		next.ServeHTTP(w, r)

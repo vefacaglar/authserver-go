@@ -141,7 +141,7 @@ func authenticateWithPrivateKeyJWT(ctx context.Context, cfg ClientAuthConfig, cl
 	})
 	if err != nil {
 		if cfg.Logger != nil {
-			cfg.Logger.Warn("client assertion rejected", "client_id", client.ClientID, "err", err)
+			cfg.Logger.WarnContext(ctx, "client assertion rejected", "err", err)
 		}
 		return nil, &ClientAuthError{
 			Status:      http.StatusUnauthorized,

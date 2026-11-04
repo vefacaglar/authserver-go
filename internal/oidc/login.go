@@ -91,47 +91,48 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	if !APICSRFGuard(h.Cfg.RequireHTTPS).VerifyHeader(r) {
-		h.respondWithError(w, http.StatusForbidden, LoginErrAntiforgeryFailed)
+		h.respondWithError(ctx, w, http.StatusForbidden, LoginErrAntiforgeryFailed)
 		return
 	}
 	var body loginRequest
 	if err := decodeJSON(r, &body); err != nil {
-		h.respondWithError(w, http.StatusBadRequest, LoginErrInvalidCredentials)
+		h.reject(ctx, w, http.StatusBadRequest, LoginErrInvalidCredentials, "malformed_json")
 		return
 	}
 	username := strings.TrimSpace(body.Username)
 	password := body.Password
 	returnURL := body.ReturnURL
 	if username == "" || password == "" {
-		h.respondWithError(w, http.StatusBadRequest, LoginErrMissingCredentials)
+		h.respondWithError(ctx, w, http.StatusBadRequest, LoginErrMissingCredentials)
 		return
 	}
 
 	trackerKey := h.lockoutKey(r, username)
 	locked, err := h.Tracker.IsLockedOut(ctx, trackerKey)
-	if err != nil {
-		h.Logger.Error("tracker lookup failed", "err", err)
+	if err != nil && h.Logger != nil {
+		h.Logger.ErrorContext(ctx, "login: tracker lookup failed", "err", err)
 	}
 	if locked {
-		h.respondWithError(w, http.StatusTooManyRequests, LoginErrAccountLocked)
+		h.respondWithError(ctx, w, http.StatusTooManyRequests, LoginErrAccountLocked)
 		return
 	}
 
 	info, err := h.Users.ValidateCredentials(ctx, username, password)
 	if err != nil {
-		h.Logger.Error("user store error", "err", err)
-		h.respondWithError(w, http.StatusInternalServerError, LoginErrServerError)
+		h.fail(ctx, w, "login: credential validation failed", err)
 		return
 	}
 	if info == nil {
-		_ = h.Tracker.RecordFailure(ctx, trackerKey)
+		if err := h.Tracker.RecordFailure(ctx, trackerKey); err != nil && h.Logger != nil {
+			h.Logger.WarnContext(ctx, "login: recording failed attempt failed", "err", err)
+		}
 		h.recordFailedLogin(r, username, h.Clock.Now().UTC())
-		h.respondWithError(w, http.StatusUnauthorized, LoginErrInvalidCredentials)
+		h.respondWithError(ctx, w, http.StatusUnauthorized, LoginErrInvalidCredentials)
 		return
 	}
 
-	if err := h.Tracker.Reset(ctx, trackerKey); err != nil {
-		h.Logger.Warn("tracker reset failed", "err", err)
+	if err := h.Tracker.Reset(ctx, trackerKey); err != nil && h.Logger != nil {
+		h.Logger.WarnContext(ctx, "tracker reset failed", "err", err)
 	}
 
 	now := h.Clock.Now().UTC()
@@ -142,13 +143,11 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: now.Add(h.Cfg.SessionLifetime),
 	}
 	if err := h.Sessions.Store(ctx, sess); err != nil {
-		h.Logger.Error("session store failed", "err", err)
-		h.respondWithError(w, http.StatusInternalServerError, LoginErrServerError)
+		h.fail(ctx, w, "login: session persistence failed", err)
 		return
 	}
 	if err := h.Cookies.SetCookie(w, sess.ID); err != nil {
-		h.Logger.Error("session cookie set failed", "err", err)
-		h.respondWithError(w, http.StatusInternalServerError, LoginErrServerError)
+		h.fail(ctx, w, "login: session cookie creation failed", err)
 		return
 	}
 
@@ -156,7 +155,7 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	target, err := validateReturnURL(returnURL, h.Cfg.IssuerURL, h.Cfg.AuthorizePath, h.Cfg.ProfilePath)
 	if err != nil {
-		h.respondWithError(w, http.StatusBadRequest, LoginErrInvalidReturn)
+		h.respondWithError(ctx, w, http.StatusBadRequest, LoginErrInvalidReturn)
 		return
 	}
 	if target == "" {
@@ -165,11 +164,33 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// the SPA instead of bouncing to the configured issuer origin.
 		target = homePath
 	}
+	if h.Logger != nil {
+		h.Logger.InfoContext(ctx, "login succeeded", "event", "login_succeeded", "status", http.StatusOK)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"redirect": target})
 }
 
-func (h *LoginHandler) respondWithError(w http.ResponseWriter, status int, code string) {
-	writeJSONError(w, status, code, loginErrorLabel(code))
+func (h *LoginHandler) respondWithError(ctx context.Context, w http.ResponseWriter, status int, code string) {
+	h.reject(ctx, w, status, code, code)
+}
+
+func (h *LoginHandler) reject(ctx context.Context, w http.ResponseWriter, status int, code, reason string) {
+	description := loginErrorLabel(code)
+	if h.Logger != nil {
+		h.Logger.WarnContext(ctx, "login rejected", "event", "login_failed",
+			"status", status, "response_code", code, "response_message", description, "error_code", reason)
+	}
+	writeJSONError(w, status, code, description)
+}
+
+func (h *LoginHandler) fail(ctx context.Context, w http.ResponseWriter, message string, err error) {
+	description := loginErrorLabel(LoginErrServerError)
+	if h.Logger != nil {
+		h.Logger.ErrorContext(ctx, message, "event", "login_failed",
+			"status", http.StatusInternalServerError, "response_code", LoginErrServerError,
+			"response_message", description, "err", err)
+	}
+	writeJSONError(w, http.StatusInternalServerError, LoginErrServerError, description)
 }
 
 // recordLogin appends a login_succeeded audit entry.
@@ -230,8 +251,8 @@ func (h *LoginHandler) recordAuth(r *http.Request, userID, action, metadata stri
 		UserAgent:   truncate(r.UserAgent(), 512),
 		Metadata:    metadata,
 	})
-	if err != nil {
-		h.Logger.Warn("login audit write failed", "action", action, "err", err)
+	if err != nil && h.Logger != nil {
+		h.Logger.WarnContext(r.Context(), "login audit write failed", "err", err)
 	}
 }
 

@@ -76,7 +76,7 @@ func (h *ResetPasswordHandler) lookup(r *http.Request, raw string) *domain.Passw
 	t, err := h.Resets.FindByHash(r.Context(), token.HashToken(raw))
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
-			h.Logger.Error("reset: token lookup failed", "err", err)
+			h.Logger.ErrorContext(r.Context(), "reset: token lookup failed", "err", err)
 		}
 		return nil
 	}
@@ -144,7 +144,7 @@ func (h *ResetPasswordHandler) handlePost(w http.ResponseWriter, r *http.Request
 	}
 	won, err := h.Resets.Consume(ctx, t.ID, now)
 	if err != nil {
-		h.Logger.Error("reset: consume failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "reset: consume failed", "err", err)
 		h.respondWithError(w, http.StatusInternalServerError, resetErrServer)
 		return
 	}
@@ -155,7 +155,7 @@ func (h *ResetPasswordHandler) handlePost(w http.ResponseWriter, r *http.Request
 
 	if err := h.Users.SetPassword(ctx, t.UserID, next); err != nil {
 		// The token is spent; the user has to ask for a new link.
-		h.Logger.Error("reset: set password failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "reset: set password failed", "err", err)
 		h.respondWithError(w, http.StatusInternalServerError, resetErrServer)
 		return
 	}
@@ -166,22 +166,22 @@ func (h *ResetPasswordHandler) handlePost(w http.ResponseWriter, r *http.Request
 		user.SecurityStamp = uuid.NewString()
 		user.UpdatedAt = now
 		if err := h.Users.UpdateUser(ctx, user); err != nil {
-			h.Logger.Error("reset: security stamp rotation failed", "err", err)
+			h.Logger.ErrorContext(r.Context(), "reset: security stamp rotation failed", "err", err)
 		}
 	} else {
-		h.Logger.Error("reset: user lookup failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "reset: user lookup failed", "err", err)
 	}
 	if err := h.Resets.InvalidateForUser(ctx, t.UserID, now); err != nil {
-		h.Logger.Error("reset: invalidating other tokens failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "reset: invalidating other tokens failed", "err", err)
 	}
 	// Whoever held a session may be the attacker; end them all.
 	revoked, err := h.Sessions.RevokeByUserIDExcept(ctx, t.UserID, uuid.Nil, now)
 	if err != nil {
-		h.Logger.Error("reset: revoking sessions failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "reset: revoking sessions failed", "err", err)
 	}
 	for _, id := range revoked {
 		if err := h.RefreshTokens.RevokeBySessionID(ctx, id, now); err != nil {
-			h.Logger.Error("reset: revoking refresh tokens failed", "err", err)
+			h.Logger.ErrorContext(r.Context(), "reset: revoking refresh tokens failed", "err", err)
 		}
 	}
 	h.audit(r, t.UserID, len(revoked))
@@ -212,7 +212,7 @@ func (h *ResetPasswordHandler) audit(r *http.Request, userID string, revoked int
 		Metadata:    `{"sessions_revoked":` + strconv.Itoa(revoked) + `}`,
 	})
 	if err != nil {
-		h.Logger.Warn("reset: audit write failed", "err", err)
+		h.Logger.WarnContext(r.Context(), "reset: audit write failed", "err", err)
 	}
 }
 

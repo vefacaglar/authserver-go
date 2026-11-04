@@ -52,7 +52,7 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		cae := asClientAuthError(err)
 		if h.Logger != nil && cae.Cause != nil {
-			h.Logger.Warn("client auth failed", "err", cae.Cause)
+			h.Logger.WarnContext(r.Context(), "client auth failed", "err", cae.Cause)
 		}
 		writeClientAuthError(w, cae)
 		return

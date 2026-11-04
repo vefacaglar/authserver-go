@@ -73,6 +73,11 @@ fixes the production issuer, listening address and security flags (HTTPS on,
 seeding/anonymous admin/email-body logging off); these cannot be weakened by the
 runtime file.
 
+For optional Typesense export, add `AUTH_LOG_TYPESENSE_URL` and
+`AUTH_LOG_TYPESENSE_API_KEY` to `AUTH_ENV`. See
+[shared application logs](../docs/application-logs.md) for the collection schema
+and setup.
+
 Add these **repository Actions variables**:
 
 | Variable | Value |

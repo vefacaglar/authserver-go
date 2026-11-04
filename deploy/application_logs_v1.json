@@ -1,0 +1,21 @@
+{
+  "name": "application_logs_v1",
+  "fields": [
+    { "name": "timestamp", "type": "int64" },
+    { "name": "service", "type": "string", "facet": true },
+    { "name": "environment", "type": "string", "facet": true },
+    { "name": "level", "type": "string", "facet": true },
+    { "name": "event", "type": "string", "facet": true },
+    { "name": "message", "type": "string" },
+    { "name": "request_id", "type": "string", "optional": true },
+    { "name": "http_method", "type": "string", "facet": true, "optional": true },
+    { "name": "http_route", "type": "string", "facet": true, "optional": true },
+    { "name": "http_status", "type": "int32", "facet": true, "optional": true },
+    { "name": "response_code", "type": "string", "facet": true, "optional": true },
+    { "name": "response_message", "type": "string", "optional": true },
+    { "name": "error_type", "type": "string", "optional": true },
+    { "name": "error_code", "type": "string", "facet": true, "optional": true },
+    { "name": "source", "type": "string", "index": false, "optional": true },
+    { "name": "stack", "type": "string", "index": false, "optional": true }
+  ]
+}

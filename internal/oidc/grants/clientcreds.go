@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -35,6 +36,7 @@ type ClientCredentialsConfig struct {
 // client; it only validates the client is permitted to use the
 // grant and then mints the access token.
 type ClientCredentialsGrant struct {
+	Logger  *slog.Logger
 	Clients storeClientLister
 	Issuer  *token.Issuer
 	Clock   clock.Clock
@@ -83,7 +85,7 @@ func (g *ClientCredentialsGrant) Handle(ctx context.Context, w http.ResponseWrit
 		ExpiresIn: g.Cfg.AccessTokenLifetime,
 	})
 	if err != nil {
-		g.writeError(w, http.StatusInternalServerError, "server_error", "access token issuance failed")
+		writeServerError(ctx, g.Logger, w, "access token issuance failed", err)
 		return
 	}
 

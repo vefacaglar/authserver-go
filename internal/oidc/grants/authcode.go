@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -30,6 +31,7 @@ type AuthCodeConfig struct {
 // security-critical CAS-before-issuance rule: MarkConsumed runs *before* any
 // tokens are minted, so a single auth code can never yield tokens twice.
 type AuthCodeGrant struct {
+	Logger        *slog.Logger
 	AuthCodes     store.AuthorizationCodeStore
 	RefreshTokens store.RefreshTokenStore
 	Clients       store.ClientStore
@@ -114,7 +116,7 @@ func (g *AuthCodeGrant) Handle(ctx context.Context, w http.ResponseWriter, clien
 	// under concurrent attempts.
 	won, err := g.AuthCodes.MarkConsumed(ctx, code.ID, g.Clock.Now().UTC())
 	if err != nil {
-		g.writeError(w, http.StatusInternalServerError, "server_error", "could not record code consumption")
+		writeServerError(ctx, g.Logger, w, "could not record code consumption", err)
 		return
 	}
 	if !won {
@@ -124,7 +126,7 @@ func (g *AuthCodeGrant) Handle(ctx context.Context, w http.ResponseWriter, clien
 
 	info, err := g.Users.FindByID(ctx, code.UserID)
 	if err != nil {
-		g.writeError(w, http.StatusInternalServerError, "server_error", "user lookup failed")
+		writeServerError(ctx, g.Logger, w, "user lookup failed", err)
 		return
 	}
 
@@ -140,7 +142,7 @@ func (g *AuthCodeGrant) Handle(ctx context.Context, w http.ResponseWriter, clien
 		ExpiresIn: client.AccessTokenLifetime(),
 	})
 	if err != nil {
-		g.writeError(w, http.StatusInternalServerError, "server_error", "access token issuance failed")
+		writeServerError(ctx, g.Logger, w, "access token issuance failed", err)
 		return
 	}
 	atHash := token.HashAccessToken(access)
@@ -161,7 +163,7 @@ func (g *AuthCodeGrant) Handle(ctx context.Context, w http.ResponseWriter, clien
 		ExpiresIn: g.Cfg.IDTokenLifetime,
 	})
 	if err != nil {
-		g.writeError(w, http.StatusInternalServerError, "server_error", "id token issuance failed")
+		writeServerError(ctx, g.Logger, w, "id token issuance failed", err)
 		return
 	}
 
@@ -179,7 +181,7 @@ func (g *AuthCodeGrant) Handle(ctx context.Context, w http.ResponseWriter, clien
 	if client.AllowRefreshTokens && slices.Contains(scopes, "offline_access") {
 		raw, hash, err := token.NewOpaqueToken()
 		if err != nil {
-			g.writeError(w, http.StatusInternalServerError, "server_error", "refresh token mint failed")
+			writeServerError(ctx, g.Logger, w, "refresh token mint failed", err)
 			return
 		}
 		now := g.Clock.Now().UTC()
@@ -204,7 +206,7 @@ func (g *AuthCodeGrant) Handle(ctx context.Context, w http.ResponseWriter, clien
 			CreatedAt:         now,
 		}
 		if err := g.RefreshTokens.Store(ctx, rt); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "server_error", "refresh token store failed")
+			writeServerError(ctx, g.Logger, w, "refresh token store failed", err)
 			return
 		}
 		resp.RefreshToken = raw
@@ -219,6 +221,15 @@ func (g *AuthCodeGrant) writeError(w http.ResponseWriter, status int, code, desc
 	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(ErrorResponse{Error: code, ErrorDescription: desc})
+}
+
+func writeServerError(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, message string, err error) {
+	const code = "server_error"
+	if logger != nil {
+		logger.ErrorContext(ctx, message, "event", "token_error",
+			"status", http.StatusInternalServerError, "response_code", code, "response_message", message, "err", err)
+	}
+	writeJSONResponse(w, http.StatusInternalServerError, ErrorResponse{Error: code, ErrorDescription: message})
 }
 
 func writeJSONResponse(w http.ResponseWriter, status int, v any) {

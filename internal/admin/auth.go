@@ -108,7 +108,7 @@ func AuthMiddleware(cfg AuthConfig, logger *slog.Logger) (func(http.Handler) htt
 					// A store failure is not a missing login: answering 401
 					// would hide the outage and bounce a signed-in admin.
 					if logger != nil {
-						logger.Error("admin auth: session lookup failed", "err", err)
+						logger.ErrorContext(r.Context(), "admin auth: session lookup failed", "err", err)
 					}
 					writeAuthError(w, http.StatusInternalServerError, "server_error")
 					return
@@ -117,7 +117,7 @@ func AuthMiddleware(cfg AuthConfig, logger *slog.Logger) (func(http.Handler) htt
 					roles, err := cfg.Users.GetUserRoles(r.Context(), sess.UserID)
 					if err != nil {
 						if logger != nil {
-							logger.Warn("admin auth: role lookup failed", "err", err)
+							logger.WarnContext(r.Context(), "admin auth: role lookup failed", "err", err)
 						}
 						writeAuthError(w, http.StatusInternalServerError, "server_error")
 						return
@@ -128,14 +128,14 @@ func AuthMiddleware(cfg AuthConfig, logger *slog.Logger) (func(http.Handler) htt
 						return
 					}
 					if logger != nil {
-						logger.Warn("admin auth: non-admin session", "remote", r.RemoteAddr, "path", r.URL.Path)
+						logger.WarnContext(r.Context(), "admin auth: non-admin session")
 					}
 					writeAuthError(w, http.StatusForbidden, "admin role required")
 					return
 				}
 			}
 			if logger != nil {
-				logger.Warn("admin auth failed", "remote", r.RemoteAddr, "path", r.URL.Path)
+				logger.WarnContext(r.Context(), "admin auth failed")
 			}
 			w.Header().Set("WWW-Authenticate", `Bearer realm="auth-server-admin"`)
 			writeAuthError(w, http.StatusUnauthorized, "unauthorized")

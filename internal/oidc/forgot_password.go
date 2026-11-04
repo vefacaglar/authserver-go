@@ -11,6 +11,7 @@ import (
 
 	"go-authserver/internal/clock"
 	"go-authserver/internal/domain"
+	"go-authserver/internal/errlog"
 	"go-authserver/internal/mail"
 	"go-authserver/internal/store"
 	"go-authserver/internal/token"
@@ -112,7 +113,7 @@ func (h *ForgotPasswordHandler) process(r *http.Request, identifier string) {
 	key := "pwreset:" + user.ID
 	if h.Tracker != nil {
 		if locked, err := h.Tracker.IsLockedOut(ctx, key); err != nil {
-			h.Logger.Error("forgot: tracker lookup failed", "err", err)
+			h.Logger.ErrorContext(r.Context(), "forgot: tracker lookup failed", "err", err)
 		} else if locked {
 			return
 		}
@@ -121,12 +122,12 @@ func (h *ForgotPasswordHandler) process(r *http.Request, identifier string) {
 
 	raw, hash, err := token.NewOpaqueToken()
 	if err != nil {
-		h.Logger.Error("forgot: token generation failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "forgot: token generation failed", "err", err)
 		return
 	}
 	// Only the newest link works.
 	if err := h.Resets.InvalidateForUser(ctx, user.ID, now); err != nil {
-		h.Logger.Error("forgot: invalidating older tokens failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "forgot: invalidating older tokens failed", "err", err)
 		return
 	}
 	if err := h.Resets.Create(ctx, &domain.PasswordResetToken{
@@ -136,7 +137,7 @@ func (h *ForgotPasswordHandler) process(r *http.Request, identifier string) {
 		CreatedAt: now,
 		ExpiresAt: now.Add(h.Cfg.TokenLifetime),
 	}); err != nil {
-		h.Logger.Error("forgot: storing token failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "forgot: storing token failed", "err", err)
 		return
 	}
 	h.audit(r, user.ID)
@@ -146,13 +147,13 @@ func (h *ForgotPasswordHandler) process(r *http.Request, identifier string) {
 		Subject: "Reset your password",
 		Body:    h.emailBody(raw),
 	}
-	userID := user.ID
+	logContext := errlog.DetachRequest(ctx)
 	send := func() {
 		// The request context ends with the response; mail needs its own.
-		sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		sctx, cancel := context.WithTimeout(logContext, 30*time.Second)
 		defer cancel()
 		if err := h.Mailer.Send(sctx, msg); err != nil {
-			h.Logger.Error("forgot: sending reset email failed", "user_id", userID, "err", err)
+			h.Logger.ErrorContext(sctx, "forgot: sending reset email failed", "err", err)
 		}
 	}
 	if h.Spawn != nil {
@@ -205,7 +206,7 @@ func (h *ForgotPasswordHandler) audit(r *http.Request, userID string) {
 		UserAgent:   truncate(r.UserAgent(), 512),
 	})
 	if err != nil {
-		h.Logger.Warn("forgot: audit write failed", "err", err)
+		h.Logger.WarnContext(r.Context(), "forgot: audit write failed", "err", err)
 	}
 }
 

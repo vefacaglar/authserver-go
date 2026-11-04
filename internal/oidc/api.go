@@ -55,7 +55,7 @@ func (h *CSRFHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	tok, err := APICSRFGuard(h.RequireHTTPS).Issue(w)
 	if err != nil {
 		if h.Logger != nil {
-			h.Logger.Error("csrf issue failed", "err", err)
+			h.Logger.ErrorContext(r.Context(), "csrf issue failed", "err", err)
 		}
 		writeJSONError(w, http.StatusInternalServerError, ErrServerError, "internal error")
 		return
@@ -98,7 +98,7 @@ func (h *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	user, err := h.Users.FindUserByID(ctx, sess.UserID)
 	if err != nil {
 		if h.Logger != nil {
-			h.Logger.Error("session: user lookup failed", "err", err)
+			h.Logger.ErrorContext(r.Context(), "session: user lookup failed", "err", err)
 		}
 		writeJSONError(w, http.StatusInternalServerError, ErrServerError, "internal error")
 		return
@@ -106,7 +106,7 @@ func (h *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	roles, err := h.Users.GetUserRoles(ctx, sess.UserID)
 	if err != nil {
 		if h.Logger != nil {
-			h.Logger.Warn("session: role lookup failed", "err", err)
+			h.Logger.WarnContext(r.Context(), "session: role lookup failed", "err", err)
 		}
 		roles = nil
 	}

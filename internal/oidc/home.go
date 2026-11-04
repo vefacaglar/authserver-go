@@ -53,7 +53,7 @@ func (h *HomeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.Users.FindUserByID(ctx, sess.UserID)
 	if err != nil {
-		h.Logger.Error("home: user lookup failed", "err", err)
+		h.Logger.ErrorContext(r.Context(), "home: user lookup failed", "err", err)
 		writeJSONError(w, http.StatusInternalServerError, ErrServerError, "internal error")
 		return
 	}
@@ -74,7 +74,7 @@ func (h *HomeHandler) history(r *http.Request, userID, action string, markFirst 
 	}
 	logs, err := h.AuditLogs.ListByActor(r.Context(), userID, action, recentLoginsLimit)
 	if err != nil {
-		h.Logger.Warn("home: history lookup failed", "action", action, "err", err)
+		h.Logger.WarnContext(r.Context(), "home: history lookup failed", "action", action, "err", err)
 		return out
 	}
 	for i, l := range logs {

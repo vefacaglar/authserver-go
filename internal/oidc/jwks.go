@@ -1,7 +1,7 @@
 package oidc
 
 import (
-	"context"
+	"log/slog"
 	"net/http"
 
 	"go-authserver/internal/token"
@@ -19,9 +19,10 @@ func NewJWKSHandler(issuer *token.Issuer) http.Handler {
 	return &jwksHandler{Issuer: issuer}
 }
 
-func (h *jwksHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
-	body, err := h.Issuer.JWKSForEndpoint(context.Background())
+func (h *jwksHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, err := h.Issuer.JWKSForEndpoint(r.Context())
 	if err != nil {
+		slog.ErrorContext(r.Context(), "could not build JWKS", "err", err)
 		writeJSONError(w, http.StatusInternalServerError, ErrServerError, "could not build JWKS")
 		return
 	}

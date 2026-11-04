@@ -330,11 +330,21 @@ AUTH_CLIENT_ASSERTION_CLOCK_SKEW  (default 60s)
 AUTH_REQUIRE_PKCE                 (default true)
 AUTH_LOGIN_RATE_LIMIT             (default 10/min per IP)
 AUTH_ADMIN_ALLOW_ANONYMOUS        (default false)
+AUTH_LOG_ENVIRONMENT              (default development)
+AUTH_LOG_TYPESENSE_URL            (optional Typesense base URL)
+AUTH_LOG_TYPESENSE_API_KEY        (optional scoped log write key)
 ```
 
 Validation: issuer must be absolute (and HTTPS when `AUTH_REQUIRE_HTTPS`); cookie keys must be present and correct length; abs lifetime ≥ sliding lifetime; auth-code lifetime ≤ 2m.
 
 ---
+
+## Application diagnostics
+
+Use `log/slog` for the shared [application log contract](docs/application-logs.md).
+Correlate login results, HTTP 5xx responses, and panics using a server-generated
+request ID. Export the safe JSON projection to Typesense asynchronously.
+Log the route template, status, stable response code and safe cause metadata.
 
 ## Security checklist (must hold at the end)
 - PKCE required by default; **S256 only**, constant-time verify; `plain` rejected and not advertised.

@@ -10,15 +10,14 @@
 package server
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"log/slog"
 	"net/http"
-	"runtime/debug"
-	"time"
+
+	"go-authserver/internal/errlog"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
 )
 
 // RouterConfig captures the route paths the router mounts. It is the
@@ -72,10 +71,13 @@ type Handlers struct {
 
 // NewRouter assembles the production route table and middleware chain.
 func NewRouter(cfg RouterConfig, opts RouterOptions, h Handlers) http.Handler {
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	r := chi.NewRouter()
 	r.Use(chimw.RealIP)
-	r.Use(requestIDMiddleware)
-	r.Use(recovererMiddleware(opts.Logger))
+	r.Use(diagnosticsMiddleware(logger))
 	r.Use(securityHeadersMiddleware(cfg.RequireHTTPS))
 
 	limiter := func(next http.Handler) http.Handler {
@@ -92,7 +94,11 @@ func NewRouter(cfg RouterConfig, opts RouterOptions, h Handlers) http.Handler {
 		r.Method(http.MethodGet, "/api/auth/session", h.Session)
 	}
 	if h.Login != nil {
-		r.Method(http.MethodPost, "/api/auth/login", limiter(h.Login))
+		loginLimiter := NewLoginRateLimiter(cfg.LoginRateLimitRPS, cfg.LoginRateBurst)
+		r.Method(http.MethodPost, "/api/auth/login", loginLimiter.middleware(h.Login, func(r *http.Request) {
+			logger.WarnContext(r.Context(), "login rate limit exceeded", "event", "login_failed",
+				"status", http.StatusTooManyRequests, "response_code", rateLimitCode, "response_message", rateLimitMessage, "error_code", "rate_limited")
+		}))
 	}
 	if h.Register != nil {
 		r.Method(http.MethodPost, "/api/auth/register", limiter(h.Register))
@@ -156,39 +162,45 @@ type RouterOptions struct {
 	Logger *slog.Logger
 }
 
-// requestIDMiddleware stamps an X-Request-Id header on every response so
-// operators can correlate a single request across logs.
-func requestIDMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Request-Id")
-		if id == "" {
-			id = newRequestID()
-		}
-		w.Header().Set("X-Request-Id", id)
-		next.ServeHTTP(w, r)
-	})
-}
-
-// recovererMiddleware turns panics into 500s with a structured log entry
-// rather than the default net/http behaviour (which closes the connection).
-func recovererMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
+// diagnosticsMiddleware correlates application logs with the response and
+// reports 5xx responses even when the handler has no dedicated error log.
+func diagnosticsMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			id := uuid.NewString()
+			w.Header().Set("X-Request-Id", id)
+			route := func() string { return chi.RouteContext(r.Context()).RoutePattern() }
+			ctx := errlog.WithRequest(r.Context(), id, logMethod(r.Method), route)
+			ww := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
 			defer func() {
-				if rv := recover(); rv != nil {
-					logger.Error("panic in handler",
-						"err", rv,
-						"path", r.URL.Path,
-						"method", r.Method,
-						"stack", string(debug.Stack()),
-					)
-					if w.Header().Get("Content-Type") == "" {
-						http.Error(w, "internal server error", http.StatusInternalServerError)
+				if value := recover(); value != nil {
+					if abort, ok := value.(error); ok && abort == http.ErrAbortHandler {
+						panic(value)
 					}
+					if ww.Status() == 0 {
+						http.Error(ww, "internal server error", http.StatusInternalServerError)
+					}
+					logger.ErrorContext(ctx, "panic in HTTP handler",
+						"event", "http_panic", "status", ww.Status(), "stack", errlog.Stack())
+					return
+				}
+				if ww.Status() >= 500 {
+					logger.ErrorContext(ctx, "HTTP request failed",
+						"event", "http_error", "status", ww.Status())
 				}
 			}()
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(ww, r.WithContext(ctx))
 		})
+	}
+}
+
+func logMethod(method string) string {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
+		http.MethodDelete, http.MethodOptions, http.MethodConnect, http.MethodTrace:
+		return method
+	default:
+		return "OTHER"
 	}
 }
 
@@ -218,35 +230,4 @@ func NewHealth() http.Handler {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok"))
 	})
-}
-
-// AccessLogMiddleware emits one structured log line per request. Optional
-// but recommended in production; not mounted by NewRouter so tests stay
-// quiet. Enable by wrapping NewRouter's output:
-//
-//	server.NewRouter(...).Use(server.AccessLogMiddleware(logger))
-func AccessLogMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			start := time.Now()
-			ww := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
-			next.ServeHTTP(ww, r)
-			logger.Info("http",
-				"method", r.Method,
-				"path", r.URL.Path,
-				"status", ww.Status(),
-				"bytes", ww.BytesWritten(),
-				"duration_ms", time.Since(start).Milliseconds(),
-				"remote", r.RemoteAddr,
-			)
-		})
-	}
-}
-
-// newRequestID returns a short random id without pulling in another
-// dependency. Format: 16 hex chars.
-func newRequestID() string {
-	var b [8]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
 }

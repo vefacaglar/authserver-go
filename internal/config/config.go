@@ -89,6 +89,14 @@ type Config struct {
 	AdminRole string
 }
 
+// ValidationError contains a configuration diagnostic safe to log.
+type ValidationError struct {
+	err error
+}
+
+func (e *ValidationError) Error() string { return e.err.Error() }
+func (e *ValidationError) Unwrap() error { return e.err }
+
 func Load() (*Config, error) {
 	c := &Config{
 		Issuer:                       getenv("AUTH_ISSUER", ""),
@@ -133,7 +141,7 @@ func Load() (*Config, error) {
 	c.PublicURL = strings.TrimRight(getenv("AUTH_PUBLIC_URL", c.Issuer), "/")
 
 	if err := c.validate(); err != nil {
-		return nil, err
+		return nil, &ValidationError{err: err}
 	}
 	return c, nil
 }
@@ -144,7 +152,7 @@ func (c *Config) validate() error {
 	}
 	u, err := url.Parse(c.Issuer)
 	if err != nil {
-		return fmt.Errorf("AUTH_ISSUER: %w", err)
+		return errors.New("AUTH_ISSUER must be a valid URL")
 	}
 	if !u.IsAbs() {
 		return errors.New("AUTH_ISSUER must be an absolute URL")
@@ -194,7 +202,7 @@ func (c *Config) validate() error {
 	// balancer, so each would mint a different signing key and reject the
 	// others' tokens. Never allow it as a runtime driver.
 	if c.DBDriver != "postgres" {
-		return fmt.Errorf("AUTH_DB_DRIVER must be \"postgres\" (got %q); the server runs on postgres only", c.DBDriver)
+		return errors.New("AUTH_DB_DRIVER must be \"postgres\"; the server runs on postgres only")
 	}
 	if strings.TrimSpace(c.DBDSN) == "" {
 		return errors.New("AUTH_DB_DSN is required (a PostgreSQL DSN)")
