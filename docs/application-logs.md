@@ -3,7 +3,7 @@
 Authserver writes structured diagnostics to stdout and can export the same
 events to the Typesense collection `application_logs_v1`. Another API can write
 to the same collection with its own `service` value, such as
-`vefacaglar-site-api`, using the [collection schema](../deploy/application_logs_v1.json).
+`vefacaglar-site-api`, using the [collection schema](../internal/errlog/application_logs_v1.json).
 
 | Field | Meaning |
 | --- | --- |
@@ -35,28 +35,27 @@ and must keep it on an operator-only server.
 
 ## Provision and enable
 
-Create the collection once using an administrative key. Use a separate
-collection-scoped credential with only `documents:create` for each writer.
+Set `AUTH_LOG_TYPESENSE_URL` to the Typesense base URL reachable by the
+authserver process. Use HTTPS for a remote endpoint. Set
+`AUTH_LOG_TYPESENSE_API_KEY` to a key scoped to `application_logs_v1` with
+`documents:create` and `collections:create`. When the first write reports
+that the collection is missing, Authserver creates it using the embedded
+schema and retries that event. A write-only key with `documents:create`
+is sufficient if the collection already exists.
 [Typesense API key scopes](https://typesense.org/docs/30.1/api/api-keys.html)
 
-```sh
-curl --fail-with-body -X POST "$TYPESENSE_URL/collections" \
-  -H "X-TYPESENSE-API-KEY: $TYPESENSE_ADMIN_KEY" \
-  -H 'Content-Type: application/json' \
-  --data-binary @deploy/application_logs_v1.json
+To create a scoped key with an administrative key:
 
+```sh
 curl --fail-with-body -X POST "$TYPESENSE_URL/keys" \
   -H "X-TYPESENSE-API-KEY: $TYPESENSE_ADMIN_KEY" \
   -H 'Content-Type: application/json' \
-  --data '{"description":"Authserver log writer","actions":["documents:create"],"collections":["application_logs_v1"]}'
+  --data '{"description":"Authserver log writer","actions":["documents:create","collections:create"],"collections":["application_logs_v1"]}'
 ```
 
-Set `AUTH_LOG_TYPESENSE_URL` to the Typesense base URL reachable by the
-authserver process. Use HTTPS for a remote endpoint. Set
-`AUTH_LOG_TYPESENSE_API_KEY` to the returned write key. For production, supply
-both entries through the GitHub Actions `AUTH_ENV` secret and redeploy. Docker
-Compose sets `AUTH_LOG_ENVIRONMENT=production`. The local default is
-`development`.
+For production, supply both entries through the GitHub Actions `AUTH_ENV`
+secret and redeploy. Docker Compose sets `AUTH_LOG_ENVIRONMENT=production`.
+The local default is `development`.
 
 To inspect recent login failures, use a private read key with
 `documents:search` on the collection:
@@ -71,5 +70,5 @@ curl --fail-with-body --get "$TYPESENSE_URL/collections/application_logs_v1/docu
 ```
 
 Export runs on a bounded background queue. If delivery fails or the queue
-fills, the event remains available in stdout logs. Export does not retry
-failed writes. Collection retention is managed by the operator.
+fills, the event remains available in stdout logs. The automatic retry applies
+to a missing collection. Collection retention is managed by the operator.

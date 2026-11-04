@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -99,5 +100,88 @@ func TestTypesenseFailureKeepsLocalEvent(t *testing.T) {
 		!strings.Contains(delivery.String(), "Typesense returned HTTP 401") ||
 		strings.Contains(delivery.String(), "private Typesense response") {
 		t.Fatalf("unexpected local logs: %s %s", output.String(), delivery.String())
+	}
+}
+
+func TestTypesenseProvisionsMissingCollection(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		createStatus int
+		wantError    string
+	}{
+		{name: "created", createStatus: http.StatusCreated},
+		{name: "already created by another writer", createStatus: http.StatusConflict},
+		{name: "missing create permission", createStatus: http.StatusUnauthorized, wantError: "check collections:create permission"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const documentsPath = "/proxy/collections/application_logs_v1/documents"
+			const collectionsPath = "/proxy/collections"
+			const document = `{"message":"first log"}`
+			requests := make(chan string, 4)
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				firstRequest := len(requests) == 0
+				requests <- r.URL.Path
+				if r.Method != http.MethodPost || r.Header.Get("X-TYPESENSE-API-KEY") != "log-key" {
+					t.Errorf("unexpected method or missing log key for %s", r.URL.Path)
+				}
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read request: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				switch r.URL.Path {
+				case documentsPath:
+					if string(body) != document {
+						t.Errorf("unexpected log document: %s", body)
+					}
+					if firstRequest {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+					w.WriteHeader(http.StatusCreated)
+				case collectionsPath:
+					var schema struct {
+						Name   string            `json:"name"`
+						Fields []json.RawMessage `json:"fields"`
+					}
+					if err := json.Unmarshal(body, &schema); err != nil || schema.Name != collection || len(schema.Fields) == 0 {
+						t.Errorf("invalid collection schema: %s (%v)", body, err)
+					}
+					w.WriteHeader(tc.createStatus)
+				default:
+					t.Errorf("unexpected request path %q", r.URL.Path)
+					w.WriteHeader(http.StatusBadRequest)
+				}
+			}))
+			defer ts.Close()
+
+			sink, err := NewTypesenseSink(ts.URL+"/proxy/", "log-key", slog.New(slog.DiscardHandler))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			defer sink.Close(ctx)
+
+			err = sink.send(ctx, []byte(document))
+			wantPaths := []string{documentsPath, collectionsPath}
+			if tc.wantError == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantPaths = append(wantPaths, documentsPath)
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("send error = %v, want %q", err, tc.wantError)
+			}
+			if len(requests) != len(wantPaths) {
+				t.Fatalf("got %d requests, want %d", len(requests), len(wantPaths))
+			}
+			for _, want := range wantPaths {
+				if got := <-requests; got != want {
+					t.Errorf("request path = %q, want %q", got, want)
+				}
+			}
+		})
 	}
 }

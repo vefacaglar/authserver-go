@@ -71,3 +71,4 @@ until **Done when** holds. Full spec lives in `BUILD_PROMPT.md`; this file is th
 
 ## M11 — Application diagnostics
 - [x] **T11.1 Shared Typesense application logs** — Use a versioned schema for safe login outcomes, HTTP 5xx responses, panics and application diagnostics. Correlate records with a server-generated request ID and export asynchronously with stdout fallback. **Done when** build, vet and tests pass, including login rejection details, panic handling, payload privacy and mocked Typesense delivery.
+- [x] **T11.2 Automatic Typesense collection provisioning** — Create a missing log collection from the embedded schema and retry the first event. **Done when** build, vet and tests pass, including creation, concurrent provisioning and missing permissions.

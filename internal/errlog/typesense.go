@@ -3,6 +3,7 @@ package errlog
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -15,22 +16,26 @@ import (
 
 const collection = "application_logs_v1"
 
+//go:embed application_logs_v1.json
+var collectionSchema []byte
+
 // TypesenseSink delivers logs from a bounded queue independently of requests.
 type TypesenseSink struct {
-	endpoint string
-	key      string
-	local    *slog.Logger
-	client   *http.Client
-	queue    chan []byte
-	done     chan struct{}
-	cancel   context.CancelFunc
-	mu       sync.Mutex
-	closed   bool
-	overflow sync.Once
+	collectionsURL string
+	documentsURL   string
+	key            string
+	local          *slog.Logger
+	client         *http.Client
+	queue          chan []byte
+	done           chan struct{}
+	cancel         context.CancelFunc
+	mu             sync.Mutex
+	closed         bool
+	overflow       sync.Once
 }
 
-// NewTypesenseSink creates a writer for an existing application_logs_v1
-// collection. The API key only needs documents:create on that collection.
+// NewTypesenseSink creates a writer for application_logs_v1. The key needs
+// documents:create and, if the collection is missing, collections:create.
 func NewTypesenseSink(baseURL, key string, local *slog.Logger) (*TypesenseSink, error) {
 	if baseURL == "" && key == "" {
 		return nil, nil
@@ -46,8 +51,9 @@ func NewTypesenseSink(baseURL, key string, local *slog.Logger) (*TypesenseSink, 
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &TypesenseSink{
-		endpoint: u.JoinPath("collections", collection, "documents").String(),
-		key:      key, local: local, queue: make(chan []byte, 256), done: make(chan struct{}), cancel: cancel,
+		collectionsURL: u.JoinPath("collections").String(),
+		documentsURL:   u.JoinPath("collections", collection, "documents").String(),
+		key:            key, local: local, queue: make(chan []byte, 256), done: make(chan struct{}), cancel: cancel,
 		client: &http.Client{
 			Timeout:       2 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -90,24 +96,60 @@ func (s *TypesenseSink) run(ctx context.Context) {
 }
 
 func (s *TypesenseSink) send(ctx context.Context, data []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(data))
+	status, err := s.post(ctx, s.documentsURL, data)
 	if err != nil {
-		return errors.New("could not build log request")
+		return err
+	}
+	if status == http.StatusNotFound {
+		if err := s.createCollection(ctx); err != nil {
+			return err
+		}
+		status, err = s.post(ctx, s.documentsURL, data)
+		if err != nil {
+			return err
+		}
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("Typesense returned HTTP %d", status)
+	}
+	return nil
+}
+
+func (s *TypesenseSink) createCollection(ctx context.Context) error {
+	status, err := s.post(ctx, s.collectionsURL, collectionSchema)
+	if err != nil {
+		return fmt.Errorf("create Typesense log collection: %w", err)
+	}
+	switch {
+	case status >= 200 && status < 300, status == http.StatusConflict:
+		// Another writer may have created the collection after the 404.
+		return nil
+	case status == http.StatusUnauthorized, status == http.StatusForbidden:
+		return fmt.Errorf("create Typesense log collection: HTTP %d, check collections:create permission for %s", status, collection)
+	default:
+		return fmt.Errorf("create Typesense log collection: HTTP %d", status)
+	}
+}
+
+func (s *TypesenseSink) post(ctx context.Context, endpoint string, data []byte) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(data))
+	if err != nil {
+		return 0, errors.New("could not build Typesense request")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-TYPESENSE-API-KEY", s.key)
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return errors.New("could not reach Typesense")
+		return 0, errors.New("could not reach Typesense")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("Typesense returned HTTP %d", resp.StatusCode)
+		return resp.StatusCode, nil
 	}
 	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, 16<<10)); err != nil {
-		return errors.New("could not read Typesense response")
+		return 0, errors.New("could not read Typesense response")
 	}
-	return nil
+	return resp.StatusCode, nil
 }
 
 // Close drains pending events within ctx's deadline and cancels pending I/O

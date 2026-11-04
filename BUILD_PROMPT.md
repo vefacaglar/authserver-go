@@ -344,7 +344,8 @@ Validation: issuer must be absolute (and HTTPS when `AUTH_REQUIRE_HTTPS`); cooki
 Use `log/slog` for the shared [application log contract](docs/application-logs.md).
 Correlate login results, HTTP 5xx responses, and panics using a server-generated
 request ID. Export the safe JSON projection to Typesense asynchronously.
-Log the route template, status, stable response code and safe cause metadata.
+If the collection is missing, create it from the embedded schema and retry
+the event. Log the route template, status, stable response code and safe cause metadata.
 
 ## Security checklist (must hold at the end)
 - PKCE required by default; **S256 only**, constant-time verify; `plain` rejected and not advertised.
