@@ -43,6 +43,7 @@ In repository **Settings → Secrets and variables → Actions**, add these secr
 | `AUTH_DB_DSN` | Production PostgreSQL connection string reachable from the VPS |
 | `AUTH_ADMIN_TOKEN` | Production admin token |
 | `AUTH_SMTP_HOST`, `AUTH_SMTP_PORT`, `AUTH_SMTP_USERNAME`, `AUTH_SMTP_PASSWORD`, `AUTH_SMTP_FROM` | Optional mail settings, each as a separate secret |
+| `AUTH_LOG_TYPESENSE_URL`, `AUTH_LOG_TYPESENSE_API_KEY` | Optional Typesense settings, each as a separate secret |
 | `AUTH_ENV` | Optional complete runtime env file for additional settings or as an alternative to individual secrets |
 
 The simplest setup is to add `AUTH_DB_DSN` and `AUTH_ADMIN_TOKEN` separately,
@@ -73,8 +74,10 @@ fixes the production issuer, listening address and security flags (HTTPS on,
 seeding/anonymous admin/email-body logging off); these cannot be weakened by the
 runtime file.
 
-For optional Typesense export, add `AUTH_LOG_TYPESENSE_URL` and
-`AUTH_LOG_TYPESENSE_API_KEY` to `AUTH_ENV`. See
+For optional Typesense export, set `AUTH_LOG_TYPESENSE_URL` and
+`AUTH_LOG_TYPESENSE_API_KEY` as separate secrets or include both in
+`AUTH_ENV`. When Typesense shares the Docker network, use
+`http://typesense:8108` for the URL. See
 [shared application logs](../docs/application-logs.md) for the collection schema
 and setup.
 

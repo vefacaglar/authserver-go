@@ -53,8 +53,9 @@ curl --fail-with-body -X POST "$TYPESENSE_URL/keys" \
   --data '{"description":"Authserver log writer","actions":["documents:create","collections:create"],"collections":["application_logs_v1"]}'
 ```
 
-For production, supply both entries through the GitHub Actions `AUTH_ENV`
-secret and redeploy. Docker Compose sets `AUTH_LOG_ENVIRONMENT=production`.
+For production, add both settings as GitHub Actions secrets or include them
+in `AUTH_ENV`, then redeploy. Use `http://typesense:8108` when both containers
+share the Docker network. Docker Compose sets `AUTH_LOG_ENVIRONMENT=production`.
 The local default is `development`.
 
 To inspect recent login failures, use a private read key with

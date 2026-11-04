@@ -82,6 +82,8 @@ class DeployTest(unittest.TestCase):
             AUTH_DB_DSN="postgres://example/new-db?sslmode=require",
             AUTH_ADMIN_TOKEN="literal-$value-`echo secret`",
             AUTH_SMTP_PASSWORD="spaces and $dollars='quotes'",
+            AUTH_LOG_TYPESENSE_URL="http://typesense:8108",
+            AUTH_LOG_TYPESENSE_API_KEY="log-writer-$value",
         )
         self.prepare()
         content = (self.bundle / "authserver.env").read_text()
@@ -89,6 +91,8 @@ class DeployTest(unittest.TestCase):
             "AUTH_DB_DSN=postgres://example/new-db?sslmode=require\n"
             "AUTH_ADMIN_TOKEN=literal-$value-`echo secret`\n"
             "AUTH_SMTP_PASSWORD=spaces and $dollars='quotes'\n"
+            "AUTH_LOG_TYPESENSE_URL=http://typesense:8108\n"
+            "AUTH_LOG_TYPESENSE_API_KEY=log-writer-$value\n"
         ))
 
     def test_individual_secret_overrides_bundle_without_duplicate_setting(self):

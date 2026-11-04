@@ -188,6 +188,8 @@ jobs:
           AUTH_SMTP_USERNAME: ${{ secrets.AUTH_SMTP_USERNAME }}
           AUTH_SMTP_PASSWORD: ${{ secrets.AUTH_SMTP_PASSWORD }}
           AUTH_SMTP_FROM: ${{ secrets.AUTH_SMTP_FROM }}
+          AUTH_LOG_TYPESENSE_URL: ${{ secrets.AUTH_LOG_TYPESENSE_URL }}
+          AUTH_LOG_TYPESENSE_API_KEY: ${{ secrets.AUTH_LOG_TYPESENSE_API_KEY }}
           AUTH_DOCKER_NETWORK: ${{ vars.AUTH_DOCKER_NETWORK || 'databases_default' }}
           AUTH_BIND_PORT: ${{ vars.AUTH_BIND_PORT || '5175' }}
           AUTH_WEB_BIND_PORT: ${{ vars.AUTH_WEB_BIND_PORT || '5176' }}
