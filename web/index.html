@@ -6,11 +6,20 @@
     <meta name="referrer" content="no-referrer" />
     <meta name="color-scheme" content="dark" />
     <title>authserver</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Start the UI font download in parallel with the bundle; main.tsx waits for it before the first render. -->
     <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300..700&display=swap"
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      crossorigin
+      href="/src/fonts/fira-code-latin-wght-normal.woff2"
+    />
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      crossorigin
+      href="/src/fonts/fira-code-latin-ext-wght-normal.woff2"
     />
     <!-- Paint the pure black shell color before any stylesheet or script arrives (no flash). -->
     <style>
