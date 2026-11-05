@@ -1,221 +1,451 @@
-/* JetBrains Mono is self-hosted via @fontsource (imported in main.tsx). */
+@import url("https://fonts.googleapis.com/css2?family=Fira+Code:wght@300..700&display=swap");
 @import "tailwindcss";
 
 /*
- * Theme carried over from the former Go-rendered auth pages:
- * #121212 page, #1a1a1a panels, JetBrains Mono everywhere, lowercase
- * labels, square corners. Form fields are inset into the panel: shell
- * background, hairline border, brighter border on focus.
+ * Design language migrated from vefacaglar.com:
+ * - Pure black (#000000) canvas, crisp charcoal (#2d2d2d) hairline borders
+ * - Fira Code medium (500) monospace with -0.03em letter-spacing
+ * - Warm amber-bronze (#A89276) accent, soft desaturated semantic tones
+ * - Strict 90-degree square corners (border-radius: 0) on every surface & control
  */
+:root {
+  --bg: #000000;            /* Pure black site background */
+  --surface: #0b0b0b;       /* Subtle raised areas when needed */
+  --surface-2: #161616;     /* Secondary surface */
+  --text: #eaeaea;          /* Crisp, premium off-white text for supreme contrast */
+  --text-heading: #ffffff;  /* Brilliant pure white headings */
+  --muted: #8e8e8e;         /* Muted off-white/light-grey */
+  --faint: #5a5a5a;         /* Quiet figures, placeholders, disabled */
+  --border: #2d2d2d;        /* Clean, crisp charcoal borders */
+  --border-strong: #3d3d3d; /* Hover border surface */
+  --accent: #A89276;        /* Highly desaturated, soft faded warm amber-bronze accent */
+  --success: #728477;       /* Soft faded green */
+  --warning: #9F8E7D;       /* Soft faded sand */
+  --info: #7087A3;          /* Soft faded slate blue */
+  --on-accent: #1a1a1a;     /* Text on accent */
+  --max: 960px;             /* Standard vefacaglar.com measure */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --surface: #0b0b0b;
+    --surface-2: #161616;
+    --text: #eaeaea;
+    --text-heading: #ffffff;
+    --muted: #8e8e8e;
+    --faint: #5a5a5a;
+    --border: #2d2d2d;
+    --border-strong: #3d3d3d;
+    --accent: #A89276;
+    --success: #728477;
+    --warning: #9F8E7D;
+    --info: #7087A3;
+    --on-accent: #1a1a1a;
+  }
+}
+
 @theme {
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
-  --color-shell: #121212;
-  --color-panel: #1a1a1a;
-  --color-field-bg: #121212;
-  --color-field-border: rgb(39 39 42 / 0.9);
-  --color-field-border-hover: var(--color-zinc-700);
-  --color-field-border-focus: var(--color-zinc-500);
-  --color-field-text: var(--color-zinc-200);
-  --color-field-placeholder: var(--color-zinc-600);
+  --font-mono: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --color-shell: #000000;
+  --color-panel: #000000;
+  --color-field-bg: #000000;
+  --color-field-border: #2d2d2d;
+  --color-field-border-hover: #8e8e8e;
+  --color-field-border-focus: #A89276;
+  --color-field-text: #eaeaea;
+  --color-field-placeholder: #5a5a5a;
+}
+
+* {
+  box-sizing: border-box;
 }
 
 html {
-  background: #121212;
+  background: var(--bg);
+  scrollbar-color: var(--border) var(--bg);
+  scrollbar-width: thin;
 }
 
 body {
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  background: #121212;
-  color: var(--color-zinc-400);
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  line-height: 1.65;
+  font-size: 15.5px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  color: inherit;
+  text-underline-offset: 5px;
+}
+
+pre,
+code,
+textarea,
+[class*="code"] {
+  text-transform: none;
+}
+
+::-moz-selection {
+  background: var(--border);
+}
+::selection {
+  background: var(--border);
 }
 
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
 input:-webkit-autofill:focus {
-  -webkit-text-fill-color: var(--color-field-text) !important;
-  -webkit-box-shadow: 0 0 0px 1000px var(--color-field-bg) inset !important;
-  caret-color: var(--color-field-text);
+  -webkit-text-fill-color: var(--text) !important;
+  -webkit-box-shadow: 0 0 0px 1000px var(--bg) inset !important;
+  caret-color: var(--text);
   transition: background-color 5000s ease-in-out 0s;
 }
 
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--bg);
 }
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background-color: var(--border);
+  border-radius: 6px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted);
+}
+
+@media screen and (max-width: 768px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
 }
 
 @layer components {
-  .auth-label {
-    display: block;
-    font-size: 0.75rem;
-    line-height: 1rem;
-    color: var(--color-zinc-500);
-    text-transform: lowercase;
-    letter-spacing: 0.025em;
-    margin-bottom: 0.5rem;
+  .site-frame {
+    width: min(var(--max), calc(100% - 48px));
+    margin: 0 auto;
+    padding: 0;
   }
-  /*
-   * The single form-field style for every <input>, <textarea> and
-   * <select> in the app. Only density varies: .input is the default
-   * (admin forms), .input-lg for the standalone auth cards, .input-sm
-   * for inline controls. Layout (width, height, icon padding) is left
-   * to utilities; colors and borders must not be overridden per page.
-   */
-  .input {
+
+  @media (max-width: 720px) {
+    .site-frame {
+      width: calc(100% - 32px);
+    }
+  }
+
+  .auth-label,
+  .label {
+    display: block;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--muted);
+    text-transform: lowercase;
+    margin-bottom: 8px;
+    font-weight: 500;
+  }
+
+  .input,
+  .textarea {
     display: block;
     width: 100%;
-    border: 1px solid var(--color-field-border);
+    border: 1px solid var(--border);
     border-radius: 0;
-    padding: 0.5rem 0.75rem;
-    background: var(--color-field-bg);
-    color: var(--color-field-text);
-    caret-color: var(--color-field-text);
+    padding: 8px 12px;
+    background: var(--bg);
+    color: var(--text);
+    caret-color: var(--text);
     color-scheme: dark;
     font-family: inherit;
-    font-size: 0.8125rem;
-    line-height: 1.25rem;
+    font-size: 14px;
+    line-height: 1.5;
     outline: none;
-    transition: border-color 0.15s;
+    transition: border-color 0.15s ease;
   }
-  .input:hover:not(:disabled):not(:focus) {
-    border-color: var(--color-field-border-hover);
+  .input:hover:not(:disabled):not(:focus),
+  .textarea:hover:not(:disabled):not(:focus) {
+    border-color: var(--muted);
   }
-  .input:focus {
-    border-color: var(--color-field-border-focus);
+  .input:focus,
+  .textarea:focus {
+    border-color: var(--accent);
   }
-  .input::placeholder {
-    color: var(--color-field-placeholder);
+  .input::placeholder,
+  .textarea::placeholder {
+    color: var(--faint);
   }
-  .input:disabled {
-    opacity: 0.6;
+  .input:disabled,
+  .textarea:disabled {
+    opacity: 0.5;
     cursor: not-allowed;
   }
-  /* Locked identifiers (edit mode): still selectable for copying. */
   .input:read-only:not(:disabled) {
-    color: var(--color-zinc-500);
+    color: var(--muted);
     cursor: default;
   }
   .input[aria-invalid="true"] {
-    border-color: var(--color-red-800);
+    border-color: var(--accent);
   }
-  textarea.input {
+  textarea.input,
+  .textarea {
     resize: vertical;
   }
   .input-lg {
-    padding: 0.75rem 1rem;
-    font-size: 0.875rem;
+    padding: 9px 12px;
+    font-size: 14px;
   }
   .input-sm {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    line-height: 1rem;
+    padding: 4px 8px;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .btnAccent,
+  .auth-btn {
+    font-size: 14px;
+    background: var(--text-heading);
+    color: var(--bg) !important;
+    text-decoration: none;
+    border: 1px solid var(--text-heading);
+    padding: 8px 16px;
+    border-radius: 0;
+    font-weight: 700;
+    text-transform: lowercase;
+    font-family: inherit;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    transition: opacity 0.2s ease, transform 0.15s ease;
   }
   .auth-btn {
     display: flex;
     width: 100%;
-    justify-content: center;
-    border-radius: 0;
-    background: var(--color-zinc-300);
-    padding: 0.75rem;
-    font-size: 0.875rem;
-    font-weight: 700;
-    color: var(--color-zinc-950);
-    text-transform: lowercase;
-    letter-spacing: 0.025em;
-    font-family: inherit;
-    cursor: pointer;
-    transition: background-color 0.15s;
+    padding: 10px 16px;
   }
+  .btnAccent:hover:not(:disabled),
   .auth-btn:hover:not(:disabled) {
-    background: var(--color-zinc-400);
+    opacity: 0.9;
+    color: var(--bg) !important;
+    transform: translateY(-1px);
   }
+  .btnAccent:active:not(:disabled),
+  .auth-btn:active:not(:disabled) {
+    transform: translateY(0);
+  }
+  .btnAccent:disabled,
   .auth-btn:disabled {
-    opacity: 0.6;
-    cursor: default;
+    opacity: 0.5;
+    cursor: not-allowed;
   }
-  .auth-link {
-    color: var(--color-zinc-500);
-    text-decoration: underline;
-    text-underline-offset: 4px;
-    text-decoration-thickness: 1px;
-    font-size: 0.75rem;
+
+  .btnGhost,
+  .auth-btn-ghost {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 16px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.5;
+    border-radius: 0;
     text-transform: lowercase;
-    transition: color 0.15s;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    text-decoration: none;
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.15s ease;
+  }
+  .auth-btn-ghost {
+    display: flex;
+    width: 100%;
+    padding: 10px 16px;
+  }
+  .btnGhost:hover:not(:disabled),
+  .auth-btn-ghost:hover:not(:disabled) {
+    background-color: var(--border);
+    border-color: var(--text-heading);
+    color: var(--text-heading);
+    transform: translateY(-1px);
+  }
+  .btnGhost:active:not(:disabled),
+  .auth-btn-ghost:active:not(:disabled) {
+    transform: translateY(0);
+  }
+  .btnGhost:disabled,
+  .auth-btn-ghost:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .auth-link {
+    color: var(--text-heading);
+    text-decoration: underline;
+    text-decoration-color: var(--muted);
+    text-underline-offset: 5px;
+    text-decoration-thickness: 1px;
+    font-size: 13px;
+    text-transform: lowercase;
+    transition: color 0.15s ease, text-decoration-color 0.15s ease;
     cursor: pointer;
     background: none;
     border: 0;
     font-family: inherit;
+    font-weight: 500;
     padding: 0;
   }
-  .auth-link:hover {
-    color: var(--color-zinc-300);
+  .auth-link:hover:not(:disabled) {
+    color: var(--accent);
+    text-decoration-color: var(--accent);
   }
+  .auth-link:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
   .nav-link {
-    font-size: 0.75rem;
+    font-size: 14px;
     text-transform: lowercase;
-    letter-spacing: 0.025em;
-    color: var(--color-zinc-500);
-    transition: color 0.15s;
+    color: var(--muted);
+    text-decoration: none;
+    font-weight: 500;
+    transition: color 0.15s ease;
   }
   .nav-link:hover {
-    color: var(--color-zinc-300);
+    color: var(--accent);
   }
   .nav-link-active {
-    color: var(--color-zinc-200);
+    color: var(--text-heading);
+    font-weight: 600;
     text-decoration: underline;
+    text-decoration-color: var(--accent);
     text-decoration-thickness: 1px;
-    text-underline-offset: 8px;
+    text-underline-offset: 6px;
   }
-  /* Admin surfaces reuse the same language at a denser scale. */
+
+  /* Admin surfaces use vefacaglar.com's button & chip primitives at a compact scale. */
   .admin-btn {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 0.4rem;
     border-radius: 0;
-    background: var(--color-zinc-300);
-    padding: 0.45rem 0.8rem;
-    font-size: 0.75rem;
+    background: var(--text-heading);
+    padding: 6px 14px;
+    font-size: 13px;
+    line-height: 1.4;
     font-weight: 700;
-    color: var(--color-zinc-950);
+    color: var(--bg);
     text-transform: lowercase;
     font-family: inherit;
     cursor: pointer;
-    border: 1px solid var(--color-zinc-300);
-    transition: background-color 0.15s;
+    border: 1px solid var(--text-heading);
+    text-decoration: none;
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.15s ease;
     white-space: nowrap;
   }
   .admin-btn:hover:not(:disabled) {
-    background: var(--color-zinc-400);
-    border-color: var(--color-zinc-400);
+    opacity: 0.9;
+    transform: translateY(-1px);
+  }
+  .admin-btn:active:not(:disabled) {
+    transform: translateY(0);
   }
   .admin-btn:disabled {
-    opacity: 0.6;
-    cursor: default;
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   .admin-btn-ghost {
     background: transparent;
-    color: var(--color-zinc-400);
-    border: 1px solid rgb(39 39 42 / 0.9);
+    color: var(--text);
+    border: 1px solid var(--border);
+    font-weight: 500;
   }
   .admin-btn-ghost:hover:not(:disabled) {
-    background: #1a1a1a;
-    border-color: var(--color-zinc-600);
-    color: var(--color-zinc-200);
+    background-color: var(--border);
+    border-color: var(--text-heading);
+    color: var(--text-heading);
+    opacity: 1;
+    transform: translateY(-1px);
   }
   .admin-btn-danger {
     background: transparent;
-    color: var(--color-red-400);
-    border: 1px solid rgb(127 29 29 / 0.8);
+    color: var(--accent);
+    border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+    font-weight: 500;
   }
   .admin-btn-danger:hover:not(:disabled) {
-    background: rgb(69 10 10 / 0.35);
-    border-color: var(--color-red-500);
-    color: var(--color-red-300);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border-color: var(--accent);
+    color: var(--text-heading);
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+
+  /* Filter chips matching vefacaglar.com jobs.module.css */
+  .chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 12px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    color: var(--muted);
+    text-transform: lowercase;
+    text-decoration: none;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+  }
+  .chip:hover:not(:disabled) {
+    color: var(--text-heading);
+    border-color: var(--muted);
+  }
+  .chip-active {
+    color: var(--text-heading);
+    border-color: var(--text-heading);
+    font-weight: 600;
+  }
+  .chip:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* Error & success banners matching vefacaglar.com globals.css */
+  .errorMsg {
+    color: var(--accent);
+    padding: 12px 16px;
+    border: 1px solid var(--accent);
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    border-radius: 0;
+    font-size: 13px;
+  }
+  .successMsg {
+    color: var(--success);
+    padding: 12px 16px;
+    border: 1px solid var(--success);
+    background: color-mix(in srgb, var(--success) 8%, transparent);
+    border-radius: 0;
+    font-size: 13px;
   }
 }

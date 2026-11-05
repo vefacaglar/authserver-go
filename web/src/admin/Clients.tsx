@@ -375,23 +375,23 @@ export default function Clients() {
     return (
       <form onSubmit={onSubmit} className="space-y-6 max-w-5xl">
         {/* Top Action Bar */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-zinc-800">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-[var(--border)]">
           <div className="space-y-1">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <button
                 type="button"
-                className="text-xs text-zinc-500 hover:text-zinc-200 lowercase"
+                className="text-xs text-[var(--muted)] hover:text-[var(--accent)] lowercase cursor-pointer bg-transparent border-0 p-0 transition-colors"
                 onClick={() => setView({ kind: "list" })}
               >
                 ← clients
               </button>
-              <span className="text-zinc-700">/</span>
-              <h1 className="text-lg font-bold text-zinc-200 tracking-tight lowercase">
+              <span className="text-[var(--border)]">|</span>
+              <h1 className="text-[20px] font-semibold text-[var(--text-heading)] lowercase m-0">
                 {view.isEdit ? f.display_name || f.client_id : "register new client"}
               </h1>
               {view.isEdit && <Badge tone="zinc">{f.profile}</Badge>}
             </div>
-            <p className="text-xs text-zinc-500 lowercase">
+            <p className="text-[13px] text-[var(--muted)] lowercase m-0">
               {view.isEdit
                 ? `client_id: ${f.client_id}`
                 : "choose your application type below — protocol flags and scopes will be configured automatically."}
@@ -423,17 +423,19 @@ export default function Clients() {
 
         {view.tab === "quickstart" && view.isEdit ? (
           <div className="space-y-6">
-            <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-4">
+            <section className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-sm font-bold text-zinc-200 lowercase">oidc endpoints & client credentials</h2>
-                  <p className="text-xs text-zinc-500 lowercase mt-0.5">
+                  <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase m-0">
+                    oidc endpoints & client credentials
+                  </h2>
+                  <p className="text-xs text-[var(--muted)] lowercase mt-1 m-0">
                     copy these values into your application’s oauth2 / openid connect configuration.
                   </p>
                 </div>
                 <Badge tone="emerald">{f.profile}</Badge>
               </div>
-              <div className="divide-y divide-zinc-800/60 border border-zinc-800 bg-[#121212] text-xs">
+              <div className="divide-y divide-[var(--border)] border border-[var(--border)] bg-[var(--bg)] text-xs">
                 {[
                   ["client_id", f.client_id],
                   ["issuer / authority", origin],
@@ -445,17 +447,19 @@ export default function Clients() {
                   ["jwks uri", `${origin}/.well-known/jwks.json`],
                 ].map(([label, val]) => (
                   <div key={label} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 py-2.5">
-                    <span className="text-zinc-500 lowercase w-48 shrink-0">{label}</span>
-                    <code className="text-zinc-200 break-all flex-1">{val}</code>
+                    <span className="text-[var(--muted)] lowercase w-48 shrink-0">{label}</span>
+                    <code className="text-[var(--text-heading)] break-all flex-1">{val}</code>
                     <CopyButton value={val} />
                   </div>
                 ))}
               </div>
             </section>
 
-            <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-3">
+            <section className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-3">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-bold text-zinc-200 lowercase">ready-to-use .env snippet</h2>
+                <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase m-0">
+                  ready-to-use .env snippet
+                </h2>
                 <CopyButton
                   label="copy .env"
                   value={[
@@ -468,7 +472,7 @@ export default function Clients() {
                     .join("\n")}
                 />
               </div>
-              <pre className="p-4 bg-[#121212] border border-zinc-800 text-xs text-zinc-300 overflow-x-auto leading-relaxed">
+              <pre className="p-4 bg-[var(--bg)] border border-[var(--border)] text-xs text-[var(--text)] overflow-x-auto leading-relaxed m-0">
                 {[
                   `OIDC_ISSUER=${origin}`,
                   `OIDC_CLIENT_ID=${f.client_id}`,
@@ -482,10 +486,10 @@ export default function Clients() {
           </div>
         ) : view.tab === "lifetimes" ? (
           <div className="space-y-6">
-            <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-4">
+            <section className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-4">
               <div>
-                <h2 className="text-sm font-bold text-zinc-200 lowercase">token lifetimes</h2>
-                <p className="text-xs text-zinc-500 lowercase mt-0.5">
+                <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase m-0">token lifetimes</h2>
+                <p className="text-xs text-[var(--muted)] lowercase mt-1 m-0">
                   pick a preset duration or leave on server default.
                 </p>
               </div>
@@ -534,8 +538,8 @@ export default function Clients() {
                         { label: "180 days", seconds: 15552000 },
                       ]}
                     />
-                    <div className="border border-zinc-800/80 bg-[#121212] p-3.5 space-y-2.5">
-                      <span className="text-xs text-zinc-400 lowercase block">refresh expiration mode</span>
+                    <div className="border border-[var(--border)] bg-[var(--bg)] p-4 space-y-3">
+                      <span className="text-xs text-[var(--muted)] lowercase block">refresh expiration mode</span>
                       <div className="grid grid-cols-2 gap-2">
                         {[
                           { val: 0, title: "sliding window", desc: "extends lifetime on each token refresh up to absolute max" },
@@ -545,14 +549,14 @@ export default function Clients() {
                             key={opt.val}
                             type="button"
                             onClick={() => set({ refresh_expiration: opt.val })}
-                            className={`p-3 border text-left transition-colors ${
+                            className={`p-3 border text-left transition-colors cursor-pointer bg-[var(--bg)] ${
                               f.refresh_expiration === opt.val
-                                ? "bg-zinc-800/50 border-zinc-400 text-zinc-100"
-                                : "bg-[#1a1a1a] border-zinc-800 text-zinc-400 hover:border-zinc-700"
+                                ? "border-[var(--accent)] text-[var(--text-heading)]"
+                                : "border-[var(--border)] text-[var(--text)] hover:border-[var(--muted)]"
                             }`}
                           >
-                            <div className="text-xs font-bold lowercase">{opt.title}</div>
-                            <div className="text-[10px] text-zinc-500 lowercase mt-1">{opt.desc}</div>
+                            <div className="text-xs font-semibold lowercase">{opt.title}</div>
+                            <div className="text-[11px] text-[var(--muted)] lowercase mt-1">{opt.desc}</div>
                           </button>
                         ))}
                       </div>
@@ -562,10 +566,12 @@ export default function Clients() {
               </div>
             </section>
 
-            <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-4">
+            <section className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-4">
               <div>
-                <h2 className="text-sm font-bold text-zinc-200 lowercase">custom metadata properties</h2>
-                <p className="text-xs text-zinc-500 lowercase mt-0.5">
+                <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase m-0">
+                  custom metadata properties
+                </h2>
+                <p className="text-xs text-[var(--muted)] lowercase mt-1 m-0">
                   optional key-value tags stored with this client (e.g. owning team, environment, internal notes).
                 </p>
               </div>
@@ -576,11 +582,13 @@ export default function Clients() {
           /* Main Settings Tab (or Create Flow) */
           <div className="space-y-6">
             {/* Step 1: Archetype Selector */}
-            <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-4">
+            <section className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-sm font-bold text-zinc-200 lowercase">1. what type of application is this?</h2>
-                  <p className="text-xs text-zinc-500 lowercase mt-0.5">
+                  <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase m-0">
+                    1. what type of application is this?
+                  </h2>
+                  <p className="text-xs text-[var(--muted)] lowercase mt-1 m-0">
                     select an application profile — we’ll set the right oauth2 grants and security defaults for you.
                   </p>
                 </div>
@@ -594,29 +602,29 @@ export default function Clients() {
                       key={arch.id}
                       type="button"
                       onClick={() => setView({ ...view, form: applyArchetype(f, arch.id) })}
-                      className={`p-4 border text-left transition-colors flex flex-col justify-between gap-3 cursor-pointer ${
+                      className={`p-4 border text-left transition-all flex flex-col justify-between gap-3 cursor-pointer bg-[var(--bg)] ${
                         active
-                          ? "bg-zinc-800/45 border-zinc-300"
-                          : "bg-[#121212] border-zinc-800 hover:border-zinc-600"
+                          ? "border-[var(--accent)]"
+                          : "border-[var(--border)] hover:border-[var(--muted)]"
                       }`}
                     >
                       <div className="space-y-2">
                         <div className="flex items-center justify-between gap-2">
-                          <Icon className={`w-4 h-4 ${active ? "text-zinc-100" : "text-zinc-500"}`} />
+                          <Icon className={`w-4 h-4 ${active ? "text-[var(--accent)]" : "text-[var(--muted)]"}`} />
                           <span
-                            className={`text-[10px] px-1.5 py-0.5 border lowercase ${
+                            className={`text-[11px] px-2 py-0.5 border lowercase ${
                               active
-                                ? "bg-zinc-300 text-zinc-950 border-zinc-300 font-bold"
-                                : "border-zinc-800 text-zinc-500"
+                                ? "bg-[var(--text-heading)] text-[var(--bg)] border-[var(--text-heading)] font-semibold"
+                                : "border-[var(--border)] text-[var(--muted)]"
                             }`}
                           >
                             {arch.badge}
                           </span>
                         </div>
-                        <div className="text-sm font-bold text-zinc-100 lowercase">{arch.title}</div>
-                        <div className="text-[11px] text-zinc-400 lowercase">{arch.subtitle}</div>
+                        <div className="text-[14px] font-semibold text-[var(--text-heading)] lowercase">{arch.title}</div>
+                        <div className="text-[12px] text-[var(--muted)] lowercase">{arch.subtitle}</div>
                       </div>
-                      <p className="text-[11px] text-zinc-500 lowercase leading-relaxed border-t border-zinc-800/60 pt-2">
+                      <p className="text-[12px] text-[var(--muted)] lowercase leading-relaxed border-t border-[var(--border)] pt-2 m-0">
                         {arch.details}
                       </p>
                     </button>
@@ -626,10 +634,12 @@ export default function Clients() {
             </section>
 
             {/* Step 2: Identity (Name & Client ID) */}
-            <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-4">
+            <section className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-4">
               <div>
-                <h2 className="text-sm font-bold text-zinc-200 lowercase">2. application identity</h2>
-                <p className="text-xs text-zinc-500 lowercase mt-0.5">
+                <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase m-0">
+                  2. application identity
+                </h2>
+                <p className="text-xs text-[var(--muted)] lowercase mt-1 m-0">
                   give your app a human-readable name and a unique client_id used in oauth requests.
                 </p>
               </div>
@@ -647,7 +657,7 @@ export default function Clients() {
                       set({ display_name: name, client_id: nextId });
                     }}
                   />
-                  <p className="text-[11px] text-zinc-500 lowercase mt-1">
+                  <p className="text-[12px] text-[var(--muted)] lowercase mt-1.5 m-0">
                     shown on login and consent screens.
                   </p>
                 </div>
@@ -667,7 +677,7 @@ export default function Clients() {
                       set({ client_id: e.target.value });
                     }}
                   />
-                  <p className="text-[11px] text-zinc-500 lowercase mt-1">
+                  <p className="text-[12px] text-[var(--muted)] lowercase mt-1.5 m-0">
                     {view.isEdit
                       ? "client_id cannot be changed after creation."
                       : "auto-filled from the name above, or type your own."}
@@ -678,10 +688,12 @@ export default function Clients() {
 
             {/* Step 3: Callback URLs (only for interactive apps: SPA / Web / Custom) */}
             {needsCallbacks && (
-              <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-5">
+              <section className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-5">
                 <div>
-                  <h2 className="text-sm font-bold text-zinc-200 lowercase">3. sign-in & sign-out redirect urls</h2>
-                  <p className="text-xs text-zinc-500 lowercase mt-0.5">
+                  <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase m-0">
+                    3. sign-in & sign-out redirect urls
+                  </h2>
+                  <p className="text-xs text-[var(--muted)] lowercase mt-1 m-0">
                     for security, we only redirect users to exact urls registered here. type a url and press enter or click add.
                   </p>
                 </div>
@@ -719,14 +731,14 @@ export default function Clients() {
 
             {/* Step 4: Client Keypair / Authentication (for Confidential Web & M2M) */}
             {needsJwks && (
-              <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-4">
+              <section className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <div>
-                    <h2 className="text-sm font-bold text-zinc-200 lowercase flex items-center gap-2">
-                      <KeyRound className="w-4 h-4 text-amber-400" />
+                    <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase flex items-center gap-2 m-0">
+                      <KeyRound className="w-4 h-4 text-[var(--accent)]" />
                       {needsCallbacks ? "4." : "3."} client keypair authentication (private_key_jwt)
                     </h2>
-                    <p className="text-xs text-zinc-500 lowercase mt-0.5">
+                    <p className="text-xs text-[var(--muted)] lowercase mt-1 m-0">
                       instead of a shared password, your backend signs a short-lived jwt with its private key; we verify it using the public jwks below.
                     </p>
                   </div>
@@ -751,13 +763,13 @@ export default function Clients() {
                 </div>
 
                 {generatedKey && (
-                  <div className="border border-amber-700/80 bg-amber-950/20 p-4 space-y-3">
+                  <div className="border border-[var(--accent)] bg-[var(--accent)]/5 p-4 space-y-3">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                       <div>
-                        <span className="text-xs font-bold text-amber-300 lowercase block">
+                        <span className="text-xs font-semibold text-[var(--accent)] lowercase block">
                           save your private key now (kid: {generatedKey.kid})
                         </span>
-                        <span className="text-[11px] text-zinc-400 lowercase">
+                        <span className="text-[12px] text-[var(--muted)] lowercase">
                           the public key has been filled into this client automatically. the private key below is never stored on the server.
                         </span>
                       </div>
@@ -773,15 +785,15 @@ export default function Clients() {
                         </button>
                       </div>
                     </div>
-                    <pre className="p-3 bg-[#121212] border border-zinc-800 text-[10px] text-zinc-300 overflow-x-auto max-h-40 select-all">
+                    <pre className="p-3 bg-[var(--bg)] border border-[var(--border)] text-[11px] text-[var(--text)] overflow-x-auto max-h-40 select-all m-0">
                       {generatedKey.private_key_pem}
                     </pre>
                   </div>
                 )}
 
                 {!generatedKey && f.jwks_json && !showRawJwks && (
-                  <div className="flex items-center justify-between border border-emerald-900/60 bg-emerald-950/20 px-4 py-3 text-xs">
-                    <span className="text-emerald-400 lowercase">
+                  <div className="flex items-center justify-between border border-[var(--success)] bg-[var(--success)]/10 px-4 py-3 text-xs">
+                    <span className="text-[var(--success)] lowercase">
                       ✓ public jwks keyset is configured for this client.
                     </span>
                     <button type="button" className="auth-link" onClick={() => setShowRawJwks(true)}>
@@ -805,13 +817,13 @@ export default function Clients() {
             )}
 
             {/* Step 5: Permissions / Scopes */}
-            <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-4">
+            <section className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-sm font-bold text-zinc-200 lowercase">
+                  <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase m-0">
                     {needsCallbacks && needsJwks ? "5." : needsCallbacks || needsJwks ? "4." : "3."} permissions & scopes (allowed_scopes)
                   </h2>
-                  <p className="text-xs text-zinc-500 lowercase mt-0.5">
+                  <p className="text-xs text-[var(--muted)] lowercase mt-1 m-0">
                     choose which user claims and token capabilities this client is allowed to request.
                   </p>
                 </div>
@@ -848,15 +860,15 @@ export default function Clients() {
             </section>
 
             {/* Step 6: Protocol Capabilities & Overrides */}
-            <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-4">
+            <section className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-sm font-bold text-zinc-200 lowercase flex items-center gap-2">
-                    <Sliders className="w-4 h-4 text-zinc-400" />
+                  <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase flex items-center gap-2 m-0">
+                    <Sliders className="w-4 h-4 text-[var(--muted)]" />
                     security & grant capabilities
                   </h2>
-                  <p className="text-xs text-zinc-500 lowercase mt-0.5">
-                    automatically pre-configured for the <span className="text-zinc-300">{f.profile}</span> profile — toggle below if you need a custom hybrid setup.
+                  <p className="text-xs text-[var(--muted)] lowercase mt-1 m-0">
+                    automatically pre-configured for the <span className="text-[var(--text-heading)]">{f.profile}</span> profile — toggle below if you need a custom hybrid setup.
                   </p>
                 </div>
               </div>
@@ -894,7 +906,7 @@ export default function Clients() {
         )}
 
         {/* Bottom Action Bar (Danger Zone on left, Save/Cancel on right) */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-4 border-t border-zinc-800">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-4 border-t border-[var(--border)]">
           <div>
             {view.isEdit && (
               <button
@@ -943,10 +955,10 @@ export default function Clients() {
 
   return (
     <>
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">clients</h1>
-          <p className="text-xs text-zinc-500 lowercase mt-0.5">
+          <h1 className="text-[20px] font-semibold text-[var(--text-heading)] lowercase m-0">clients</h1>
+          <p className="text-[13px] text-[var(--muted)] lowercase mt-1 m-0">
             registered oauth2 and openid connect applications ({list.total} total)
           </p>
         </div>
@@ -963,7 +975,7 @@ export default function Clients() {
         onSearch={setSearch}
         searchPlaceholder="filter by client_id, name, or callback url…"
         filters={
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             {[
               { id: "all", label: "all" },
               { id: "spa", label: "spa / public" },
@@ -974,11 +986,7 @@ export default function Clients() {
                 key={f.id}
                 type="button"
                 onClick={() => setProfileFilter(f.id)}
-                className={`px-2.5 py-1 text-xs border lowercase transition-colors ${
-                  profileFilter === f.id
-                    ? "bg-zinc-300 text-zinc-950 border-zinc-300 font-bold"
-                    : "bg-[#1a1a1a] text-zinc-400 border-zinc-800 hover:border-zinc-600"
-                }`}
+                className={`chip ${profileFilter === f.id ? "chip-active" : ""}`}
               >
                 {f.label}
               </button>
@@ -1004,15 +1012,17 @@ export default function Clients() {
             {visible.map((c) => {
               const prof = detectProfile(c);
               return (
-                <tr key={c.client_id} className="hover:bg-zinc-800/20">
+                <tr key={c.client_id} className="hover:bg-[var(--border)]/35 transition-colors">
                   <td className="p-4">
                     <button
                       type="button"
                       onClick={() => void openEdit(c.client_id)}
-                      className="text-left group block"
+                      className="text-left group block cursor-pointer bg-transparent border-0 p-0"
                     >
-                      <span className="text-zinc-100 font-bold group-hover:underline">{c.display_name || c.client_id}</span>
-                      <span className="block text-xs text-zinc-500 mt-0.5">{c.client_id}</span>
+                      <span className="text-[var(--text-heading)] font-semibold group-hover:text-[var(--accent)] transition-colors">
+                        {c.display_name || c.client_id}
+                      </span>
+                      <span className="block text-xs text-[var(--muted)] mt-0.5">{c.client_id}</span>
                     </button>
                   </td>
                   <td className="p-4 whitespace-nowrap">
@@ -1020,24 +1030,24 @@ export default function Clients() {
                       {prof === "spa" ? "spa · public" : prof === "m2m" ? "m2m · service" : prof === "web" ? "web · confidential" : "custom"}
                     </Badge>
                   </td>
-                  <td className="p-4 text-xs text-zinc-400">
+                  <td className="p-4 text-xs text-[var(--text)]">
                     {prof === "m2m" ? (
-                      <span className="text-zinc-500">client_credentials (no browser redirect)</span>
+                      <span className="text-[var(--muted)]">client_credentials (no browser redirect)</span>
                     ) : c.redirect_uris?.length ? (
                       <span className="break-all">
                         {c.redirect_uris[0]}
                         {c.redirect_uris.length > 1 && (
-                          <span className="text-zinc-500 ml-1">(+{c.redirect_uris.length - 1} more)</span>
+                          <span className="text-[var(--muted)] ml-1">(+{c.redirect_uris.length - 1} more)</span>
                         )}
                       </span>
                     ) : (
-                      <span className="text-amber-400">no callback url set</span>
+                      <span className="text-[var(--warning)]">no callback url set</span>
                     )}
                   </td>
-                  <td className="p-4 text-zinc-400 text-xs">
+                  <td className="p-4 text-[var(--muted)] text-xs">
                     <div className="flex flex-wrap gap-1">
                       {(c.allowed_scopes ?? []).map((s) => (
-                        <span key={s} className="px-1.5 py-0.5 bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-400">
+                        <span key={s} className="px-1.5 py-0.5 bg-[var(--bg)] border border-[var(--border)] text-[11px] text-[var(--muted)]">
                           {s}
                         </span>
                       ))}
@@ -1065,7 +1075,7 @@ export default function Clients() {
             })}
             {visible.length === 0 && (
               <tr>
-                <td colSpan={5} className="p-6 text-sm text-zinc-500 lowercase text-center">
+                <td colSpan={5} className="p-6 text-sm text-[var(--muted)] lowercase text-center">
                   no clients match your filter.
                 </td>
               </tr>

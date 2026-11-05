@@ -8,27 +8,31 @@ import type { HomeLogin, HomeView } from "../lib/types";
 
 function LoginTable({ rows, empty }: { rows: HomeLogin[]; empty: string }) {
   if (rows.length === 0) {
-    return <p className="text-sm text-zinc-500 lowercase">{empty}</p>;
+    return <p className="text-sm text-[var(--muted)] lowercase m-0">{empty}</p>;
   }
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-left text-sm">
+      <table className="w-full text-left text-[14px] border-collapse">
         <thead>
-          <tr className="text-xs text-zinc-500 lowercase">
-            <th className="pb-2 pr-4 font-normal">when</th>
-            <th className="pb-2 pr-4 font-normal">device</th>
-            <th className="pb-2 font-normal">ip address</th>
+          <tr className="text-[13px] text-[var(--muted)] lowercase border-b border-[var(--border)]">
+            <th className="py-2 pr-4 font-normal">when</th>
+            <th className="py-2 pr-4 font-normal">device</th>
+            <th className="py-2 font-normal">ip address</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-zinc-800/60">
+        <tbody className="divide-y divide-[var(--border)]">
           {rows.map((l, i) => (
-            <tr key={i}>
-              <td className="py-2 pr-4 whitespace-nowrap text-zinc-300">
+            <tr key={i} className="hover:bg-[var(--border)]/35 transition-colors">
+              <td className="py-3 pr-4 whitespace-nowrap text-[var(--text)]">
                 {formatUTC(l.when)}
-                {l.current && <span className="ml-2 text-xs text-zinc-500 lowercase">this sign-in</span>}
+                {l.current && (
+                  <span className="ml-2 px-1.5 py-0.5 text-[11px] text-[var(--success)] bg-[var(--success)]/15 lowercase">
+                    this sign-in
+                  </span>
+                )}
               </td>
-              <td className="py-2 pr-4 text-zinc-300">{l.device}</td>
-              <td className="py-2 text-zinc-300 break-all">{l.ip}</td>
+              <td className="py-3 pr-4 text-[var(--text)]">{l.device}</td>
+              <td className="py-3 text-[var(--text)] break-all">{l.ip}</td>
             </tr>
           ))}
         </tbody>
@@ -52,7 +56,9 @@ export default function Home() {
       {home && (
         <>
           <section>
-            <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">welcome, {home.username}</h1>
+            <h1 className="text-[20px] font-semibold text-[var(--text-heading)] lowercase m-0">
+              welcome, {home.username}
+            </h1>
           </section>
 
           <Section
@@ -78,7 +84,9 @@ export default function Home() {
           <Section title="recent failed sign-ins">
             <LoginTable rows={home.failed_logins} empty="no failed sign-ins recorded." />
             {home.failed_logins.length > 0 && (
-              <p className="mt-4 text-xs text-zinc-500 lowercase">if this wasn&apos;t you, change your password.</p>
+              <p className="mt-4 text-[13px] text-[var(--accent)] lowercase m-0">
+                if this wasn&apos;t you, change your password.
+              </p>
             )}
           </Section>
         </>

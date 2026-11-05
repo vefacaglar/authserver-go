@@ -1,10 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
-import "@fontsource/jetbrains-mono/latin-400.css";
-import "@fontsource/jetbrains-mono/latin-700.css";
-import "@fontsource/jetbrains-mono/latin-ext-400.css";
-import "@fontsource/jetbrains-mono/latin-ext-700.css";
 import App from "./App";
 import "./index.css";
 
@@ -12,13 +8,14 @@ import "./index.css";
 // the first paint; after it the app renders with the fallback font.
 const FONT_TIMEOUT_MS = 3000;
 
-// Render only once the UI font is ready, so the first paint already uses
-// JetBrains Mono instead of flashing the fallback font and reflowing.
+// Render only once the UI font (Fira Code) is ready, so the first paint
+// already uses the target monospace metrics instead of flashing and reflowing.
 function fontsReady(): Promise<unknown> {
   if (!("fonts" in document)) return Promise.resolve();
   const loads = Promise.all([
-    document.fonts.load('400 1em "JetBrains Mono"'),
-    document.fonts.load('700 1em "JetBrains Mono"'),
+    document.fonts.load('500 1em "Fira Code"'),
+    document.fonts.load('600 1em "Fira Code"'),
+    document.fonts.load('700 1em "Fira Code"'),
   ]).catch(() => undefined);
   const timeout = new Promise((resolve) => setTimeout(resolve, FONT_TIMEOUT_MS));
   return Promise.race([loads, timeout]);

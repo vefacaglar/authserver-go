@@ -2,19 +2,23 @@ import type { ReactNode } from "react";
 import { Link, NavLink } from "react-router";
 import { useAuth } from "../lib/auth";
 
-// Signed-in shell: top bar with the same links the old pages had
-// (home / my profile / sign out), plus an admin link for admins.
+// Signed-in shell styled after vefacaglar.com's 960px frame, minimal header, and footer mark.
 export default function AppLayout({ children }: { children: ReactNode }) {
   const { session } = useAuth();
   const linkClass = ({ isActive }: { isActive: boolean }) => `nav-link${isActive ? " nav-link-active" : ""}`;
 
   return (
-    <div className="min-h-screen bg-[#121212]">
-      <header className="border-b border-zinc-800/60">
-        <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-4 sm:px-6">
-          <Link to="/" className="text-sm font-bold text-zinc-300 lowercase tracking-tight">
-            authserver
-          </Link>
+    <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex flex-col">
+      <div className="site-frame flex-1 flex flex-col justify-between">
+        <header className="flex flex-wrap items-center justify-between gap-4 min-h-[60px] mt-6 mb-9 pb-4 border-b border-[var(--border)]">
+          <div className="inline-flex items-center gap-2 text-[14px]">
+            <Link
+              to="/"
+              className="text-[14px] font-semibold text-[var(--text-heading)] hover:text-[var(--accent)] no-underline transition-colors lowercase"
+            >
+              authserver
+            </Link>
+          </div>
           <nav className="flex items-center gap-6">
             <NavLink to="/" end className={linkClass}>
               home
@@ -31,9 +35,15 @@ export default function AppLayout({ children }: { children: ReactNode }) {
               sign out
             </Link>
           </nav>
-        </div>
-      </header>
-      <main className="mx-auto max-w-3xl space-y-8 px-4 py-10 sm:px-6">{children}</main>
+        </header>
+
+        <main className="flex-1 space-y-10 pb-20">{children}</main>
+
+        <footer className="flex items-center justify-between gap-6 py-6 border-t border-[var(--border)] text-[13px] text-[var(--muted)]">
+          <span>authserver</span>
+          {session?.username && <span className="lowercase">{session.username}</span>}
+        </footer>
+      </div>
     </div>
   );
 }

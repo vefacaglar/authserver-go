@@ -4,7 +4,7 @@ import { ApiError } from "../lib/api";
 export function ErrorBanner({ error }: { error: string | null }) {
   if (!error) return null;
   return (
-    <div className="bg-red-950/20 px-4 py-3 mb-6 border-l-2 border-red-500 text-red-400 text-xs lowercase">
+    <div className="errorMsg mb-6 lowercase">
       error: {error}
     </div>
   );
@@ -13,7 +13,7 @@ export function ErrorBanner({ error }: { error: string | null }) {
 export function StatusBanner({ text }: { text: string | null }) {
   if (!text) return null;
   return (
-    <div className="bg-emerald-950/20 px-4 py-3 mb-6 border-l-2 border-emerald-500 text-emerald-400 text-xs lowercase">
+    <div className="successMsg mb-6 lowercase">
       {text}
     </div>
   );
@@ -50,9 +50,9 @@ export function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-xs text-zinc-500 lowercase tracking-wide">{title}</h2>
+    <section className="bg-[var(--bg)] border border-[var(--border)] p-6">
+      <div className="mb-5 flex items-center justify-between gap-4 pb-3 border-b border-[var(--border)]">
+        <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase m-0">{title}</h2>
         {action}
       </div>
       {children}
@@ -65,8 +65,8 @@ export function DefinitionList({ rows }: { rows: Array<[string, ReactNode]> }) {
     <dl className="grid grid-cols-[8rem_1fr] gap-y-3 text-sm">
       {rows.map(([k, v]) => (
         <div key={k} className="contents">
-          <dt className="text-zinc-500 lowercase">{k}</dt>
-          <dd className="text-zinc-300 break-all">{v}</dd>
+          <dt className="text-[var(--muted)] lowercase">{k}</dt>
+          <dd className="text-[var(--text-heading)] break-all">{v}</dd>
         </div>
       ))}
     </dl>
@@ -93,18 +93,28 @@ export function Modal({
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 backdrop-blur-[4px] p-4"
+      onClick={onClose}
+    >
       <div
-        className={`w-full ${wide ? "max-w-2xl" : "max-w-md"} bg-[#1a1a1a] border border-zinc-800 my-8`}
+        className={`w-full ${wide ? "max-w-2xl" : "max-w-[440px]"} bg-[var(--bg)] border border-[var(--border)] p-6 shadow-[0_20px_40px_rgba(0,0,0,0.5)] my-8`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-zinc-800/60 px-5 py-3">
-          <h3 className="text-sm font-bold text-zinc-300 lowercase tracking-tight">{title}</h3>
-          <button type="button" className="auth-link" onClick={onClose} aria-label="close">
+        <div className="flex items-center justify-between border-b border-dashed border-[var(--border)] pb-3 mb-5">
+          <h3 className="text-[13px] font-semibold text-[var(--text-heading)] uppercase tracking-[0.05em] m-0">
+            {title}
+          </h3>
+          <button
+            type="button"
+            className="bg-transparent border-0 text-[var(--muted)] hover:text-[var(--text-heading)] text-lg leading-none cursor-pointer p-0 transition-colors"
+            onClick={onClose}
+            aria-label="close"
+          >
             ✕
           </button>
         </div>
-        <div className="p-5">{children}</div>
+        <div>{children}</div>
       </div>
     </div>
   );
@@ -127,8 +137,8 @@ export function ConfirmDialog({
 }) {
   return (
     <Modal title={title} onClose={onClose}>
-      <p className="text-sm text-zinc-400 lowercase mb-6">{message}</p>
-      <div className="flex justify-end gap-2">
+      <p className="text-[14px] text-[var(--text)] lowercase mb-6 leading-relaxed">{message}</p>
+      <div className="flex justify-end gap-3">
         <button type="button" className="admin-btn admin-btn-ghost" onClick={onClose} disabled={busy}>
           cancel
         </button>
@@ -143,7 +153,7 @@ export function ConfirmDialog({
 export function EmptyRow({ colSpan, text }: { colSpan: number; text: string }) {
   return (
     <tr>
-      <td colSpan={colSpan} className="py-3 text-sm text-zinc-500 lowercase">
+      <td colSpan={colSpan} className="py-4 text-sm text-[var(--muted)] lowercase">
         {text}
       </td>
     </tr>
@@ -151,5 +161,5 @@ export function EmptyRow({ colSpan, text }: { colSpan: number; text: string }) {
 }
 
 export function Loading({ text = "loading…" }: { text?: string }) {
-  return <p className="text-sm text-zinc-500 lowercase">{text}</p>;
+  return <p className="text-sm text-[var(--muted)] lowercase">{text}</p>;
 }

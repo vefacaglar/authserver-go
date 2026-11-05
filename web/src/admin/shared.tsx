@@ -33,8 +33,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             key={t.id}
             className={
               t.kind === "error"
-                ? "border border-red-900 bg-red-950/90 text-red-300 px-4 py-3 text-xs lowercase"
-                : "border border-zinc-700 bg-zinc-300 text-zinc-950 px-4 py-3 text-xs font-bold lowercase"
+                ? "border border-[var(--accent)] bg-[var(--bg)] text-[var(--accent)] px-4 py-3 text-xs lowercase"
+                : "border border-[var(--text-heading)] bg-[var(--text-heading)] text-[var(--bg)] px-4 py-3 text-xs font-bold lowercase"
             }
           >
             {t.message}
@@ -71,13 +71,13 @@ export function CopyButton({ value, label = "copy" }: { value: string; label?: s
       className="admin-btn admin-btn-ghost py-1 px-2 text-[11px]"
       title="copy to clipboard"
     >
-      {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+      {copied ? <Check className="w-3 h-3 text-[var(--success)]" /> : <Copy className="w-3 h-3" />}
       {copied ? "copied" : label}
     </button>
   );
 }
 
-// --- custom square toggle switch & card (replaces native browser checkboxes) ---
+// --- custom square toggle switch & card (styled after vefacaglar.com jobs.module.css) ---
 
 export function SquareToggle({
   checked,
@@ -89,15 +89,15 @@ export function SquareToggle({
   return (
     <span
       aria-hidden="true"
-      className={`inline-flex items-center w-9 h-5 p-0.5 border transition-colors shrink-0 ${
+      className={`inline-flex items-center w-[30px] h-[16px] p-[2px] border transition-colors shrink-0 ${
         disabled ? "opacity-50" : ""
       } ${
         checked
-          ? "bg-zinc-300 border-zinc-300 justify-end"
-          : "bg-[#121212] border-zinc-700 justify-start"
+          ? "bg-[var(--success)]/20 border-[var(--success)] justify-end"
+          : "bg-transparent border-[var(--muted)] justify-start"
       }`}
     >
-      <span className={`w-3.5 h-3.5 ${checked ? "bg-zinc-950" : "bg-zinc-600"}`} />
+      <span className={`w-[10px] h-[10px] ${checked ? "bg-[var(--success)]" : "bg-[var(--muted)]"}`} />
     </span>
   );
 }
@@ -122,22 +122,22 @@ export function ToggleCard({
       type="button"
       disabled={disabled}
       onClick={() => !disabled && onChange(!checked)}
-      className={`w-full text-left p-3.5 border transition-colors flex items-start justify-between gap-4 ${
+      className={`w-full text-left p-4 border transition-colors flex items-start justify-between gap-4 ${
         disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
       } ${
         checked
-          ? "bg-zinc-800/35 border-zinc-500"
-          : "bg-[#121212] border-zinc-800 hover:border-zinc-700"
+          ? "bg-[var(--bg)] border-[var(--accent)]"
+          : "bg-[var(--bg)] border-[var(--border)] hover:border-[var(--muted)]"
       }`}
     >
       <div className="min-w-0 space-y-1">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className={`text-xs font-bold lowercase ${checked ? "text-zinc-100" : "text-zinc-300"}`}>
+          <span className={`text-[13px] font-semibold lowercase ${checked ? "text-[var(--text-heading)]" : "text-[var(--text)]"}`}>
             {title}
           </span>
           {badge}
         </div>
-        {description && <p className="text-[11px] text-zinc-500 lowercase leading-relaxed">{description}</p>}
+        {description && <p className="text-[12px] text-[var(--muted)] lowercase leading-relaxed m-0">{description}</p>}
       </div>
       <SquareToggle checked={checked} disabled={disabled} />
     </button>
@@ -219,10 +219,10 @@ export function UriListEditor({
           add url
         </button>
       </div>
-      {err && <p className="text-[11px] text-red-400 lowercase">{err}</p>}
+      {err && <p className="text-[12px] text-[var(--accent)] lowercase m-0">{err}</p>}
       {presets.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[10px] text-zinc-600 lowercase">quick add:</span>
+          <span className="text-[11px] text-[var(--muted)] lowercase">quick add:</span>
           {presets.map((p) => {
             const exists = items.includes(p.url);
             return (
@@ -231,7 +231,7 @@ export function UriListEditor({
                 type="button"
                 disabled={exists}
                 onClick={() => addUrl(p.url)}
-                className="text-[10px] px-2 py-0.5 border border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200 disabled:opacity-40 lowercase"
+                className="chip text-[11px] py-0.5 px-2"
               >
                 + {p.label}
               </button>
@@ -240,18 +240,18 @@ export function UriListEditor({
         </div>
       )}
       {items.length === 0 ? (
-        <div className="border border-dashed border-zinc-800/80 px-3 py-2.5 text-xs text-zinc-600 lowercase">
+        <div className="border border-dashed border-[var(--border)] px-3 py-2.5 text-xs text-[var(--muted)] lowercase">
           {emptyHint}
         </div>
       ) : (
-        <div className="divide-y divide-zinc-800/60 border border-zinc-800 bg-[#121212]">
+        <div className="divide-y divide-[var(--border)] border border-[var(--border)] bg-[var(--bg)]">
           {items.map((u) => (
             <div key={u} className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
-              <span className="text-zinc-200 break-all">{u}</span>
+              <span className="text-[var(--text-heading)] break-all">{u}</span>
               <button
                 type="button"
                 onClick={() => onChange(items.filter((x) => x !== u))}
-                className="text-zinc-500 hover:text-red-400 p-1 shrink-0"
+                className="text-[var(--muted)] hover:text-[var(--accent)] p-1 shrink-0 cursor-pointer bg-transparent border-0"
                 title="remove url"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -309,10 +309,10 @@ export function DurationPicker({
   presets?: Array<{ label: string; seconds: number }>;
 }) {
   return (
-    <div className="border border-zinc-800/80 bg-[#121212] p-3.5 space-y-2.5">
+    <div className="border border-[var(--border)] bg-[var(--bg)] p-4 space-y-3">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-zinc-400 lowercase">{label}</span>
-        <span className="text-xs font-bold text-zinc-200 lowercase">
+        <span className="text-xs text-[var(--muted)] lowercase">{label}</span>
+        <span className="text-xs font-semibold text-[var(--text-heading)] lowercase">
           {formatDurationHuman(seconds, defaultLabel)}
         </span>
       </div>
@@ -324,11 +324,7 @@ export function DurationPicker({
               key={p.seconds}
               type="button"
               onClick={() => onChange(p.seconds)}
-              className={`px-2 py-1 text-[11px] border lowercase transition-colors ${
-                active
-                  ? "bg-zinc-300 text-zinc-950 border-zinc-300 font-bold"
-                  : "bg-[#1a1a1a] text-zinc-400 border-zinc-800 hover:border-zinc-600 hover:text-zinc-200"
-              }`}
+              className={`chip ${active ? "chip-active" : ""}`}
             >
               {p.label}
             </button>
@@ -336,7 +332,7 @@ export function DurationPicker({
         })}
       </div>
       <div className="flex items-center gap-2 pt-1">
-        <span className="text-[10px] text-zinc-600 lowercase">custom (seconds, 0 = default):</span>
+        <span className="text-[11px] text-[var(--muted)] lowercase">custom (seconds, 0 = default):</span>
         <input
           type="number"
           min={0}
@@ -425,7 +421,7 @@ export function KeyValueEditor({
   );
 }
 
-// --- Tabs bar ---
+// --- Tabs bar (styled after vefacaglar.com dashboard.module.css) ---
 
 export function Tabs<T extends string>({
   tabs,
@@ -437,7 +433,7 @@ export function Tabs<T extends string>({
   onChange: (id: T) => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-1 border-b border-zinc-800">
+    <div className="flex flex-wrap gap-6 border-b border-[var(--border)] pb-3">
       {tabs.map((t) => {
         const isCurrent = t.id === active;
         return (
@@ -445,15 +441,19 @@ export function Tabs<T extends string>({
             key={t.id}
             type="button"
             onClick={() => onChange(t.id)}
-            className={`px-4 py-2.5 text-xs lowercase transition-colors border-b-2 -mb-px ${
+            className={`text-[14px] lowercase transition-colors relative cursor-pointer bg-transparent border-0 p-0 ${
               isCurrent
-                ? "border-zinc-200 text-zinc-100 font-bold bg-[#1a1a1a]"
-                : "border-transparent text-zinc-500 hover:text-zinc-300"
+                ? "text-[var(--text-heading)] font-semibold after:content-[''] after:absolute after:-bottom-[13px] after:left-0 after:right-0 after:h-[2px] after:bg-[var(--accent)]"
+                : "text-[var(--muted)] font-medium hover:text-[var(--text)]"
             }`}
           >
             {t.label}
             {typeof t.count === "number" && (
-              <span className="ml-2 px-1.5 py-0.2 bg-zinc-800 text-zinc-400 text-[10px]">
+              <span
+                className={`ml-2 px-1.5 py-0.5 border border-[var(--border)] text-[11px] tabular-nums ${
+                  isCurrent ? "text-[var(--accent)]" : "text-[var(--muted)]"
+                }`}
+              >
                 {t.count}
               </span>
             )}
@@ -513,8 +513,8 @@ export function Pagination({
   const pages = Math.max(1, Math.ceil(total / pageSize));
   if (pages <= 1) return null;
   return (
-    <div className="flex items-center justify-between mt-4 text-xs lowercase">
-      <span className="text-zinc-500">
+    <div className="flex items-center justify-between mt-5 text-[13px] lowercase">
+      <span className="text-[var(--muted)]">
         page {page} of {pages} — {total} total
       </span>
       <div className="flex gap-2">
@@ -552,11 +552,11 @@ export function ListHeader({
       <div className="flex flex-wrap items-center gap-2 flex-1">
         {onSearch && (
           <div className="relative max-w-xs w-full">
-            <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-zinc-600" />
+            <Search className="absolute left-3 top-2.5 w-4 h-4 text-[var(--muted)]" />
             <input
               type="text"
               placeholder={searchPlaceholder ?? "search…"}
-              className="input pl-8"
+              className="input pl-9"
               value={search ?? ""}
               onChange={(e) => onSearch(e.target.value)}
             />
@@ -571,13 +571,13 @@ export function ListHeader({
 
 export function DataTable({ head, children }: { head: ReactNode; children: ReactNode }) {
   return (
-    <div className="bg-[#1a1a1a] border border-zinc-800/60 mt-4">
+    <div className="bg-[var(--bg)] border border-[var(--border)] mt-4">
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse">
           <thead>
-            <tr className="border-b border-zinc-800/60 text-zinc-500 text-xs lowercase tracking-wide">{head}</tr>
+            <tr className="border-b border-[var(--border)] text-[var(--muted)] text-[12px] lowercase">{head}</tr>
           </thead>
-          <tbody className="divide-y divide-zinc-800/40 text-sm">{children}</tbody>
+          <tbody className="divide-y divide-[var(--border)] text-[13px]">{children}</tbody>
         </table>
       </div>
     </div>
@@ -590,12 +590,12 @@ export function Th({ children, right = false }: { children?: ReactNode; right?: 
 
 export function Badge({ tone, children }: { tone: "zinc" | "emerald" | "red" | "amber"; children: ReactNode }) {
   const tones: Record<string, string> = {
-    zinc: "bg-zinc-800/60 text-zinc-400 border border-zinc-700/60",
-    emerald: "bg-emerald-950/40 text-emerald-400 border border-emerald-900/60",
-    red: "bg-red-950/40 text-red-400 border border-red-900/60",
-    amber: "bg-amber-950/40 text-amber-400 border border-amber-900/60",
+    zinc: "bg-[var(--muted)]/15 text-[var(--muted)]",
+    emerald: "bg-[var(--success)]/15 text-[var(--success)]",
+    red: "bg-[var(--accent)]/15 text-[var(--accent)]",
+    amber: "bg-[var(--warning)]/15 text-[var(--warning)]",
   };
-  return <span className={`px-2 py-0.5 text-xs lowercase inline-block ${tones[tone]}`}>{children}</span>;
+  return <span className={`px-2 py-0.5 text-[12px] font-medium lowercase inline-block ${tones[tone]}`}>{children}</span>;
 }
 
 // ClaimsEditor edits a Type/Value claim list (user and role claims
@@ -629,13 +629,13 @@ export function ClaimsEditor({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-[10px] text-zinc-500 lowercase">standard oidc claims:</span>
+        <span className="text-[11px] text-[var(--muted)] lowercase">standard oidc claims:</span>
         {COMMON_CLAIM_TYPES.map((ct) => (
           <button
             key={ct}
             type="button"
             onClick={() => addPreset(ct)}
-            className="text-[10px] px-2 py-0.5 border border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200 lowercase"
+            className="chip text-[11px] py-0.5 px-2"
           >
             + {ct}
           </button>

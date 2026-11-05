@@ -51,7 +51,7 @@ export default function Login() {
         <StatusBanner text="your password was updated. sign in with the new password." />
       )}
       <ErrorBanner error={error} />
-      <form className="space-y-6" onSubmit={onSubmit}>
+      <form className="space-y-5" onSubmit={onSubmit}>
         <div>
           <label htmlFor="username" className="auth-label">
             username
@@ -82,20 +82,20 @@ export default function Login() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
-          <Link to="/forgot-password" className="auth-link mt-2 inline-block">
+          <Link to="/forgot-password" className="auth-link mt-2.5 inline-block">
             forgot password?
           </Link>
         </div>
-        <div>
+        <div className="pt-1">
           <button type="submit" className="auth-btn" disabled={busy}>
             {busy ? "logging in..." : "sign in"}
           </button>
         </div>
       </form>
 
-      <p className="mt-8 text-xs text-zinc-500 lowercase">
+      <p className="mt-8 text-[13px] text-[var(--muted)] lowercase m-0">
         don&apos;t have an account?
-        <Link to={registerLink} className="auth-link ml-1">
+        <Link to={registerLink} className="auth-link ml-1.5">
           register
         </Link>
       </p>

@@ -44,8 +44,8 @@ export default function Sessions() {
   return (
     <>
       <div>
-        <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">sessions</h1>
-        <p className="text-xs text-zinc-500 lowercase mt-0.5">
+        <h1 className="text-[20px] font-semibold text-[var(--text-heading)] lowercase m-0">sessions</h1>
+        <p className="text-[13px] text-[var(--muted)] lowercase mt-1 m-0">
           browser single sign-on sessions ({list.total} total)
         </p>
       </div>
@@ -55,17 +55,13 @@ export default function Sessions() {
         onSearch={setSearch}
         searchPlaceholder="filter by user_id or session_id…"
         filters={
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             {(["all", "active", "expired", "revoked"] as const).map((k) => (
               <button
                 key={k}
                 type="button"
                 onClick={() => setFilter(k)}
-                className={`px-2.5 py-1 text-xs border lowercase transition-colors ${
-                  filter === k
-                    ? "bg-zinc-300 text-zinc-950 border-zinc-300 font-bold"
-                    : "bg-[#1a1a1a] text-zinc-400 border-zinc-800 hover:border-zinc-600"
-                }`}
+                className={`chip ${filter === k ? "chip-active" : ""}`}
               >
                 {k}
               </button>
@@ -91,11 +87,11 @@ export default function Sessions() {
             {visible.map((s) => {
               const st = sessionState(s);
               return (
-                <tr key={s.id} className="hover:bg-zinc-800/20">
-                  <td className="p-4 text-zinc-300 text-xs break-all">{s.id}</td>
-                  <td className="p-4 text-zinc-100 text-xs break-all">{s.user_id}</td>
-                  <td className="p-4 text-xs text-zinc-400 whitespace-nowrap">{formatUTC(s.created_at)}</td>
-                  <td className="p-4 text-xs text-zinc-400 whitespace-nowrap">{formatUTC(s.expires_at)}</td>
+                <tr key={s.id} className="hover:bg-[var(--border)]/35 transition-colors">
+                  <td className="p-4 text-[var(--text)] text-xs break-all">{s.id}</td>
+                  <td className="p-4 text-[var(--text-heading)] text-xs break-all">{s.user_id}</td>
+                  <td className="p-4 text-xs text-[var(--muted)] whitespace-nowrap">{formatUTC(s.created_at)}</td>
+                  <td className="p-4 text-xs text-[var(--muted)] whitespace-nowrap">{formatUTC(s.expires_at)}</td>
                   <td className="p-4">
                     <Badge tone={st.tone}>{st.label}</Badge>
                   </td>
@@ -112,7 +108,7 @@ export default function Sessions() {
             })}
             {visible.length === 0 && (
               <tr>
-                <td colSpan={6} className="p-6 text-sm text-zinc-500 lowercase text-center">
+                <td colSpan={6} className="p-6 text-sm text-[var(--muted)] lowercase text-center">
                   no sessions match.
                 </td>
               </tr>

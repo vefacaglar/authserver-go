@@ -45,8 +45,8 @@ export default function Keys() {
     <>
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">signing keys</h1>
-          <p className="text-xs text-zinc-500 lowercase mt-0.5">
+          <h1 className="text-[20px] font-semibold text-[var(--text-heading)] lowercase m-0">signing keys</h1>
+          <p className="text-[13px] text-[var(--muted)] lowercase mt-1 m-0">
             rsa-2048 asymmetric keys used to sign access and id tokens. retired keys remain in jwks so existing tokens stay verifiable.
           </p>
         </div>
@@ -61,16 +61,16 @@ export default function Keys() {
       {items && (
         <div className="space-y-4">
           {items.map((k) => (
-            <section key={k.kid} className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-4">
+            <section key={k.kid} className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
-                    <h2 className="text-sm font-bold text-zinc-300 lowercase">
-                      key id: <span className="text-zinc-100">{k.kid}</span>
+                    <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase m-0">
+                      key id: {k.kid}
                     </h2>
                     <CopyButton value={k.kid} label="copy kid" />
                   </div>
-                  <p className="text-xs text-zinc-500 lowercase">
+                  <p className="text-xs text-[var(--muted)] lowercase m-0">
                     algorithm: {k.alg} · created: {formatUTC(k.created_at)}
                     {k.retired_at ? ` · retired: ${formatUTC(k.retired_at)}` : ""}
                   </p>
@@ -83,16 +83,16 @@ export default function Keys() {
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[10px] text-zinc-500 lowercase tracking-wide">public key (pem)</span>
+                  <span className="text-[11px] text-[var(--muted)] lowercase">public key (pem)</span>
                   <CopyButton value={k.public_pem} label="copy pem" />
                 </div>
-                <pre className="w-full p-4 bg-[#121212] border border-zinc-800/60 text-[10px] text-zinc-400 leading-relaxed overflow-x-auto whitespace-pre-wrap select-all">
+                <pre className="w-full p-4 bg-[var(--bg)] border border-[var(--border)] text-[11px] text-[var(--text)] leading-relaxed overflow-x-auto whitespace-pre-wrap select-all m-0">
                   {k.public_pem}
                 </pre>
               </div>
             </section>
           ))}
-          {items.length === 0 && <p className="text-sm text-zinc-500 lowercase">no signing keys yet.</p>}
+          {items.length === 0 && <p className="text-sm text-[var(--muted)] lowercase">no signing keys yet.</p>}
         </div>
       )}
 

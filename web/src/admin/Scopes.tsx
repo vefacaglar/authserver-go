@@ -114,10 +114,10 @@ export default function Scopes() {
 
   return (
     <>
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">scopes</h1>
-          <p className="text-xs text-zinc-500 lowercase mt-0.5">
+          <h1 className="text-[20px] font-semibold text-[var(--text-heading)] lowercase m-0">scopes</h1>
+          <p className="text-[13px] text-[var(--muted)] lowercase mt-1 m-0">
             oauth2 permission scopes and openid connect claim bundles
           </p>
         </div>
@@ -149,21 +149,21 @@ export default function Scopes() {
           }
         >
           {visible.map((s) => (
-            <tr key={s.name} className="hover:bg-zinc-800/20">
-              <td className="p-4 text-zinc-100 font-bold">
+            <tr key={s.name} className="hover:bg-[var(--border)]/35 transition-colors">
+              <td className="p-4 text-[var(--text-heading)] font-semibold">
                 {s.name}
                 {STANDARD_SCOPES.has(s.name) && (
-                  <span className="ml-2 text-[10px] font-normal text-zinc-500 border border-zinc-800 px-1.5 py-0.5">
+                  <span className="ml-2 text-[11px] font-normal text-[var(--muted)] border border-[var(--border)] px-1.5 py-0.5">
                     standard
                   </span>
                 )}
               </td>
-              <td className="p-4 text-zinc-300">{s.display_name || "—"}</td>
-              <td className="p-4 text-zinc-500 text-xs">{s.description || "—"}</td>
+              <td className="p-4 text-[var(--text)]">{s.display_name || "—"}</td>
+              <td className="p-4 text-[var(--muted)] text-xs">{s.description || "—"}</td>
               <td className="p-4 space-x-1.5">
                 {s.required && <Badge tone="amber">required</Badge>}
                 {s.emphasize && <Badge tone="zinc">emphasize</Badge>}
-                {!s.required && !s.emphasize && <span className="text-zinc-600 text-xs">—</span>}
+                {!s.required && !s.emphasize && <span className="text-[var(--muted)] text-xs">—</span>}
               </td>
               <td className="p-4 text-right whitespace-nowrap space-x-2">
                 <button
@@ -196,7 +196,7 @@ export default function Scopes() {
           ))}
           {visible.length === 0 && (
             <tr>
-              <td colSpan={5} className="p-6 text-sm text-zinc-500 lowercase text-center">
+              <td colSpan={5} className="p-6 text-sm text-[var(--muted)] lowercase text-center">
                 no scopes match.
               </td>
             </tr>
@@ -260,7 +260,7 @@ export default function Scopes() {
                 onChange={(property_rows) => setEditing({ ...editing, form: { ...editing.form, property_rows } })}
               />
             </div>
-            <div className="flex justify-end gap-2 pt-3 border-t border-zinc-800/60">
+            <div className="flex justify-end gap-2 pt-3 border-t border-[var(--border)]">
               <button type="button" className="admin-btn admin-btn-ghost" onClick={() => setEditing(null)}>
                 cancel
               </button>

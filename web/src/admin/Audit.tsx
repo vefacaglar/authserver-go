@@ -22,8 +22,8 @@ export default function Audit() {
   return (
     <>
       <div>
-        <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">audit logs</h1>
-        <p className="text-xs text-zinc-500 lowercase mt-0.5">
+        <h1 className="text-[20px] font-semibold text-[var(--text-heading)] lowercase m-0">audit logs</h1>
+        <p className="text-[13px] text-[var(--muted)] lowercase mt-1 m-0">
           security events, sign-ins, token revocations, and account changes ({list.total} total)
         </p>
       </div>
@@ -46,15 +46,17 @@ export default function Audit() {
           >
             {visible.map((l) => (
               <Fragment key={l.id}>
-                <tr className="hover:bg-zinc-800/20">
-                  <td className="p-4 text-xs whitespace-nowrap text-zinc-400">{formatUTCSeconds(l.timestamp)}</td>
-                  <td className="p-4 text-zinc-200 font-bold text-xs">{l.action}</td>
-                  <td className="p-4 text-zinc-300 text-xs break-all">{l.actor_user_id || "—"}</td>
+                <tr className="hover:bg-[var(--border)]/35 transition-colors">
+                  <td className="p-4 text-xs whitespace-nowrap text-[var(--muted)] tabular-nums">
+                    {formatUTCSeconds(l.timestamp)}
+                  </td>
+                  <td className="p-4 text-[var(--text-heading)] font-semibold text-xs">{l.action}</td>
+                  <td className="p-4 text-[var(--text)] text-xs break-all">{l.actor_user_id || "—"}</td>
                   <td className="p-4">
                     <Badge tone="zinc">{l.target_type}</Badge>{" "}
-                    <span className="text-xs text-zinc-400 break-all">{l.target_id}</span>
+                    <span className="text-xs text-[var(--muted)] break-all">{l.target_id}</span>
                   </td>
-                  <td className="p-4 text-xs text-zinc-400">{l.ip_address || "—"}</td>
+                  <td className="p-4 text-xs text-[var(--muted)]">{l.ip_address || "—"}</td>
                   <td className="p-4 text-right">
                     {(l.metadata || l.user_agent) && (
                       <button
@@ -69,9 +71,9 @@ export default function Audit() {
                 </tr>
                 {expanded === l.id && (
                   <tr>
-                    <td colSpan={6} className="p-4 bg-[#121212] text-xs text-zinc-400 space-y-1">
-                      {l.user_agent && <p>user agent: {l.user_agent}</p>}
-                      {l.metadata && <p>metadata: {l.metadata}</p>}
+                    <td colSpan={6} className="p-4 bg-[var(--bg)] border-t border-dashed border-[var(--border)] text-xs text-[var(--muted)] space-y-1">
+                      {l.user_agent && <p className="m-0">user agent: {l.user_agent}</p>}
+                      {l.metadata && <p className="m-0">metadata: {l.metadata}</p>}
                     </td>
                   </tr>
                 )}
@@ -79,7 +81,7 @@ export default function Audit() {
             ))}
             {visible.length === 0 && (
               <tr>
-                <td colSpan={6} className="p-6 text-sm text-zinc-500 lowercase text-center">
+                <td colSpan={6} className="p-6 text-sm text-[var(--muted)] lowercase text-center">
                   no audit entries match.
                 </td>
               </tr>

@@ -124,22 +124,22 @@ export default function Roles() {
   if (view.kind === "claims") {
     return (
       <div className="space-y-6 max-w-2xl">
-        <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
+        <div className="flex items-center justify-between pb-4 border-b border-[var(--border)]">
           <div>
             <div className="flex items-center gap-3">
               <button
                 type="button"
-                className="text-xs text-zinc-500 hover:text-zinc-200 lowercase"
+                className="text-xs text-[var(--muted)] hover:text-[var(--accent)] lowercase cursor-pointer bg-transparent border-0 p-0 transition-colors"
                 onClick={() => setView({ kind: "list" })}
               >
                 ← roles
               </button>
-              <span className="text-zinc-700">/</span>
-              <h1 className="text-lg font-bold text-zinc-200 tracking-tight lowercase">
-                role claims — <span className="text-zinc-100">{view.role.name}</span>
+              <span className="text-[var(--border)]">|</span>
+              <h1 className="text-[20px] font-semibold text-[var(--text-heading)] lowercase m-0">
+                role claims — {view.role.name}
               </h1>
             </div>
-            <p className="text-xs text-zinc-500 lowercase mt-0.5">
+            <p className="text-[13px] text-[var(--muted)] lowercase mt-1 m-0">
               claims attached to this role are inherited by every user assigned to it.
             </p>
           </div>
@@ -152,10 +152,10 @@ export default function Roles() {
             </button>
           </div>
         </div>
-        <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-5">
+        <section className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-5">
           <ErrorBanner error={formError} />
           <ClaimsEditor rows={view.rows} onChange={(rows) => setView({ ...view, rows })} />
-          <div className="flex justify-end gap-2 pt-3 border-t border-zinc-800/60">
+          <div className="flex justify-end gap-2 pt-3 border-t border-[var(--border)]">
             <button type="button" className="admin-btn admin-btn-ghost" onClick={() => setView({ kind: "list" })}>
               cancel
             </button>
@@ -174,10 +174,10 @@ export default function Roles() {
 
   return (
     <>
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">roles</h1>
-          <p className="text-xs text-zinc-500 lowercase mt-0.5">
+          <h1 className="text-[20px] font-semibold text-[var(--text-heading)] lowercase m-0">roles</h1>
+          <p className="text-[13px] text-[var(--muted)] lowercase mt-1 m-0">
             role-based access groups and inherited claim sets
           </p>
         </div>
@@ -200,9 +200,9 @@ export default function Roles() {
           }
         >
           {visible.map((r) => (
-            <tr key={r.id} className="hover:bg-zinc-800/20">
-              <td className="p-4 text-zinc-100 font-bold">{r.name}</td>
-              <td className="p-4 text-zinc-400 text-xs break-all">{r.id}</td>
+            <tr key={r.id} className="hover:bg-[var(--border)]/35 transition-colors">
+              <td className="p-4 text-[var(--text-heading)] font-semibold">{r.name}</td>
+              <td className="p-4 text-[var(--muted)] text-xs break-all">{r.id}</td>
               <td className="p-4 text-right whitespace-nowrap space-x-2">
                 <button type="button" className="admin-btn admin-btn-ghost" onClick={() => void openClaims(r)}>
                   claims
@@ -218,7 +218,7 @@ export default function Roles() {
           ))}
           {visible.length === 0 && (
             <tr>
-              <td colSpan={3} className="p-6 text-sm text-zinc-500 lowercase text-center">
+              <td colSpan={3} className="p-6 text-sm text-[var(--muted)] lowercase text-center">
                 no roles match.
               </td>
             </tr>

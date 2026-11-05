@@ -20,7 +20,7 @@ export default function Logout() {
   return (
     <AuthLayout heading="sign out">
       <ErrorBanner error={error} />
-      <p className="text-sm text-zinc-400 lowercase mb-6">are you sure you want to sign out?</p>
+      <p className="text-[14px] text-[var(--muted)] lowercase mb-6">are you sure you want to sign out?</p>
       <form method="post" action="/connect/logout">
         <input type="hidden" name="csrf_token" value={csrf} />
         <input type="hidden" name="post_logout_redirect_uri" value={params.get("post_logout_redirect_uri") ?? ""} />
@@ -30,7 +30,7 @@ export default function Logout() {
           <button type="submit" name="confirm" value="yes" className="auth-btn" disabled={!csrf}>
             sign out
           </button>
-          <button type="submit" name="confirm" value="no" className="auth-btn" disabled={!csrf}>
+          <button type="submit" name="confirm" value="no" className="auth-btn-ghost" disabled={!csrf}>
             cancel
           </button>
         </div>

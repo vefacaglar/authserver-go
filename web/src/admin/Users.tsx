@@ -256,20 +256,20 @@ export default function Users() {
   if (view.kind === "create") {
     return (
       <form onSubmit={onCreate} className="space-y-6 max-w-2xl">
-        <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
+        <div className="flex items-center justify-between pb-4 border-b border-[var(--border)]">
           <div>
             <div className="flex items-center gap-3">
               <button
                 type="button"
-                className="text-xs text-zinc-500 hover:text-zinc-200 lowercase"
+                className="text-xs text-[var(--muted)] hover:text-[var(--accent)] lowercase cursor-pointer bg-transparent border-0 p-0 transition-colors"
                 onClick={() => setView({ kind: "list" })}
               >
                 ← users
               </button>
-              <span className="text-zinc-700">/</span>
-              <h1 className="text-lg font-bold text-zinc-200 tracking-tight lowercase">create new user</h1>
+              <span className="text-[var(--border)]">|</span>
+              <h1 className="text-[20px] font-semibold text-[var(--text-heading)] lowercase m-0">create new user</h1>
             </div>
-            <p className="text-xs text-zinc-500 lowercase mt-0.5">
+            <p className="text-[13px] text-[var(--muted)] lowercase mt-1 m-0">
               register a local user account. user id is generated automatically if left blank.
             </p>
           </div>
@@ -285,7 +285,7 @@ export default function Users() {
 
         <ErrorBanner error={formError} />
 
-        <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-5">
+        <section className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-5">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="auth-label">username *</label>
@@ -367,22 +367,22 @@ export default function Users() {
 
     return (
       <div className="space-y-6 max-w-4xl">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-zinc-800">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-[var(--border)]">
           <div className="space-y-1">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <button
                 type="button"
-                className="text-xs text-zinc-500 hover:text-zinc-200 lowercase"
+                className="text-xs text-[var(--muted)] hover:text-[var(--accent)] lowercase cursor-pointer bg-transparent border-0 p-0 transition-colors"
                 onClick={() => setView({ kind: "list" })}
               >
                 ← users
               </button>
-              <span className="text-zinc-700">/</span>
-              <h1 className="text-lg font-bold text-zinc-200 tracking-tight lowercase">{u.username}</h1>
+              <span className="text-[var(--border)]">|</span>
+              <h1 className="text-[20px] font-semibold text-[var(--text-heading)] lowercase m-0">{u.username}</h1>
               {u.email_confirmed && <Badge tone="emerald">verified</Badge>}
               {isLocked && <Badge tone="red">locked out</Badge>}
             </div>
-            <div className="flex items-center gap-2 text-xs text-zinc-500">
+            <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
               <span>user_id: {u.id}</span>
               <CopyButton value={u.id} label="copy id" />
             </div>
@@ -416,7 +416,7 @@ export default function Users() {
         />
 
         {view.tab === "profile" && (
-          <form onSubmit={onSaveProfile} className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-6">
+          <form onSubmit={onSaveProfile} className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="auth-label">username *</label>
@@ -459,7 +459,7 @@ export default function Users() {
               />
             </div>
 
-            <div className="border-t border-zinc-800/60 pt-5">
+            <div className="border-t border-[var(--border)] pt-5">
               <label className="auth-label">reset password (leave empty to keep current password)</label>
               <input
                 className="input max-w-md"
@@ -469,22 +469,22 @@ export default function Users() {
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
               />
-              <p className="text-[11px] text-zinc-500 lowercase mt-1">
+              <p className="text-[12px] text-[var(--muted)] lowercase mt-1.5 m-0">
                 8-72 characters. setting a password signs the user out everywhere and revokes their refresh tokens.
               </p>
             </div>
 
             {view.logins.length > 0 && (
-              <div className="border-t border-zinc-800/60 pt-5 space-y-2">
+              <div className="border-t border-[var(--border)] pt-5 space-y-2">
                 <label className="auth-label">linked external identity providers</label>
                 {view.logins.map((l) => (
                   <div
                     key={l.LoginProvider + l.ProviderKey}
-                    className="flex items-center justify-between border border-zinc-800 bg-[#121212] px-3 py-2 text-xs"
+                    className="flex items-center justify-between border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-xs"
                   >
-                    <span className="text-zinc-300 lowercase">
+                    <span className="text-[var(--text)] lowercase">
                       {l.ProviderName || l.LoginProvider}{" "}
-                      <span className="text-zinc-500">({l.ProviderKey})</span>
+                      <span className="text-[var(--muted)]">({l.ProviderKey})</span>
                     </span>
                     <button
                       type="button"
@@ -498,7 +498,7 @@ export default function Users() {
               </div>
             )}
 
-            <div className="flex items-center justify-between pt-4 border-t border-zinc-800/60 text-xs text-zinc-500 lowercase">
+            <div className="flex items-center justify-between pt-4 border-t border-[var(--border)] text-xs text-[var(--muted)] lowercase">
               <span>created {u.created_at ? formatUTC(u.created_at) : "—"}</span>
               <div className="flex gap-2">
                 <button type="button" className="admin-btn admin-btn-ghost" onClick={() => setView({ kind: "list" })}>
@@ -513,15 +513,17 @@ export default function Users() {
         )}
 
         {view.tab === "roles" && (
-          <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-5">
+          <section className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-5">
             <div>
-              <h2 className="text-sm font-bold text-zinc-200 lowercase">role memberships</h2>
-              <p className="text-xs text-zinc-500 lowercase mt-0.5">
+              <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase m-0">role memberships</h2>
+              <p className="text-xs text-[var(--muted)] lowercase mt-1 m-0">
                 toggle roles assigned to {u.username}. role claims are merged into issued tokens automatically.
               </p>
             </div>
             {view.allRoles.length === 0 ? (
-              <p className="text-sm text-zinc-500 lowercase">no roles registered yet. create a role in the roles tab first.</p>
+              <p className="text-sm text-[var(--muted)] lowercase m-0">
+                no roles registered yet. create a role in the roles tab first.
+              </p>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {view.allRoles.map((r) => {
@@ -545,7 +547,7 @@ export default function Users() {
                 })}
               </div>
             )}
-            <div className="flex justify-end gap-2 pt-4 border-t border-zinc-800/60">
+            <div className="flex justify-end gap-2 pt-4 border-t border-[var(--border)]">
               <button type="button" className="admin-btn" disabled={busy} onClick={() => void onSaveRoles()}>
                 {busy ? "saving…" : "save roles"}
               </button>
@@ -554,15 +556,15 @@ export default function Users() {
         )}
 
         {view.tab === "claims" && (
-          <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6 space-y-5">
+          <section className="bg-[var(--bg)] border border-[var(--border)] p-6 space-y-5">
             <div>
-              <h2 className="text-sm font-bold text-zinc-200 lowercase">user claims</h2>
-              <p className="text-xs text-zinc-500 lowercase mt-0.5">
+              <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase m-0">user claims</h2>
+              <p className="text-xs text-[var(--muted)] lowercase mt-1 m-0">
                 claims included in id tokens and userinfo responses when the corresponding scope (profile, email) is granted.
               </p>
             </div>
             <ClaimsEditor rows={view.claims} onChange={(claims) => setView({ ...view, claims })} />
-            <div className="flex justify-end gap-2 pt-4 border-t border-zinc-800/60">
+            <div className="flex justify-end gap-2 pt-4 border-t border-[var(--border)]">
               <button type="button" className="admin-btn" disabled={busy} onClick={() => void onSaveClaims()}>
                 {busy ? "saving…" : "save claims"}
               </button>
@@ -593,10 +595,10 @@ export default function Users() {
 
   return (
     <>
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">users</h1>
-          <p className="text-xs text-zinc-500 lowercase mt-0.5">
+          <h1 className="text-[20px] font-semibold text-[var(--text-heading)] lowercase m-0">users</h1>
+          <p className="text-[13px] text-[var(--muted)] lowercase mt-1 m-0">
             directory accounts, role assignments, and identity claims ({list.total} total)
           </p>
         </div>
@@ -625,20 +627,22 @@ export default function Users() {
             {visible.map((u) => {
               const isLocked = !!u.lockout_end && new Date(u.lockout_end).getTime() > Date.now();
               return (
-                <tr key={u.id} className="hover:bg-zinc-800/20">
+                <tr key={u.id} className="hover:bg-[var(--border)]/35 transition-colors">
                   <td className="p-4">
                     <button
                       type="button"
                       onClick={() => void openDetail(u.id, "profile")}
-                      className="text-left group block"
+                      className="text-left group block cursor-pointer bg-transparent border-0 p-0"
                     >
-                      <span className="text-zinc-100 font-bold group-hover:underline">{u.username}</span>
-                      <span className="block text-xs text-zinc-500 mt-0.5">{u.id}</span>
+                      <span className="text-[var(--text-heading)] font-semibold group-hover:text-[var(--accent)] transition-colors">
+                        {u.username}
+                      </span>
+                      <span className="block text-xs text-[var(--muted)] mt-0.5">{u.id}</span>
                     </button>
                   </td>
-                  <td className="p-4 text-zinc-300 text-xs">
+                  <td className="p-4 text-[var(--text)] text-xs">
                     {u.email || "—"}
-                    {u.email_confirmed && <span className="text-emerald-400 ml-2">✓ verified</span>}
+                    {u.email_confirmed && <span className="text-[var(--success)] ml-2">✓ verified</span>}
                   </td>
                   <td className="p-4 text-xs space-x-1.5">
                     {isLocked && u.lockout_end ? (
@@ -650,7 +654,7 @@ export default function Users() {
                     )}
                     {u.two_factor_enabled && <Badge tone="emerald">2fa</Badge>}
                   </td>
-                  <td className="p-4 text-xs text-zinc-500 whitespace-nowrap">
+                  <td className="p-4 text-xs text-[var(--muted)] whitespace-nowrap">
                     {u.created_at ? formatUTC(u.created_at) : "—"}
                   </td>
                   <td className="p-4 text-right whitespace-nowrap space-x-2">
@@ -681,7 +685,7 @@ export default function Users() {
             })}
             {visible.length === 0 && (
               <tr>
-                <td colSpan={5} className="p-6 text-sm text-zinc-500 lowercase text-center">
+                <td colSpan={5} className="p-6 text-sm text-[var(--muted)] lowercase text-center">
                   no users match.
                 </td>
               </tr>

@@ -50,7 +50,7 @@ export default function ResetPassword() {
       <ErrorBanner error={error ?? (valid === false ? "This reset link is invalid or has expired. Please request a new one." : null)} />
       {valid === null && <Loading text="checking link…" />}
       {valid === true && (
-        <form className="space-y-6" onSubmit={onSubmit}>
+        <form className="space-y-5" onSubmit={onSubmit}>
           <div>
             <label htmlFor="new_password" className="auth-label">
               new password
@@ -86,8 +86,10 @@ export default function ResetPassword() {
               onChange={(e) => setConfirm(e.target.value)}
             />
           </div>
-          <p className="text-xs text-zinc-500 lowercase">8-72 characters. all your sessions will be signed out.</p>
-          <div>
+          <p className="text-[13px] text-[var(--muted)] lowercase m-0">
+            8-72 characters. all your sessions will be signed out.
+          </p>
+          <div className="pt-1">
             <button type="submit" className="auth-btn" disabled={busy}>
               {busy ? "saving..." : "set new password"}
             </button>
@@ -95,11 +97,11 @@ export default function ResetPassword() {
         </form>
       )}
       {valid === false && (
-        <p className="text-xs text-zinc-500 lowercase">
+        <p className="text-[13px] text-[var(--muted)] lowercase m-0">
           <Link to="/forgot-password" className="auth-link">
             request a new link
           </Link>
-          <span className="mx-2">/</span>
+          <span className="mx-2 text-[var(--border)]">|</span>
           <Link to="/login" className="auth-link">
             sign in
           </Link>

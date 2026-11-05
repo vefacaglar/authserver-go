@@ -32,7 +32,7 @@ export default function ForgotPassword() {
         <StatusBanner text="if an account matches, we sent a password reset link to its email address. the link expires soon." />
       )}
       <ErrorBanner error={error} />
-      <form className="space-y-6" onSubmit={onSubmit}>
+      <form className="space-y-5" onSubmit={onSubmit}>
         <div>
           <label htmlFor="identifier" className="auth-label">
             username or email
@@ -49,16 +49,16 @@ export default function ForgotPassword() {
             onChange={(e) => setIdentifier(e.target.value)}
           />
         </div>
-        <div>
+        <div className="pt-1">
           <button type="submit" className="auth-btn" disabled={busy}>
             {busy ? "sending..." : "send reset link"}
           </button>
         </div>
       </form>
 
-      <p className="mt-8 text-xs text-zinc-500 lowercase">
+      <p className="mt-8 text-[13px] text-[var(--muted)] lowercase m-0">
         remembered it?
-        <Link to="/login" className="auth-link ml-1">
+        <Link to="/login" className="auth-link ml-1.5">
           sign in
         </Link>
       </p>

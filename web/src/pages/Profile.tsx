@@ -78,7 +78,7 @@ export default function Profile() {
   return (
     <AppLayout>
       <section>
-        <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">my profile</h1>
+        <h1 className="text-[20px] font-semibold text-[var(--text-heading)] lowercase m-0">my profile</h1>
       </section>
       <StatusBanner text={status} />
       <ErrorBanner error={error} />
@@ -96,7 +96,7 @@ export default function Profile() {
 
           <Section title="change password">
             <ErrorBanner error={pwError} />
-            <form className="space-y-6" onSubmit={onChangePassword}>
+            <form className="space-y-5 max-w-[480px]" onSubmit={onChangePassword}>
               <div>
                 <label htmlFor="current_password" className="auth-label">
                   current password
@@ -143,10 +143,10 @@ export default function Profile() {
                   onChange={(e) => setConfirm(e.target.value)}
                 />
               </div>
-              <p className="text-xs text-zinc-500 lowercase">
+              <p className="text-[13px] text-[var(--muted)] lowercase m-0">
                 8-72 characters. changing your password signs out all your other sessions.
               </p>
-              <div className="sm:w-56">
+              <div className="sm:w-56 pt-1">
                 <button type="submit" className="auth-btn" disabled={busy}>
                   {busy ? "working…" : "change password"}
                 </button>
@@ -170,22 +170,24 @@ export default function Profile() {
             }
           >
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
+              <table className="w-full text-left text-[14px] border-collapse">
                 <thead>
-                  <tr className="text-xs text-zinc-500 lowercase">
-                    <th className="pb-2 pr-4 font-normal">signed in</th>
-                    <th className="pb-2 pr-4 font-normal">expires</th>
-                    <th className="pb-2 font-normal"></th>
+                  <tr className="text-[13px] text-[var(--muted)] lowercase border-b border-[var(--border)]">
+                    <th className="py-2 pr-4 font-normal">signed in</th>
+                    <th className="py-2 pr-4 font-normal">expires</th>
+                    <th className="py-2 font-normal text-right"></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-800/60">
+                <tbody className="divide-y divide-[var(--border)]">
                   {profile.sessions.map((s) => (
-                    <tr key={s.id}>
-                      <td className="py-2 pr-4 whitespace-nowrap text-zinc-300">{formatUTC(s.created_at)}</td>
-                      <td className="py-2 pr-4 whitespace-nowrap text-zinc-300">{formatUTC(s.expires_at)}</td>
-                      <td className="py-2 text-right">
+                    <tr key={s.id} className="hover:bg-[var(--border)]/35 transition-colors">
+                      <td className="py-3 pr-4 whitespace-nowrap text-[var(--text)]">{formatUTC(s.created_at)}</td>
+                      <td className="py-3 pr-4 whitespace-nowrap text-[var(--text)]">{formatUTC(s.expires_at)}</td>
+                      <td className="py-3 text-right">
                         {s.current ? (
-                          <span className="text-xs text-zinc-500 lowercase">this device</span>
+                          <span className="px-1.5 py-0.5 text-[11px] text-[var(--success)] bg-[var(--success)]/15 lowercase">
+                            this device
+                          </span>
                         ) : (
                           <button
                             type="button"
@@ -204,7 +206,7 @@ export default function Profile() {
                 </tbody>
               </table>
             </div>
-            <p className="mt-6 text-xs text-zinc-500 lowercase">
+            <p className="mt-6 text-[13px] text-[var(--muted)] lowercase m-0">
               done here?{" "}
               <button type="button" className="auth-link" onClick={() => navigate("/logout")}>
                 sign out

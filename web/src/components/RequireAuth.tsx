@@ -12,7 +12,7 @@ export default function RequireAuth({ children }: { children: ReactNode }) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#121212]">
+      <div className="flex min-h-screen items-center justify-center bg-[var(--bg)]">
         <Loading />
       </div>
     );

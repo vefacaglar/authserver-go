@@ -54,8 +54,8 @@ export default function RefreshTokens() {
   return (
     <>
       <div>
-        <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">refresh tokens</h1>
-        <p className="text-xs text-zinc-500 lowercase mt-0.5">
+        <h1 className="text-[20px] font-semibold text-[var(--text-heading)] lowercase m-0">refresh tokens</h1>
+        <p className="text-[13px] text-[var(--muted)] lowercase mt-1 m-0">
           opaque rotating refresh token chains ({list.total} total)
         </p>
       </div>
@@ -65,17 +65,13 @@ export default function RefreshTokens() {
         onSearch={setSearch}
         searchPlaceholder="filter by client_id, user_id, or token_id…"
         filters={
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             {(["all", "active", "rotated", "expired", "revoked"] as const).map((k) => (
               <button
                 key={k}
                 type="button"
                 onClick={() => setFilter(k)}
-                className={`px-2.5 py-1 text-xs border lowercase transition-colors ${
-                  filter === k
-                    ? "bg-zinc-300 text-zinc-950 border-zinc-300 font-bold"
-                    : "bg-[#1a1a1a] text-zinc-400 border-zinc-800 hover:border-zinc-600"
-                }`}
+                className={`chip ${filter === k ? "chip-active" : ""}`}
               >
                 {k}
               </button>
@@ -102,14 +98,14 @@ export default function RefreshTokens() {
             {visible.map((t) => {
               const state = tokenState(t);
               return (
-                <tr key={t.id} className="hover:bg-zinc-800/20">
-                  <td className="p-4 text-zinc-300 text-xs break-all">{t.id}</td>
-                  <td className="p-4 text-zinc-100 font-bold text-xs">{t.client_id}</td>
-                  <td className="p-4 text-zinc-300 text-xs break-all">{t.user_id}</td>
-                  <td className="p-4 text-zinc-500 text-xs max-w-xs truncate" title={t.scope}>
+                <tr key={t.id} className="hover:bg-[var(--border)]/35 transition-colors">
+                  <td className="p-4 text-[var(--text)] text-xs break-all">{t.id}</td>
+                  <td className="p-4 text-[var(--text-heading)] font-semibold text-xs">{t.client_id}</td>
+                  <td className="p-4 text-[var(--text)] text-xs break-all">{t.user_id}</td>
+                  <td className="p-4 text-[var(--muted)] text-xs max-w-xs truncate" title={t.scope}>
                     {t.scope}
                   </td>
-                  <td className="p-4 text-xs text-zinc-400 whitespace-nowrap">{formatUTC(t.expires_at)}</td>
+                  <td className="p-4 text-xs text-[var(--muted)] whitespace-nowrap">{formatUTC(t.expires_at)}</td>
                   <td className="p-4">
                     <Badge tone={state.tone}>{state.label}</Badge>
                   </td>
@@ -126,7 +122,7 @@ export default function RefreshTokens() {
             })}
             {visible.length === 0 && (
               <tr>
-                <td colSpan={7} className="p-6 text-sm text-zinc-500 lowercase text-center">
+                <td colSpan={7} className="p-6 text-sm text-[var(--muted)] lowercase text-center">
                   no refresh tokens match.
                 </td>
               </tr>

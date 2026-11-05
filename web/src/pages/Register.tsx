@@ -39,7 +39,7 @@ export default function Register() {
   return (
     <AuthLayout heading="create account">
       <ErrorBanner error={error} />
-      <form className="space-y-6" onSubmit={onSubmit}>
+      <form className="space-y-5" onSubmit={onSubmit}>
         <div>
           <label htmlFor="username" className="auth-label">
             username
@@ -105,16 +105,16 @@ export default function Register() {
             onChange={(e) => setConfirm(e.target.value)}
           />
         </div>
-        <div>
+        <div className="pt-1">
           <button type="submit" className="auth-btn" disabled={busy}>
             {busy ? "registering..." : "register"}
           </button>
         </div>
       </form>
 
-      <p className="mt-8 text-xs text-zinc-500 lowercase">
+      <p className="mt-8 text-[13px] text-[var(--muted)] lowercase m-0">
         already have an account?
-        <Link to={loginLink} className="auth-link ml-1">
+        <Link to={loginLink} className="auth-link ml-1.5">
           sign in
         </Link>
       </p>

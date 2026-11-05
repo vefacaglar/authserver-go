@@ -15,9 +15,12 @@ interface Stats {
 
 function StatCard({ label, value, to }: { label: string; value: number; to: string }) {
   return (
-    <Link to={to} className="bg-[#1a1a1a] border border-zinc-800/60 p-5 block hover:border-zinc-600 transition-colors">
-      <span className="text-xs text-zinc-500 lowercase tracking-wide">{label}</span>
-      <div className="text-3xl font-bold tracking-tight text-zinc-200 mt-1">{value}</div>
+    <Link
+      to={to}
+      className="bg-[var(--bg)] border border-[var(--border)] p-5 block no-underline hover:border-[var(--accent)] hover:-translate-y-0.5 transition-all"
+    >
+      <span className="text-[12px] text-[var(--muted)] lowercase">{label}</span>
+      <div className="text-3xl font-semibold text-[var(--text-heading)] mt-1 tabular-nums">{value}</div>
     </Link>
   );
 }
@@ -48,7 +51,7 @@ export default function Dashboard() {
 
   return (
     <>
-      <h1 className="text-lg font-bold text-zinc-300 tracking-tight lowercase">overview</h1>
+      <h1 className="text-[20px] font-semibold text-[var(--text-heading)] lowercase m-0">overview</h1>
       <ErrorBanner error={error} />
       {!stats && !error && <Loading />}
       {stats && (
@@ -61,41 +64,54 @@ export default function Dashboard() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <section className="bg-[#1a1a1a] border border-zinc-800/60 p-6">
-              <h2 className="text-xs text-zinc-500 lowercase tracking-wide mb-4">quick actions</h2>
-              <div className="space-y-2 text-sm lowercase">
-                <Link to="/admin/clients" state={{ create: true }} className="block border border-zinc-800 px-3 py-2.5 text-zinc-300 hover:border-zinc-600">
-                  register new client →
+            <section className="bg-[var(--bg)] border border-[var(--border)] p-6">
+              <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase mb-4 m-0">quick actions</h2>
+              <div className="space-y-2.5 text-[13px] lowercase">
+                <Link
+                  to="/admin/clients"
+                  state={{ create: true }}
+                  className="block border border-[var(--border)] px-3.5 py-2.5 text-[var(--text)] no-underline hover:border-[var(--accent)] hover:text-[var(--text-heading)] transition-colors"
+                >
+                  — register new client
                 </Link>
-                <Link to="/admin/users" state={{ create: true }} className="block border border-zinc-800 px-3 py-2.5 text-zinc-300 hover:border-zinc-600">
-                  create new user →
+                <Link
+                  to="/admin/users"
+                  state={{ create: true }}
+                  className="block border border-[var(--border)] px-3.5 py-2.5 text-[var(--text)] no-underline hover:border-[var(--accent)] hover:text-[var(--text-heading)] transition-colors"
+                >
+                  — create new user
                 </Link>
-                <Link to="/admin/scopes" className="block border border-zinc-800 px-3 py-2.5 text-zinc-300 hover:border-zinc-600">
-                  manage scopes →
+                <Link
+                  to="/admin/scopes"
+                  className="block border border-[var(--border)] px-3.5 py-2.5 text-[var(--text)] no-underline hover:border-[var(--accent)] hover:text-[var(--text-heading)] transition-colors"
+                >
+                  — manage scopes
                 </Link>
               </div>
             </section>
 
-            <section className="lg:col-span-2 bg-[#1a1a1a] border border-zinc-800/60 p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xs text-zinc-500 lowercase tracking-wide">recent activity</h2>
+            <section className="lg:col-span-2 bg-[var(--bg)] border border-[var(--border)] p-6">
+              <div className="flex items-center justify-between mb-4 pb-3 border-b border-[var(--border)]">
+                <h2 className="text-[15px] font-semibold text-[var(--text-heading)] lowercase m-0">recent activity</h2>
                 <Link to="/admin/audit" className="auth-link">
                   view all logs
                 </Link>
               </div>
               {stats.audit.length === 0 ? (
-                <p className="text-sm text-zinc-500 lowercase">no activity recorded yet.</p>
+                <p className="text-sm text-[var(--muted)] lowercase m-0">no activity recorded yet.</p>
               ) : (
-                <div className="divide-y divide-zinc-800/40">
+                <div className="divide-y divide-[var(--border)]">
                   {stats.audit.map((log) => (
-                    <div key={log.id} className="py-2.5 flex items-baseline justify-between gap-4 text-sm">
+                    <div key={log.id} className="py-3 flex items-baseline justify-between gap-4 text-[13px]">
                       <div className="min-w-0">
-                        <span className="text-zinc-200">{log.action}</span>
-                        <span className="text-zinc-500 text-xs ml-3">
+                        <span className="text-[var(--text-heading)] font-semibold">{log.action}</span>
+                        <span className="text-[var(--muted)] text-xs ml-3">
                           actor: {log.actor_user_id || "—"} · target: {log.target_type}:{log.target_id}
                         </span>
                       </div>
-                      <span className="text-xs text-zinc-500 whitespace-nowrap">{formatUTCSeconds(log.timestamp)}</span>
+                      <span className="text-xs text-[var(--muted)] whitespace-nowrap tabular-nums">
+                        {formatUTCSeconds(log.timestamp)}
+                      </span>
                     </div>
                   ))}
                 </div>
